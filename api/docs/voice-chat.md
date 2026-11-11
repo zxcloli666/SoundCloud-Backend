@@ -30,7 +30,7 @@ Spend caps need NATS JetStream: the api opens the KV bucket named in `[budget]` 
 | `hedge` | default `true`. `false`: the step starts only when every earlier step has failed, never because they are silent. Set it on a model that must not get parallel calls, such as a local CPU model |
 | `subject` | `worker` only: NATS subject of the local model |
 
-A `worker` step fails without a publish when the request is over the limits of the worker method: system text 48 000 bytes, 64 messages of 12 000 bytes each, schema 64 000 bytes. The call carries `X-Deadline`: the time the ladder has left, at most `total_timeout_ms`. A started worker call runs until it answers or reaches that deadline, even when another step has already won.
+A `worker` step gets the request cut to the limits of the worker method: the newest 64 messages, the first of them a user message, and the newest 12 000 bytes of a longer message. It fails without a publish only when the system text is over 48 000 bytes or the schema over 64 000 bytes. The call carries `X-Deadline`: the time the ladder has left, at most `total_timeout_ms`. A started worker call runs until it answers or reaches that deadline, even when another step has already won.
 
 `[ladders.<id>]`
 
@@ -46,9 +46,9 @@ A `worker` step fails without a publish when the request is over the limits of t
 
 Times are at most 600 000 ms, `window_s` and `open_s` at most 86 400.
 
-The breaker counts only faults of the provider: a transport error, a timeout, HTTP 5xx, 429, 401, 403, an overloaded error, and a step that gave no output for longer than `hedge_after_ms` when the deadline came. A refusal, an answer cut at `max_output_tokens`, HTTP 400, 413 or 422, a worker `invalid_request` and an answer that is not the JSON document fail the step for this request only; the ladder goes on to the next step.
+The breaker counts only faults of the provider: a transport error, a stream that closes before its answer ended, a timeout, HTTP 5xx, 429, 401, 403, an overloaded error, and a streaming step that gave no output for longer than `hedge_after_ms` when the deadline came. A step that cannot stream (a `worker`, `stream = false`) is judged by its own `total_timeout_ms` only. While a breaker is open only its probe call closes or reopens it; a call that started earlier changes nothing. A refusal, an answer cut at `max_output_tokens`, HTTP 400, 413 or 422, a worker `invalid_request` and an answer that is not the JSON document fail the step for this request only; the ladder goes on to the next step.
 
-A priced provider that reports no usage (a loser, a client that left, a deadline, a provider that never sends it) is charged an estimate: input from the request size, output from the bytes it sent, 3 bytes per token. A refusal before any answer costs nothing.
+A priced call that ends without its final usage (a loser, a client that left, a deadline, a broken stream, a provider that never sends it) is charged an estimate, 3 bytes per token. The input and cache counts it reported are kept, or come from the request size when it reported none; the output is the larger of the reported count and the bytes it sent. Only a call the provider did not accept (a status other than 2xx, a refused worker call, no connection) costs nothing.
 
 `[voice_chat]`
 
@@ -126,7 +126,7 @@ cargo test --bin api -- --ignored --nocapture modules::voice_chat::live_tests
 | `done` | `{}` | the turn is complete |
 | `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or no step gave an action that fits a tool or any speech |
 
-A step's answer reaches the client from its first action that fits a tool or its first spoken word. An answer with neither falls through to the next step.
+A step's answer reaches the client from its first action that fits a tool or its first spoken word. An answer with neither falls through to the next step; the step gets up to 1 s to send its usage first.
 
 Closing the connection cancels the provider calls.
 
@@ -146,6 +146,8 @@ Errors before the stream are JSON, `{"statusCode": 403, "code": "star_required",
 `api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`; steps and durations add `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`.
 
 `result`: `won`, `lost`, `cancelled`, `failed_status`, `failed_transport`, `failed_timeout` (these three feed the breaker), `failed_request`, `failed_refused`, `failed_length`, `failed_invalid`, `skipped_breaker`, `skipped_budget`.
+
+A steady `failed_request` rate on one provider means it refuses every request with HTTP 400, 413 or 422, for example an account out of credit: the breaker does not count it, so every turn loses one call to that step until the account or the config is fixed.
 
 `api_llm_tokens_total` and `api_llm_spend_micro_usd_total` have the label `basis`: `reported` by the provider or `estimated` by the api.
 
