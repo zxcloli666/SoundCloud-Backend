@@ -189,6 +189,78 @@ async def test_call_threads_and_niceness_reach_the_engine_process() -> None:
         await supervisor.stop()
 
 
+async def test_an_engine_without_torch_still_learns_the_threads_of_each_call() -> None:
+    supervisor = await started_supervisor(
+        plans_of(
+            EnginePlan("a", (fake_spec("a"),)),
+            EnginePlan("llm-local", (fake_spec("llm-local"),), reserved=True),
+        ),
+        SHARED,
+    )
+    try:
+        bulk = await call(supervisor, "a", "granted_threads")
+        other = await supervisor.acquire("llm-local", time.monotonic() + 5)
+        shared = await call(supervisor, "a", "granted_threads")
+        supervisor.release(other)
+        urgent = await call(supervisor, "llm-local", "granted_threads", priority=True)
+        assert (bulk.result["threads"], shared.result["threads"]) == (6, 3)
+        assert urgent.result["threads"] == reserved_threads(8) == 4
+    finally:
+        await supervisor.stop()
+
+
+def test_a_plan_with_its_own_threads_and_nice_keeps_them_within_the_budget() -> None:
+    plans = budget_plans(
+        [
+            EnginePlan("llm-local", (fake_spec("llm-local"),), reserved=True, threads=2, nice=5),
+            EnginePlan("wide", (fake_spec("x"),), reserved=True, threads=64),
+        ],
+        8,
+    )
+    assert [(plan.threads, plan.nice) for plan in plans] == [(2, 5), (7, 0)]
+
+
+async def test_a_running_local_model_call_takes_its_threads_out_of_the_bulk_share() -> None:
+    model = EnginePlan(
+        "llm-local", (fake_spec("llm-local"),), reserved=True, threads=2, shares_budget=True
+    )
+    supervisor = await started_supervisor(
+        plans_of(EnginePlan("a", (fake_spec("a"),)), model), SHARED
+    )
+    try:
+        before = await call(supervisor, "a", "granted_threads")
+        leased = await supervisor.acquire("llm-local", time.monotonic() + 5, priority=True)
+        during = await call(supervisor, "a", "granted_threads")
+        supervisor.release(leased)
+        after = await call(supervisor, "a", "granted_threads")
+        assert leased.call_threads == 2
+        assert [reply.result["threads"] for reply in (before, during, after)] == [6, 4, 6]
+    finally:
+        await supervisor.stop()
+
+
+async def test_an_engine_runs_with_the_nice_and_env_of_its_plan() -> None:
+    model = EnginePlan(
+        "llm-local",
+        (fake_spec("llm-local"),),
+        reserved=True,
+        threads=2,
+        nice=5,
+        env={"OMP_WAIT_POLICY": "PASSIVE"},
+    )
+    supervisor = await started_supervisor(
+        plans_of(model, EnginePlan("a", (fake_spec("a"),))), SHARED
+    )
+    try:
+        own = await call(supervisor, "llm-local", "environment", priority=True)
+        bulk = await call(supervisor, "a", "environment")
+        assert own.result["wait_policy"] == "PASSIVE"
+        assert 5 <= int(str(own.result["nice"])) < BULK_NICE
+        assert bulk.result["wait_policy"] == ""
+    finally:
+        await supervisor.stop()
+
+
 async def test_encode_is_served_by_the_reserved_engine_while_the_bulk_one_is_busy() -> None:
     supervisor = await started_supervisor(
         plans_of(
@@ -220,8 +292,8 @@ async def test_encode_is_served_by_the_reserved_engine_while_the_bulk_one_is_bus
         await supervisor.stop()
 
 
-async def call(supervisor: Supervisor, slot: str, method: str) -> Reply:
-    client: EngineClient = await supervisor.acquire(slot, time.monotonic() + 30)
+async def call(supervisor: Supervisor, slot: str, method: str, *, priority: bool = False) -> Reply:
+    client: EngineClient = await supervisor.acquire(slot, time.monotonic() + 30, priority=priority)
     call_id = next_message_id()
     blocks = shm.SharedBlocks(os.getpid(), client.pid, call_id, "in")
     try:

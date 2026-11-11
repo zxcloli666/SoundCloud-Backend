@@ -34,11 +34,12 @@ class CallGuard:
         self.armed = False
         self.requested = False
         self.expires_at = math.inf
+        self.threads = 0
 
-    def check(self) -> None:
+    def check(self, needed_s: float = 0.0) -> None:
         if self.armed and self.requested:
             raise Preempted("a priority call is waiting")
-        if time.monotonic() >= self.expires_at:
+        if time.monotonic() + needed_s >= self.expires_at:
             raise CallExpired("the call would outrun its deadline")
 
 

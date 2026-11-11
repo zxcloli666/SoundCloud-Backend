@@ -23,6 +23,12 @@ pub const MAX_DETAIL_CHARS: u32 = 256;
 pub const MAX_FINGERPRINT_CHARS: u32 = 64;
 pub const MAX_RESOLVE_DESCRIPTION_CHARS: u32 = 4000;
 pub const MAX_MATCH_CANDIDATES: u32 = 50;
+pub const MAX_COMPLETE_SYSTEM_BYTES: u32 = 48_000;
+pub const MAX_COMPLETE_SYSTEM_MARKS: u32 = 4;
+pub const MAX_COMPLETE_MESSAGES: u32 = 64;
+pub const MAX_COMPLETE_MESSAGE_BYTES: u32 = 12_000;
+pub const MAX_COMPLETE_SCHEMA_BYTES: u32 = 64_000;
+pub const MAX_COMPLETE_TOKENS: u32 = 1024;
 pub const MAX_MESSAGE_BYTES: u32 = 900_000;
 pub const MAX_UTF8_BYTES_KEYWORD: &str = "x-max-utf8-bytes";
 pub const COLLAB_DATASET_VERSION: u32 = 2;
@@ -456,6 +462,50 @@ pub struct MatchTrackData {
     pub source: RpcSource,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompleteRole {
+    User,
+    Assistant,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct CompleteMessage {
+    pub role: CompleteRole,
+    #[schemars(
+        length(min = 1),
+        extend("x-max-utf8-bytes" = MAX_COMPLETE_MESSAGE_BYTES)
+    )]
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct CompleteRequest {
+    #[schemars(extend("x-max-utf8-bytes" = MAX_COMPLETE_SYSTEM_BYTES))]
+    pub system: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(
+        length(max = MAX_COMPLETE_SYSTEM_MARKS),
+        inner(range(min = 1, max = MAX_COMPLETE_SYSTEM_BYTES))
+    )]
+    pub system_marks: Vec<u32>,
+    #[schemars(length(min = 1, max = MAX_COMPLETE_MESSAGES))]
+    pub messages: Vec<CompleteMessage>,
+    pub schema: serde_json::Map<String, serde_json::Value>,
+    #[schemars(range(min = 1, max = MAX_COMPLETE_TOKENS))]
+    pub max_tokens: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct CompleteData {
+    #[schemars(length(min = 1))]
+    pub text: String,
+    #[schemars(length(min = 1))]
+    pub model: String,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
 fn nullable<T: JsonSchema>(generator: &mut SchemaGenerator) -> Schema {
     generator.subschema_for::<Option<T>>()
 }
@@ -593,8 +643,10 @@ pub const HEADERS: [(&str, &str); 7] = [
 
 pub const AI_RESOLVE_ARTIST: &str = "ai.rpc.resolve_artist";
 pub const AI_MATCH_TRACK: &str = "ai.rpc.match_track";
+pub const AI_COMPLETE: &str = "ai.rpc.complete";
 pub const RESOLVE_ARTIST_WINDOW_SECONDS: u64 = 20;
 pub const MATCH_TRACK_WINDOW_SECONDS: u64 = 10;
+pub const COMPLETE_WINDOW_SECONDS: u64 = 30;
 
 pub const INDEX_AUDIO: &str = "index.audio.new";
 pub const EMBED_LYRICS: &str = "embed.lyrics.new";
@@ -955,6 +1007,97 @@ mod tests {
 
         assert_eq!(wire["language"], serde_json::Value::Null);
         assert_eq!(wire["mode"], "align");
+    }
+
+    #[test]
+    fn a_complete_request_keeps_the_wire_shape_of_the_method() {
+        let wire = serde_json::json!({
+            "system": "You are a character.",
+            "messages": [
+                { "role": "user", "content": "привет" },
+                { "role": "assistant", "content": "{\"actions\":[],\"say\":\"привет\"}" },
+                { "role": "user", "content": "сделай тише" }
+            ],
+            "schema": { "type": "object", "required": ["say"] },
+            "max_tokens": 512
+        });
+
+        let request: CompleteRequest =
+            serde_json::from_value(wire.clone()).expect("complete request deserializes");
+
+        assert_eq!(request.messages.len(), 3);
+        assert_eq!(request.messages[1].role, CompleteRole::Assistant);
+        assert_eq!(request.schema["type"], "object");
+        assert!(request.system_marks.is_empty());
+        assert_eq!(
+            serde_json::to_value(request).expect("complete request serializes"),
+            wire
+        );
+    }
+
+    #[test]
+    fn a_complete_request_carries_the_marks_of_its_system_text_only_when_it_has_them() {
+        let mut wire = serde_json::json!({
+            "system": "Rules.\nPersona.\nState.",
+            "system_marks": [7, 16],
+            "messages": [{ "role": "user", "content": "hi" }],
+            "schema": { "type": "object" },
+            "max_tokens": 64
+        });
+
+        let marked: CompleteRequest =
+            serde_json::from_value(wire.clone()).expect("marked request deserializes");
+        let sent = serde_json::to_value(&marked).expect("marked request serializes");
+        wire["system_marks"] = serde_json::json!([]);
+        let unmarked: CompleteRequest =
+            serde_json::from_value(wire).expect("request with no marks deserializes");
+
+        assert_eq!(marked.system_marks, [7, 16]);
+        assert_eq!(sent["system_marks"], serde_json::json!([7, 16]));
+        assert!(
+            serde_json::to_value(unmarked)
+                .expect("request with no marks serializes")
+                .get("system_marks")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_complete_request_with_an_unknown_role_or_no_schema_is_refused() {
+        let system_turn = serde_json::from_value::<CompleteRequest>(serde_json::json!({
+            "system": "",
+            "messages": [{ "role": "system", "content": "be brief" }],
+            "schema": {},
+            "max_tokens": 16
+        }));
+        let without_schema = serde_json::from_value::<CompleteRequest>(serde_json::json!({
+            "system": "",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": 16
+        }));
+
+        assert!(system_turn.is_err());
+        assert!(without_schema.is_err());
+    }
+
+    #[test]
+    fn complete_data_carries_the_text_the_model_and_the_token_counts() {
+        let data = CompleteData {
+            text: "{\"say\":\"ok\"}".to_owned(),
+            model: "org/model-GGUF/model-Q4_K_M.gguf@0123abcd".to_owned(),
+            input_tokens: 1480,
+            output_tokens: 12,
+        };
+
+        assert_eq!(
+            serde_json::to_value(data).expect("complete data serializes"),
+            serde_json::json!({
+                "text": "{\"say\":\"ok\"}",
+                "model": "org/model-GGUF/model-Q4_K_M.gguf@0123abcd",
+                "input_tokens": 1480,
+                "output_tokens": 12
+            })
+        );
     }
 
     #[test]

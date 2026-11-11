@@ -167,6 +167,21 @@ async def test_ping_reports_slot_states_and_unload_reload() -> None:
         await client.stop()
 
 
+async def test_a_reloaded_slot_is_the_same_model_object() -> None:
+    client = await spawn_client(fake_spec())
+    try:
+        replies = []
+        for _ in range(2):
+            call, blocks = make_call(client, "loads", {}, {})
+            replies.append((await client.call(call)).result)
+            blocks.release()
+            await client.unload("fake", 5.0)
+        assert [reply["loads"] for reply in replies] == [1, 2]
+        assert replies[0]["instance"] == replies[1]["instance"]
+    finally:
+        await client.stop()
+
+
 async def test_call_on_unloaded_slot_loads_lazily() -> None:
     client = await spawn_client(fake_spec())
     try:

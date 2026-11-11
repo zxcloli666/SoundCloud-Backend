@@ -524,8 +524,18 @@ jobs:
           file: worker/docker/Dockerfile
           build-args: FLAVOR=cpu
           push: false
+          load: true
           tags: soundcloud-backend-worker:ci
           cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/cache/scd-worker:cpu
+
+      - name: Local model smoke
+        timeout-minutes: 5
+        run: >
+          docker run --rm
+          -e HF_HUB_OFFLINE=0 -e HF_HOME=/tmp/hf
+          -v "$PWD/tests/smoke:/smoke:ro"
+          --entrypoint python
+          soundcloud-backend-worker:ci /smoke/local_llm.py
 
   prod:
     name: Real call and decrypt crates

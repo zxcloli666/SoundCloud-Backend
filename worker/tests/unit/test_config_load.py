@@ -9,6 +9,8 @@ import pytest
 from tests.conftest import CONFIG_DIR
 from worker import settings as s
 
+LOCAL_LLM_REF = "unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf@f6d5376b"
+
 
 @pytest.fixture
 def config_copy(tmp_path: Path) -> Path:
@@ -56,27 +58,72 @@ def test_provider_key_without_endpoint_or_model_is_a_start_error(
         s.load(CONFIG_DIR, env)
 
 
-def test_local_llm_adds_its_slot_to_the_ai_lane(base_env: dict[str, str]) -> None:
-    assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(s.load(CONFIG_DIR, base_env))
-    env = {**base_env, "WORKER__LLM__LOCAL__ENABLED": "true", "WORKER__LLM__FALLBACK": "local"}
-    settings = s.load(CONFIG_DIR, env)
+def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None:
+    settings = s.load(CONFIG_DIR, base_env)
+    local = settings.llm.local
     assert s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
-    assert settings.llm.fallback == s.LOCAL_PROVIDER
-    assert s.model_ref(settings, s.LOCAL_LLM_SLOT) == "Qwen/Qwen3-4B-Instruct-2507@cdbee75f"
+    assert s.local_llm_ref(settings) == LOCAL_LLM_REF
+    assert local.file.endswith(".gguf") and len(local.sha256) == 64
+    assert local.enabled is True
+    assert (local.context_tokens, local.eval_chunk_tokens, local.idle_unload_s) == (8192, 128, 600)
+    assert local.state_cache_mib == 256
+    assert (local.threads, local.nice, local.max_in_flight) == (2, 5, 2)
+    without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
+    assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
 
 
-def test_local_llm_needs_a_replica_and_the_switch(base_env: dict[str, str]) -> None:
-    with pytest.raises(s.SettingsError, match="unknown provider 'local'"):
-        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
+def test_the_local_model_can_be_switched_off_without_dropping_the_ai_lane(
+    base_env: dict[str, str],
+) -> None:
     env = {
         **base_env,
-        "WORKER__LLM__LOCAL__ENABLED": "true",
+        "WORKER__LLM__LOCAL__ENABLED": "false",
         "WORKER__SLOTS__LLM_LOCAL__REPLICAS": "0",
+        "WORKER__SLOTS__LLM_LOCAL__MODEL": "",
     }
-    with pytest.raises(s.SettingsError, match=r"slots\.llm-local\.replicas >= 1"):
-        s.load(CONFIG_DIR, env)
-    with pytest.raises(s.SettingsError, match="quantize"):
-        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__LOCAL__QUANTIZE": "int3"})
+    settings = s.load(CONFIG_DIR, env)
+    assert settings.llm.local.enabled is False
+    assert "ai" in settings.lanes.enabled
+    assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(settings)
+
+
+def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str]) -> None:
+    with pytest.raises(s.SettingsError, match=r"llm\.fallback refers to unknown provider 'local'"):
+        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
+
+
+@pytest.mark.parametrize(
+    ("override", "problem"),
+    [
+        ({"WORKER__SLOTS__LLM_LOCAL__REPLICAS": "0"}, r"slots\.llm-local\.replicas >= 1"),
+        ({"WORKER__SLOTS__LLM_LOCAL__MODEL": ""}, r"lane ai needs slots\.llm-local\.model"),
+        ({"WORKER__SLOTS__LLM_LOCAL__REVISION": ""}, r"lane ai needs slots\.llm-local\.model"),
+        ({"WORKER__LLM__LOCAL__FILE": "model.safetensors"}, r"llm\.local\.file must be a \.gguf"),
+        ({"WORKER__LLM__LOCAL__SHA256": "ABC"}, r"llm\.local\.sha256 must be 64 lowercase hex"),
+        ({"WORKER__LLM__LOCAL__CONTEXT_TOKENS": "512"}, r"llm\.local\.context_tokens must be"),
+        ({"WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "0"}, r"llm\.local\.eval_chunk_tokens must be"),
+        (
+            {"WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "8193"},
+            r"llm\.local\.eval_chunk_tokens must be within 1\.\.llm\.local\.context_tokens",
+        ),
+        ({"WORKER__LLM__LOCAL__STATE_CACHE_MIB": "0"}, r"llm\.local\.state_cache_mib must be"),
+        ({"WORKER__LLM__LOCAL__IDLE_UNLOAD_S": "-1"}, r"llm\.local\.idle_unload_s must be >= 0"),
+        ({"WORKER__LLM__LOCAL__THREADS": "0"}, r"llm\.local\.threads must be >= 1"),
+        ({"WORKER__LLM__LOCAL__MAX_IN_FLIGHT": "0"}, r"llm\.local\.max_in_flight must be"),
+        ({"WORKER__LLM__LOCAL__NICE": "20"}, r"llm\.local\.nice must be within 0\.\.19"),
+    ],
+)
+def test_local_llm_settings_are_checked_at_start(
+    base_env: dict[str, str], override: dict[str, str], problem: str
+) -> None:
+    with pytest.raises(s.SettingsError, match=problem):
+        s.load(CONFIG_DIR, {**base_env, **override})
+
+
+def test_a_chunk_as_long_as_the_context_is_accepted(base_env: dict[str, str]) -> None:
+    whole = s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "8192"})
+
+    assert whole.llm.local.eval_chunk_tokens == whole.llm.local.context_tokens
 
 
 def test_missing_required_env_ref_is_a_start_error(base_env: dict[str, str]) -> None:

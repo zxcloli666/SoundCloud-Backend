@@ -27,7 +27,7 @@ NATIVE_PACKAGES = (
     "fasttext",
     "gensim",
     "chromaprint",
-    "bitsandbytes",
+    "llama_cpp",
 )
 LOADED_ON_FIRST_USE = ("nagisa",)
 BUS_ALLOWED = (

@@ -285,9 +285,9 @@ async def start_serve(
     async def on_status(msg: Msg) -> None:
         statuses.append(json.loads(msg.data))
 
-    await live.admin.subscribe(f"worker.status.{WORKER_ID}", cb=on_status)
-    log_path = tmp_path / "serve.log"
     env = {**serve_env(live.url, fixtures, tmp_path, lanes, marker), **overrides}
+    await live.admin.subscribe(f"worker.status.{env['WORKER_NODE_NAME']}", cb=on_status)
+    log_path = tmp_path / "serve.log"
     with log_path.open("wb") as log_file:
         process = await asyncio.create_subprocess_exec(
             sys.executable,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from worker.llm.validate import validate
+from worker.domain.validate import validate
 
 SCHEMA: dict[str, object] = {
     "type": "object",

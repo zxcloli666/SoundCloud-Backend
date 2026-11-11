@@ -29,9 +29,3 @@ replicas = 4
 
 [slots.mms]
 replicas = 4
-
-[llm]
-fallback = "local"
-
-[llm.local]
-enabled = true

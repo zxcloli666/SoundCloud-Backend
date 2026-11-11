@@ -6,8 +6,9 @@ import os
 import signal
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import aiohttp
 import nats.errors
@@ -26,6 +27,7 @@ from worker.bus.status import StatusReporter
 from worker.contract import Contract, LaneSpec
 from worker.domain.audio.source import AudioSource
 from worker.domain.collab import CollabLane
+from worker.domain.complete import Completer
 from worker.domain.deadline import MonotonicClock
 from worker.domain.embed_lyrics import EmbedLyricsLane
 from worker.domain.encode_text import EncodeTextLane
@@ -43,6 +45,7 @@ from worker.observability import logging as json_logging
 from worker.observability.counters import Counters
 from worker.observability.health_file import HEALTH_PATH, LANES, SINCE, STATE, HealthFile
 from worker.observability.logging import JsonLog
+from worker.runtime import cpu_flags
 from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import Launch
 from worker.runtime.protocol import SlotSpec
@@ -80,7 +83,7 @@ SLOT_LOADERS: Mapping[str, str] = {
     "mms": "worker.models.mms_align:MmsAligner",
     "train-collab": "worker.models.item2vec:Item2VecSlot",
     "train-taste": "worker.models.taste_trainer:TasteTrainerSlot",
-    settings_module.LOCAL_LLM_SLOT: "worker.models.local_llm:LocalLlmSlot",
+    settings_module.LOCAL_LLM_SLOT: "worker.models.local_llm.slot:LocalLlmSlot",
 }
 LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "audio": ("muq", "mulan"),
@@ -101,6 +104,8 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
+AI_LANE = "ai"
+LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
 ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
@@ -137,6 +142,7 @@ async def run(
 ) -> int:
     json_log = JsonLog(worker_id=settings.worker.id)
     json_logging.install(json_log, logging.INFO)
+    settings = local_llm_on_this_cpu(settings, json_log)
     try:
         blueprint = Blueprint.of(settings, contract, environ)
     except (SettingsError, StartupError) as error:
@@ -188,7 +194,10 @@ class Blueprint:
             if replicas[TEXT_SLOT] < 1:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
-        plans = list(plan_engines(runtime.mode, specs, replicas, groups))
+        plans = [
+            local_llm_plan(settings, plan)
+            for plan in plan_engines(runtime.mode, specs, replicas, groups)
+        ]
         if isolated:
             encode = tuple(
                 slot_spec(settings, name, "text")
@@ -433,14 +442,23 @@ class Node:
                 self.contract.headers.msg_id,
             )
             if lane.rpc:
-                refiner = build_refiner(
-                    settings.llm, llm_session, engines, self.clock, self.counters
-                )
+                refiner = build_refiner(settings.llm, llm_session, self.clock, self.counters)
                 resolver = ArtistResolver(refiner, self.counters)
                 matcher = TrackMatcher(refiner, self.counters)
+                completer = Completer(
+                    engines,
+                    self.contract.complete_limits,
+                    settings.llm.local,
+                    settings_module.local_llm_ref(settings),
+                    self.counters,
+                )
                 handler: RpcHandler | QueueHandler = RpcHandler(
                     lane,
-                    {"resolve_artist": resolver.resolve, "match_track": matcher.match},
+                    {
+                        "resolve_artist": resolver.resolve,
+                        "match_track": matcher.match,
+                        "complete": completer.complete,
+                    },
                     leases,
                     self.connection,
                     self.contract,
@@ -778,6 +796,35 @@ def check_slow_lanes(settings: Settings) -> None:
         raise StartupError(f"lanes {slow} on device=cpu need runtime.allow_slow_lanes=true")
 
 
+def local_llm_on_this_cpu(settings: Settings, json_log: JsonLog) -> Settings:
+    local = settings.llm.local
+    if AI_LANE not in settings.lanes.enabled:
+        return settings
+    if not local.enabled:
+        json_log.warning("local_llm_off", why="config")
+        return settings
+    missing = cpu_flags.missing_on_this_host()
+    if not missing:
+        return settings
+    json_log.error("local_llm_off", why="cpu", missing=missing)
+    return replace(settings, llm=replace(settings.llm, local=replace(local, enabled=False)))
+
+
+def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    if settings_module.LOCAL_LLM_SLOT not in plan.slot_names:
+        return plan
+    local = settings.llm.local
+    return replace(
+        plan,
+        reserved=True,
+        threads=local.threads,
+        nice=local.nice,
+        idle_unload_s=float(local.idle_unload_s),
+        shares_budget=True,
+        env=LOCAL_LLM_ENV,
+    )
+
+
 def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:
     loader = SLOT_LOADERS.get(name)
     if loader is None:
@@ -785,7 +832,13 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
     slot = settings.slots[name]
     options: dict[str, object] = {}
     if name == settings_module.LOCAL_LLM_SLOT:
-        options["quantize"] = settings.llm.local.quantize
+        local = settings.llm.local
+        options.update(
+            file=local.file,
+            context_tokens=local.context_tokens,
+            chunk_tokens=local.eval_chunk_tokens,
+            state_cache_mib=local.state_cache_mib,
+        )
     if name == MULAN and mulan_towers is not None:
         options[MULAN_TOWERS] = mulan_towers
     return SlotSpec(
@@ -793,11 +846,17 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
         loader=loader,
         model=slot.model,
         revision=slot.revision,
-        device="cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device,
+        device=slot_device(settings, name),
         max_batch=slot.max_batch,
         max_wait_ms=slot.max_wait_ms,
         options=options,
     )
+
+
+def slot_device(settings: Settings, name: str) -> str:
+    if name == settings_module.LOCAL_LLM_SLOT:
+        return settings_module.LOCAL_LLM_DEVICE
+    return "cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device
 
 
 def cpu_tool_specs(settings: Settings) -> tuple[SlotSpec, ...]:

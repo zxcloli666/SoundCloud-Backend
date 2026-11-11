@@ -14,6 +14,7 @@ from worker.runtime.batcher import STAGE_CALL, Batcher
 from worker.runtime.engine_client import DeadlineExceeded, EngineKilled, next_message_id
 from worker.runtime.protocol import EXPIRY_MARGIN_S, Call, ErrorKind
 from worker.runtime.supervisor import EnginePlan
+from worker.settings import LOCAL_LLM_SLOT
 
 ROW = {"x": np.ones((1, 2), np.float32)}
 LONG_CALL = {"layers": 500}
@@ -46,7 +47,7 @@ async def test_a_preempted_bulk_lyric_expires_on_the_encode_engine_without_a_kil
         await supervisor.stop()
 
 
-@pytest.mark.parametrize("slot", ["text", "muq", "mulan"])
+@pytest.mark.parametrize("slot", ["text", "muq", "mulan", LOCAL_LLM_SLOT])
 async def test_a_late_call_returns_expired_and_keeps_the_engine(slot: str) -> None:
     counters = Counters()
     supervisor = await started_supervisor(
@@ -113,6 +114,38 @@ async def test_a_window_slower_than_the_grace_is_not_killed_while_it_computes(
         assert reply.error_kind is ErrorKind.EXPIRED
         assert counters.value("slot_kills_deadline_total", slot=slot) == 0
         assert supervisor.engines() == before
+    finally:
+        await supervisor.stop()
+
+
+async def test_a_local_model_call_past_its_grace_is_killed_even_while_it_computes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(engine_client, "COOPERATIVE_GRACE_S", 0.2)
+    monkeypatch.setattr(engine_client, "COOPERATIVE_STUCK_S", 0.5)
+    supervisor = await started_supervisor([EnginePlan("engine", (fake_spec(LOCAL_LLM_SLOT),))])
+    try:
+        client = await supervisor.acquire(LOCAL_LLM_SLOT, time.monotonic() + 5.0)
+        call_id = next_message_id()
+        blocks = shm.SharedBlocks(os.getpid(), client.pid, call_id, "in")
+        started = time.monotonic()
+        try:
+            with pytest.raises(EngineKilled):
+                await client.call(
+                    Call(
+                        call_id,
+                        LOCAL_LLM_SLOT,
+                        "windows",
+                        started + 1.5,
+                        blocks.share(ROW),
+                        {"windows": 3, "window_s": 2.5},
+                    )
+                )
+        finally:
+            blocks.release()
+            supervisor.release(client)
+        assert client.kill_cause == engine_client.CAUSE_DEADLINE
+        assert time.monotonic() - started < 2.5
     finally:
         await supervisor.stop()
 

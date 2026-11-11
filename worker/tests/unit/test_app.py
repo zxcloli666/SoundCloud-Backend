@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import time
 from pathlib import Path
@@ -30,6 +31,7 @@ from worker.fetch_models import FASTTEXT_HOME_ENV
 from worker.observability.counters import Counters
 from worker.observability.health_file import HealthFile
 from worker.observability.logging import JsonLog
+from worker.runtime import cpu_flags
 from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import CAUSE_STOP, EngineKilled, SlotUnavailable
 from worker.runtime.protocol import Call, Reply
@@ -248,13 +250,22 @@ def test_cpu_profile_runs_encode_in_its_own_engine_and_lanes_in_parallel_process
         "sep": ("sep",),
         "train-collab": ("train-collab",),
         "train-taste": ("train-taste",),
+        "llm-local": ("llm-local",),
         "encode": ("text", "mulan"),
         "cpu-tools": ("vad", "lid", "fingerprint"),
     }
-    assert [name for name, plan in plans.items() if plan.reserved] == ["encode"]
+    assert sorted(name for name, plan in plans.items() if plan.reserved) == ["encode", "llm-local"]
     assert {name: plan.threads for name, plan in plans.items() if plan.threads} == {
         "encode": 4,
+        "llm-local": 2,
         "cpu-tools": 1,
+    }
+    assert [name for name, plan in plans.items() if plan.shares_budget] == ["llm-local"]
+    assert {name: dict(plan.env) for name, plan in plans.items() if plan.env} == {
+        "llm-local": {"OMP_WAIT_POLICY": "PASSIVE"}
+    }
+    assert {name: plan.idle_unload_s for name, plan in plans.items() if plan.idle_unload_s} == {
+        "llm-local": 600.0
     }
     towers = {
         name: spec.options.get("towers")
@@ -284,10 +295,41 @@ def test_runtime_threads_from_the_environment_fix_the_bulk_engines(
     assert blueprint.policy.threads == 6
 
 
+def test_a_host_without_the_cpu_flags_runs_the_ai_lane_without_the_local_model(
+    base_env: dict[str, str], contract: Contract, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cpu_flags, "missing_on_this_host", lambda: ["avx2", "fma"])
+    out = io.StringIO()
+    settings = app.local_llm_on_this_cpu(
+        settings_module.load(CONFIG_DIR, base_env), JsonLog(stream=out)
+    )
+
+    assert settings.llm.local.enabled is False
+    assert "ai" in settings.lanes.enabled
+    environ = {**base_env, FASTTEXT_HOME_ENV: str(tmp_path)}
+    plans = Blueprint.of(settings, contract, environ, cpus=8).plans
+    assert all(settings_module.LOCAL_LLM_SLOT not in plan.slot_names for plan in plans)
+    record = json.loads(out.getvalue())
+    assert (record["event"], record["why"], record["missing"]) == (
+        "local_llm_off",
+        "cpu",
+        ["avx2", "fma"],
+    )
+
+
+def test_a_supported_host_keeps_the_local_model(
+    base_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cpu_flags, "missing_on_this_host", list)
+    settings = settings_module.load(CONFIG_DIR, base_env)
+
+    assert app.local_llm_on_this_cpu(settings, JsonLog(stream=io.StringIO())) is settings
+
+
 def test_gpu_profiles_keep_encode_on_the_shared_slots(contract: Contract, tmp_path: Path) -> None:
     env = {**BASE_ENV, settings_module.PROFILE_ENV: "gpu-24", FASTTEXT_HOME_ENV: str(tmp_path)}
     blueprint = Blueprint.of(settings_module.load(CONFIG_DIR, env), contract, env, cpus=8)
-    assert not any(plan.reserved for plan in blueprint.plans)
+    assert [plan.name for plan in blueprint.plans if plan.reserved] == ["llm-local"]
     assert blueprint.policy.serial_loads is False
     assert all("towers" not in spec.options for spec in blueprint.specs.values())
 
