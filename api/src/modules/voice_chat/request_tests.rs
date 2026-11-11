@@ -19,6 +19,11 @@ fn said(turn: &Turn) -> Vec<(Role, &str)> {
         .collect()
 }
 
+fn at_the_block_cap(around: impl Fn(String) -> Value) -> Value {
+    let room = 8 * 1024 - around(String::new()).to_string().len();
+    around("x".repeat(room))
+}
+
 #[test]
 fn a_full_body_becomes_a_turn() {
     let turn = read(json!({
@@ -150,19 +155,47 @@ fn wrong_shapes_of_history_and_notes_are_still_refused() {
 fn the_body_limit_follows_the_caps() {
     let limits = limits();
     let limit = body_limit(&limits);
+    assert_eq!(
+        limit,
+        (40 + 64 + 6 * 2_000 + 3 * 300 + 2 * 8_192 + 16_000) * 4 + 4_096
+    );
     let mut bigger = limits.clone();
     bigger.max_history += 1;
     assert_eq!(body_limit(&bigger), limit + 4 * 2_000);
     let mut wider = limits.clone();
     wider.max_system_bytes += 1_000;
     assert_eq!(body_limit(&wider), limit + 4 * 1_000);
-    let longest = json!({
-        "text": "я".repeat(limits.max_text_chars),
-        "persona": "p".repeat(64),
-        "history": vec![json!({"role": "user", "text": "\u{1f3b5}".repeat(2_000)}); limits.max_history],
-        "notes": vec!["\"".repeat(300); limits.max_notes],
+}
+
+#[test]
+fn a_body_with_every_field_at_its_cap_is_within_the_limit() {
+    let limits = limits();
+    let wide = "\u{1f3b5}";
+    let body = json!({
+        "text": wide.repeat(limits.max_text_chars),
+        "persona": wide.repeat(64),
+        "language": "sr-Latn-RS",
+        "context": at_the_block_cap(|queue| json!({"queue": queue})),
+        "history": vec![json!({"role": "user", "text": wide.repeat(2_000)}); limits.max_history],
+        "notes": vec![wide.repeat(300); limits.max_notes],
+        "tools": tools(),
+        "results": at_the_block_cap(
+            |found| json!([{"name": "search_tracks", "args": {}, "result": found}])
+        ),
     });
-    assert!(longest.to_string().len() < limit);
+    let size = body.to_string().len();
+
+    let turn = read(body).expect("no field is over its cap");
+
+    assert_eq!(turn.context.unwrap().len(), 8 * 1024);
+    assert_eq!(turn.results.unwrap().len(), 8 * 1024);
+    let counted = turn.text.len()
+        + turn.persona.len()
+        + turn.history[0].content.len()
+        + turn.notes.iter().map(String::len).sum::<usize>();
+    assert_eq!(counted, 4 * (40 + 64 + 6 * 2_000 + 3 * 300) + 5);
+    assert!(size > counted + 2 * 8 * 1024);
+    assert!(size < body_limit(&limits), "{size}");
 }
 
 #[test]

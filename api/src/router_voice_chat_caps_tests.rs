@@ -6,6 +6,7 @@ use super::super::{session_for, tuned};
 use super::vendor::{self, End, MESSAGES, Reply, Vendor};
 use super::{CHAT_SECTION, LOUDER, ask, chat_app, fresh_user, ladder, one_step, provider, starred};
 use crate::modules::voice_chat::testing::{Lane, body_limit, lane, tools};
+use crate::router::MAX_BODY_BYTES;
 
 const WORKER_MESSAGE_BYTES: usize = 12_000;
 const RESULTS_CAP: usize = 8 * 1024;
@@ -245,6 +246,10 @@ async fn the_route_takes_a_body_up_to_the_limit_its_caps_set(pool: PgPool) -> an
     let app = starred(&pool, &one_step(&vendor, "paid-model")).await?;
     let session = session_for(&pool, &fresh_user()).await?;
     let limit = body_limit();
+    assert!(
+        limit < MAX_BODY_BYTES,
+        "these caps set a limit below the one every route has"
+    );
     let padded = |size: usize| {
         let bare = json!({"text": "сделай погромче", "pad": ""}).to_string();
         json!({"text": "сделай погромче", "pad": "x".repeat(size - bare.len())})
