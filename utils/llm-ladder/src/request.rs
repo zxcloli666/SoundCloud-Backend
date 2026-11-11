@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::schema::Schema;
 
 pub(crate) const BETWEEN_SECTIONS: &str = "\n\n";
+const BYTES_PER_TOKEN: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct Request {
@@ -97,7 +98,28 @@ impl Message {
     }
 }
 
+impl Request {
+    pub(crate) fn size(&self) -> usize {
+        let messages: usize = self
+            .messages
+            .iter()
+            .map(|message| message.content.len())
+            .sum();
+        let schema = serde_json::to_vec(&self.schema).map_or(0, |schema| schema.len());
+        self.system.joined().len() + messages + schema
+    }
+}
+
 impl Usage {
+    pub(crate) fn estimated(sent_bytes: usize, received_bytes: usize) -> Self {
+        let tokens = |bytes: usize| bytes.div_ceil(BYTES_PER_TOKEN) as u64;
+        Self {
+            input_tokens: tokens(sent_bytes),
+            output_tokens: tokens(received_bytes),
+            ..Self::default()
+        }
+    }
+
     pub fn prompt_tokens(&self) -> u64 {
         self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
     }
@@ -142,5 +164,26 @@ mod tests {
             ..Usage::default()
         };
         assert!(!cached_only.is_unknown());
+    }
+
+    #[test]
+    fn an_estimate_counts_a_token_for_every_few_bytes_rounded_up() {
+        let request = Request {
+            system: System::fixed("rules"),
+            messages: vec![Message::user("hello"), Message::assistant("hi")],
+            schema: Schema::String,
+            budget_user: None,
+            deadline: None,
+        };
+        assert_eq!(request.size(), 5 + 5 + 2 + "{\"type\":\"string\"}".len());
+        assert_eq!(
+            Usage::estimated(request.size(), 7),
+            Usage {
+                input_tokens: 10,
+                output_tokens: 3,
+                ..Usage::default()
+            }
+        );
+        assert!(Usage::estimated(0, 0).is_unknown());
     }
 }

@@ -1,23 +1,24 @@
+mod run;
+mod settle;
+
 use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-use chrono::Utc;
 use futures::StreamExt;
-use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
 
-use crate::document::Document;
 use crate::error::LadderError;
-use crate::ladder::{Ladder, Outcome};
-use crate::observer::{Failure, Skip, StepReport, StepResult};
-use crate::provider::{StepEvent, StepStream};
-use crate::request::{Request, Usage};
+use crate::ladder::{Commit, Ladder, Outcome};
+use crate::observer::{Failure, Skip, StepResult};
+use crate::provider::StepEvent;
+use crate::request::Request;
+use run::Run;
+use settle::{Settled, settle};
 
 const CHARGE_WAIT: Duration = Duration::from_millis(300);
-const USAGE_WAIT: Duration = Duration::from_secs(1);
 
 pub(crate) enum Item {
     Delta(String),
@@ -25,28 +26,23 @@ pub(crate) enum Item {
     Failed(LadderError),
 }
 
+pub(crate) struct Rule {
+    pub commit: Commit,
+    pub accept: Option<fn(&str) -> bool>,
+}
+
 pub(crate) struct Race {
     ladder: Arc<Ladder>,
     request: Arc<Request>,
+    sent_bytes: usize,
     waiting: VecDeque<usize>,
     running: Vec<Run>,
     winner: Option<Run>,
-    accept: Option<fn(&str) -> bool>,
+    rule: Rule,
     collected: String,
     started: Instant,
     deadline: Instant,
     hedge_at: Option<Instant>,
-}
-
-struct Run {
-    step: usize,
-    stream: StepStream,
-    document: Document,
-    usage: Usage,
-    started: Instant,
-    expires: Instant,
-    first_output: Option<Duration>,
-    answered_at: Option<Instant>,
 }
 
 enum Signal {
@@ -59,7 +55,7 @@ impl Race {
         ladder: Arc<Ladder>,
         request: Request,
         steps: Vec<usize>,
-        accept: Option<fn(&str) -> bool>,
+        rule: Rule,
         started: Instant,
     ) -> Self {
         let allowed = request
@@ -67,11 +63,12 @@ impl Race {
             .map_or(ladder.deadline, |deadline| deadline.min(ladder.deadline));
         Self {
             ladder,
+            sent_bytes: request.size(),
             request: Arc::new(request),
             waiting: steps.into(),
             running: Vec::new(),
             winner: None,
-            accept,
+            rule,
             collected: String::new(),
             started,
             deadline: started + allowed,
@@ -106,16 +103,9 @@ impl Race {
             _ = sleep_until(wake) => Signal::Timer,
         };
         match signal {
-            Signal::Step(index, Some(Ok(StepEvent::Text(text)))) => {
-                let visible = self.running[index].read(&text);
-                if visible.is_empty() {
-                    return None;
-                }
-                self.crown(index);
-                self.deliver(visible)
-            }
+            Signal::Step(index, Some(Ok(StepEvent::Text(text)))) => self.hear(index, &text),
             Signal::Step(index, Some(Ok(StepEvent::Usage(usage)))) => {
-                self.running[index].usage = usage;
+                self.running[index].count(usage);
                 None
             }
             Signal::Step(index, Some(Err(failure))) => {
@@ -141,14 +131,15 @@ impl Race {
         };
         match event {
             Some(Some(Ok(StepEvent::Text(text)))) => {
-                let visible = winner.read(&text);
+                winner.read(&text);
+                let visible = std::mem::take(&mut winner.held);
                 match visible.is_empty() {
                     true => None,
                     false => self.deliver(visible),
                 }
             }
             Some(Some(Ok(StepEvent::Usage(usage)))) => {
-                winner.usage = usage;
+                winner.count(usage);
                 None
             }
             Some(None) => self.conclude().await,
@@ -159,29 +150,51 @@ impl Race {
         }
     }
 
+    fn hear(&mut self, index: usize, text: &str) -> Option<Item> {
+        let run = &mut self.running[index];
+        run.read(text);
+        if run.held.is_empty() {
+            return None;
+        }
+        self.hedge_at = None;
+        if (self.rule.commit)(&run.held) {
+            let held = self.crown(index);
+            return self.deliver(held);
+        }
+        if run.document.is_complete() {
+            self.drop_out(index, Failure::Invalid);
+        }
+        None
+    }
+
     fn start_next(&mut self) -> bool {
-        while let Some(index) = self.waiting.pop_front() {
-            let now = Instant::now();
+        while let Some(&index) = self.waiting.front() {
             let step = &self.ladder.steps[index];
+            if !step.provider.hedged && !self.running.is_empty() {
+                self.hedge_at = None;
+                return false;
+            }
+            self.waiting.pop_front();
+            let now = Instant::now();
             if !step.breaker.enter(now) {
                 self.ladder.skipped(step, Skip::Breaker);
                 continue;
             }
-            self.running.push(Run {
-                step: index,
-                stream: step.provider.start(self.request.clone()),
-                document: Document::default(),
-                usage: Usage::default(),
-                started: now,
-                expires: now + step.provider.total_timeout,
-                first_output: None,
-                answered_at: None,
-            });
-            self.hedge_at = (!self.waiting.is_empty()).then(|| now + self.ladder.hedge_after);
+            let time_left = self.deadline.saturating_duration_since(now);
+            let stream = step.provider.start(self.request.clone(), time_left);
+            let expires = now + step.provider.total_timeout;
+            self.running.push(Run::new(index, stream, now, expires));
+            self.hedge_at = self.hedge_after(now);
             return true;
         }
         self.hedge_at = None;
         false
+    }
+
+    fn hedge_after(&self, now: Instant) -> Option<Instant> {
+        let next = *self.waiting.front()?;
+        let hedged = self.ladder.steps[next].provider.hedged;
+        hedged.then(|| now + self.ladder.hedge_after)
     }
 
     fn wake_at(&self) -> Instant {
@@ -195,6 +208,7 @@ impl Race {
     fn on_time(&mut self) -> Option<Item> {
         let now = Instant::now();
         if now >= self.deadline {
+            self.blame_the_silent(now);
             return Some(Item::Failed(LadderError::Deadline));
         }
         while let Some(index) = self.running.iter().position(|run| run.expires <= now) {
@@ -206,21 +220,33 @@ impl Race {
         None
     }
 
-    fn crown(&mut self, index: usize) {
+    fn blame_the_silent(&mut self, now: Instant) {
+        let patience = self.ladder.hedge_after;
+        let (silent, speaking): (Vec<Run>, Vec<Run>) = std::mem::take(&mut self.running)
+            .into_iter()
+            .partition(|run| run.first_output.is_none() && now - run.started > patience);
+        self.running = speaking;
+        for run in silent {
+            self.settle(run, StepResult::Failed(Failure::Timeout));
+        }
+    }
+
+    fn crown(&mut self, index: usize) -> String {
         let mut winner = self.running.remove(index);
-        winner.first_output = Some(winner.started.elapsed());
         for loser in std::mem::take(&mut self.running).into_iter().rev() {
-            if self.accept.is_some() {
+            if self.rule.accept.is_some() {
                 self.waiting.push_front(loser.step);
             }
-            settle(&self.ladder, &self.request, loser, StepResult::Lost);
+            self.settle(loser, StepResult::Lost);
         }
         self.hedge_at = None;
+        let held = std::mem::take(&mut winner.held);
         self.winner = Some(winner);
+        held
     }
 
     fn deliver(&mut self, visible: String) -> Option<Item> {
-        match self.accept {
+        match self.rule.accept {
             Some(_) => {
                 self.collected.push_str(&visible);
                 None
@@ -231,24 +257,14 @@ impl Race {
 
     fn drop_out(&mut self, index: usize, failure: Failure) {
         let run = self.running.remove(index);
-        settle(
-            &self.ladder,
-            &self.request,
-            run,
-            StepResult::Failed(failure),
-        );
+        self.settle(run, StepResult::Failed(failure));
         self.start_next();
     }
 
     fn dethrone(&mut self, failure: Failure) -> Option<Item> {
         let winner = self.winner.take()?;
-        settle(
-            &self.ladder,
-            &self.request,
-            winner,
-            StepResult::Failed(failure),
-        );
-        match self.accept {
+        self.settle(winner, StepResult::Failed(failure));
+        match self.rule.accept {
             Some(_) => {
                 self.collected.clear();
                 None
@@ -259,38 +275,32 @@ impl Race {
 
     async fn conclude(&mut self) -> Option<Item> {
         let winner = self.winner.as_ref()?;
-        let accepted = self.accept.is_none_or(|accept| accept(&self.collected));
+        let accepted = self
+            .rule
+            .accept
+            .is_none_or(|accept| accept(&self.collected));
         if !winner.document.is_complete() || !accepted {
             return self.dethrone(Failure::Invalid);
         }
         let winner = self.winner.take()?;
-        let provider = &self.ladder.steps[winner.step].provider;
-        let outcome = Outcome {
-            provider: provider.id.clone(),
-            usage: winner.usage,
-            cost_micro_usd: provider.price.cost(&winner.usage),
-            first_output: winner.first_output.unwrap_or_default(),
-            elapsed: self.started.elapsed(),
-        };
-        if let Some(charge) = settle(&self.ladder, &self.request, winner, StepResult::Won) {
+        let provider = self.ladder.steps[winner.step].provider.id.clone();
+        let first_output = winner.first_output.unwrap_or_default();
+        let settled = self.settle(winner, StepResult::Won);
+        if let Some(charge) = settled.charge {
             let _ = tokio::time::timeout(CHARGE_WAIT, charge).await;
         }
-        Some(Item::Finished(outcome))
-    }
-}
-
-impl Run {
-    fn read(&mut self, text: &str) -> String {
-        let visible = self.document.push(text);
-        if self.document.is_complete() {
-            self.answered_at.get_or_insert_with(Instant::now);
-        }
-        visible
+        Some(Item::Finished(Outcome {
+            provider,
+            usage: settled.usage,
+            basis: settled.basis,
+            cost_micro_usd: settled.cost_micro_usd,
+            first_output,
+            elapsed: self.started.elapsed(),
+        }))
     }
 
-    fn wake_at(&self, deadline: Instant) -> Instant {
-        let tail = self.answered_at.map_or(deadline, |at| at + USAGE_WAIT);
-        self.expires.min(deadline).min(tail)
+    fn settle(&self, run: Run, result: StepResult) -> Settled {
+        settle(&self.ladder, &self.request, self.sent_bytes, run, result)
     }
 }
 
@@ -298,7 +308,7 @@ impl Drop for Race {
     fn drop(&mut self) {
         let unfinished: Vec<Run> = self.running.drain(..).chain(self.winner.take()).collect();
         for run in unfinished {
-            settle(&self.ladder, &self.request, run, StepResult::Cancelled);
+            self.settle(run, StepResult::Cancelled);
         }
     }
 }
@@ -313,40 +323,4 @@ async fn next_event(running: &mut [Run]) -> (usize, Option<Result<StepEvent, Fai
         Poll::Pending
     })
     .await
-}
-
-fn settle(
-    ladder: &Ladder,
-    request: &Request,
-    run: Run,
-    result: StepResult,
-) -> Option<JoinHandle<()>> {
-    let step = &ladder.steps[run.step];
-    match result {
-        StepResult::Won => step.breaker.succeeded(),
-        StepResult::Failed(_) => step.breaker.failed(Instant::now()),
-        StepResult::Lost | StepResult::Cancelled | StepResult::Skipped(_) => step.breaker.left(),
-    }
-    let priced = step.provider.price.is_set();
-    if result == StepResult::Won && priced && run.usage.is_unknown() {
-        tracing::warn!(
-            ladder = %ladder.id,
-            provider = %step.provider.id,
-            "a priced provider reported no token usage, its spend is not counted"
-        );
-    }
-    let cost_micro_usd = step.provider.price.cost(&run.usage);
-    ladder.observer.step(&StepReport {
-        ladder: &ladder.id,
-        provider: &step.provider.id,
-        result,
-        first_output: run.first_output,
-        elapsed: run.started.elapsed(),
-        usage: run.usage,
-        cost_micro_usd,
-    });
-    ladder
-        .budget
-        .as_ref()?
-        .charge(request.budget_user.as_deref(), cost_micro_usd, Utc::now())
 }

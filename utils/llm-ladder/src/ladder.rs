@@ -13,11 +13,13 @@ use crate::breaker::Breaker;
 use crate::budget::{Budget, Caps, NatsSpend, SpendStore};
 use crate::config::{LadderSettings, Settings};
 use crate::error::{ConfigError, LadderError};
-use crate::observer::{Observer, Skip, StepReport, StepResult};
+use crate::observer::{Basis, Observer, Skip, StepReport, StepResult};
 use crate::provider::worker::WorkerTransport;
 use crate::provider::{self, Provider};
-use crate::race::{Item, Race};
+use crate::race::{Item, Race, Rule};
 use crate::request::{Request, Usage};
+
+pub type Commit = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 pub struct Ladders {
     ladders: HashMap<String, Arc<Ladder>>,
@@ -57,6 +59,7 @@ pub enum Event {
 pub struct Outcome {
     pub provider: String,
     pub usage: Usage,
+    pub basis: Basis,
     pub cost_micro_usd: u64,
     pub first_output: Duration,
     pub elapsed: Duration,
@@ -107,8 +110,16 @@ impl Ladders {
 }
 
 impl Ladder {
-    pub async fn stream(self: &Arc<Self>, request: Request) -> Result<AnswerStream, LadderError> {
-        let race = self.enter(request, None).await?;
+    pub async fn stream(
+        self: &Arc<Self>,
+        request: Request,
+        commit: Commit,
+    ) -> Result<AnswerStream, LadderError> {
+        let rule = Rule {
+            commit,
+            accept: None,
+        };
+        let race = self.enter(request, rule).await?;
         let events = stream::unfold(Some(race), |race| async move {
             let mut race = race?;
             match race.next().await {
@@ -126,7 +137,11 @@ impl Ladder {
         self: &Arc<Self>,
         request: Request,
     ) -> Result<Completion<T>, LadderError> {
-        let mut race = self.enter(request, Some(parses::<T>)).await?;
+        let rule = Rule {
+            commit: Arc::new(|_| true),
+            accept: Some(parses::<T>),
+        };
+        let mut race = self.enter(request, rule).await?;
         loop {
             match race.next().await {
                 Item::Delta(_) => {}
@@ -138,10 +153,6 @@ impl Ladder {
                 Item::Failed(error) => return Err(error),
             }
         }
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
     }
 
     pub(crate) fn assemble(
@@ -181,21 +192,18 @@ impl Ladder {
             first_output: None,
             elapsed: Duration::ZERO,
             usage: Usage::default(),
+            basis: Basis::Reported,
             cost_micro_usd: 0,
         });
     }
 
-    async fn enter(
-        self: &Arc<Self>,
-        request: Request,
-        accept: Option<fn(&str) -> bool>,
-    ) -> Result<Race, LadderError> {
+    async fn enter(self: &Arc<Self>, request: Request, rule: Rule) -> Result<Race, LadderError> {
         let started = Instant::now();
         let steps = self.open_steps(&request).await;
         if steps.is_empty() {
             return Err(LadderError::Unavailable);
         }
-        Ok(Race::new(self.clone(), request, steps, accept, started))
+        Ok(Race::new(self.clone(), request, steps, rule, started))
     }
 
     async fn open_steps(&self, request: &Request) -> Vec<usize> {
