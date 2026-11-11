@@ -72,6 +72,7 @@ The system text has three sections, the most shared first:
 
 A provider that caches by prefix reuses sections 1 and 2. With `prefix_cache` set, sections 1 and 2 each end with a cache mark: a turn of a known character reads both from the cache, a new character reads section 1 and writes its own section 2.
 `openai_compatible` and `worker` get the same text joined in the same order.
+A `worker` call also carries `system_marks`: the byte offsets in that text where sections 1 and 2 end, at most the first four shared sections. The worker keeps a model state at each mark and reads only the text after the last mark it already has, so a turn of a known character reads section 3 and the talk, and a new character reads from the end of section 1. A turn with no notes and no app state ends on a mark, so the next question to the same text reads nothing of it again.
 A change to `instructions`, a persona prompt or the app's tool list starts a new cache entry, so keep per-user and per-turn text out of them. The last tool round is offered fewer tools and has an entry of its own.
 
 ## Request

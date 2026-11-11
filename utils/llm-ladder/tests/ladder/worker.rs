@@ -56,6 +56,7 @@ async fn the_worker_kind_sends_the_contract_payload_and_reads_the_reply() {
         *payload,
         json!({
             "system": "Answer with one JSON object.\n\nSpeak as Loli.\n\nThe volume is 60.",
+            "system_marks": [28, 44],
             "messages": [
                 {"role": "user", "content": "hi"},
                 {"role": "assistant", "content": "hello"},

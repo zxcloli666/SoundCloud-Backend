@@ -64,6 +64,24 @@ impl System {
             .collect();
         texts.join(BETWEEN_SECTIONS)
     }
+
+    pub(crate) fn shared_ends(&self) -> Vec<usize> {
+        let mut ends = Vec::new();
+        let mut length = 0;
+        for section in &self.sections {
+            if !section.text.is_empty() {
+                let lead = match length {
+                    0 => 0,
+                    _ => BETWEEN_SECTIONS.len(),
+                };
+                length += lead + section.text.len();
+            }
+            if section.ends_shared_prefix && length > 0 && ends.last() != Some(&length) {
+                ends.push(length);
+            }
+        }
+        ends
+    }
 }
 
 impl Section {
@@ -158,6 +176,27 @@ mod tests {
         assert_eq!(System::fixed("rules").joined(), "rules");
         assert!(System::fixed("rules").sections[0].ends_shared_prefix);
         assert_eq!(System::default().joined(), "");
+    }
+
+    #[test]
+    fn a_shared_prefix_ends_where_its_last_section_ends_in_the_joined_text() {
+        let system = System {
+            sections: vec![
+                Section::shared("правила"),
+                Section::shared(""),
+                Section::own("character"),
+                Section::shared("state"),
+            ],
+        };
+        let joined = system.joined();
+        assert_eq!(system.shared_ends(), [14, joined.len()]);
+        assert_eq!(&joined[..14], "правила");
+        assert_eq!(System::fixed("rules").shared_ends(), [5]);
+        let own = System {
+            sections: vec![Section::shared(""), Section::own("state")],
+        };
+        assert_eq!(own.shared_ends(), Vec::<usize>::new());
+        assert_eq!(System::default().shared_ends(), Vec::<usize>::new());
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::schema::Schema;
 
 pub(crate) const MAX_TOKENS: u32 = 1024;
 pub(crate) const MAX_SYSTEM_BYTES: usize = 48_000;
+const MAX_SYSTEM_MARKS: usize = 4;
 const MAX_MESSAGES: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 12_000;
 const MAX_SCHEMA_BYTES: usize = 64_000;
@@ -62,12 +63,7 @@ impl Backend for Worker {
         let subject = self.subject.clone();
         let max_tokens = self.max_output_tokens;
         stream::once(async move {
-            let payload = Payload {
-                system: request.system.joined(),
-                messages: fitted(&request.messages),
-                schema: &request.schema,
-                max_tokens,
-            };
+            let payload = Payload::of(&request, max_tokens);
             if let Some(part) = payload.over_limit() {
                 tracing::warn!(provider = %provider, part, "llm worker takes no request this large");
                 return vec![Err(Failure::Request)];
@@ -141,6 +137,8 @@ fn newest_part(content: &str) -> &str {
 #[derive(Serialize)]
 struct Payload<'a> {
     system: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    system_marks: Vec<usize>,
     messages: Vec<Fitted<'a>>,
     schema: &'a Schema,
     max_tokens: u32,
@@ -152,7 +150,19 @@ struct Fitted<'a> {
     content: &'a str,
 }
 
-impl Payload<'_> {
+impl<'a> Payload<'a> {
+    fn of(request: &'a Request, max_tokens: u32) -> Self {
+        let mut system_marks = request.system.shared_ends();
+        system_marks.truncate(MAX_SYSTEM_MARKS);
+        Self {
+            system: request.system.joined(),
+            system_marks,
+            messages: fitted(&request.messages),
+            schema: &request.schema,
+            max_tokens,
+        }
+    }
+
     fn over_limit(&self) -> Option<&'static str> {
         let schema = serde_json::to_vec(self.schema).map_or(usize::MAX, |schema| schema.len());
         if self.system.len() > MAX_SYSTEM_BYTES {
@@ -192,10 +202,25 @@ mod tests {
     fn payload<'a>(system: &str, messages: &'a [Message], schema: &'a Schema) -> Payload<'a> {
         Payload {
             system: system.to_owned(),
+            system_marks: Vec::new(),
             messages: fitted(messages),
             schema,
             max_tokens: 512,
         }
+    }
+
+    fn asked(sections: Vec<Section>) -> Request {
+        Request {
+            system: System { sections },
+            messages: vec![Message::user("hi"), Message::assistant("{\"say\":\"yo\"}")],
+            schema: Schema::object([("say", Schema::String), ("mood", Schema::Integer)]),
+            budget_user: None,
+            deadline: None,
+        }
+    }
+
+    fn sent(sections: Vec<Section>) -> Value {
+        serde_json::to_value(Payload::of(&asked(sections), 512)).unwrap()
     }
 
     fn talk(messages: usize) -> Vec<Message> {
@@ -209,20 +234,12 @@ mod tests {
 
     #[test]
     fn the_request_is_the_contract_payload_with_the_schema_in_order() {
-        let system = System {
-            sections: vec![Section::shared("rules"), Section::own("state")],
-        };
-        let messages = [Message::user("hi"), Message::assistant("{\"say\":\"yo\"}")];
-        let payload = Payload {
-            system: system.joined(),
-            messages: fitted(&messages),
-            schema: &Schema::object([("say", Schema::String), ("mood", Schema::Integer)]),
-            max_tokens: 512,
-        };
-        let text = serde_json::to_string(&payload).unwrap();
+        let request = asked(vec![Section::shared("rules"), Section::own("state")]);
+        let text = serde_json::to_string(&Payload::of(&request, 512)).unwrap();
         assert!(text.find("\"say\":{").unwrap() < text.find("\"mood\":{").unwrap());
         let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["system"], "rules\n\nstate");
+        assert_eq!(value["system_marks"], json!([5]));
         assert_eq!(value["max_tokens"], 512);
         assert_eq!(
             value["messages"],
@@ -232,6 +249,46 @@ mod tests {
             ])
         );
         assert_eq!(value["schema"]["type"], "object");
+    }
+
+    #[test]
+    fn the_end_of_every_shared_prefix_is_marked_in_bytes_of_the_system_text() {
+        let chat = sent(vec![
+            Section::shared("правила"),
+            Section::shared("character"),
+            Section::own("state"),
+        ]);
+        assert_eq!(chat["system"], "правила\n\ncharacter\n\nstate");
+        assert_eq!(chat["system_marks"], json!([14, 25]));
+
+        let whole = sent(vec![Section::shared("rules"), Section::shared("character")]);
+        assert_eq!(whole["system_marks"], json!([5, 16]));
+        assert_eq!(whole["system"].as_str().map(str::len), Some(16));
+
+        let quiet = sent(vec![
+            Section::shared("rules"),
+            Section::shared("character"),
+            Section::own(""),
+        ]);
+        assert_eq!(quiet["system_marks"], whole["system_marks"]);
+    }
+
+    #[test]
+    fn a_system_text_with_no_shared_prefix_goes_out_without_marks() {
+        let own = sent(vec![Section::own("rules"), Section::own("state")]);
+        assert_eq!(own.get("system_marks"), None);
+        assert_eq!(own["system"], "rules\n\nstate");
+    }
+
+    #[test]
+    fn only_the_first_four_shared_prefixes_are_marked() {
+        let many = sent(
+            ["a", "b", "c", "d", "e", "f"]
+                .into_iter()
+                .map(Section::shared)
+                .collect(),
+        );
+        assert_eq!(many["system_marks"], json!([1, 4, 7, 10]));
     }
 
     #[test]
