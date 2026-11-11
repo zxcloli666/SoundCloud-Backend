@@ -5,9 +5,10 @@ use sqlx::PgPool;
 use super::super::{session_for, tuned};
 use super::vendor::{self, End, MESSAGES, Reply, Vendor};
 use super::{CHAT_SECTION, LOUDER, ask, chat_app, fresh_user, ladder, one_step, provider, starred};
-use crate::modules::voice_chat::testing::{body_limit, lane, tools};
+use crate::modules::voice_chat::testing::{Lane, body_limit, lane, tools};
 
 const WORKER_MESSAGE_BYTES: usize = 12_000;
+const RESULTS_CAP: usize = 8 * 1024;
 const SYSTEM_CAP: usize = 16_000;
 
 fn at_every_cap() -> Value {
@@ -41,33 +42,109 @@ fn at_every_cap() -> Value {
     })
 }
 
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_request_at_every_cap_reaches_the_vendor_and_the_worker_within_their_limits(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
+fn merged_and_with_results_at_the_cap() -> Value {
+    let mut history: Vec<Value> = (0..64)
+        .map(|index| match index % 2 {
+            0 => json!({"role": "user", "text": format!("u{index}")}),
+            _ => json!({"role": "assistant", "text": format!("a{index}")}),
+        })
+        .collect();
+    history.extend((0..6).map(|_| json!({"role": "user", "text": "ж".repeat(2_000)})));
+    let found = |tracks: String| json!([{"name": "search_tracks", "args": {}, "result": tracks}]);
+    let room = RESULTS_CAP - found(String::new()).to_string().len();
+    let tracks = format!("{}{}", "<".repeat(200), "r".repeat(room - 200));
+    json!({
+        "text": "я".repeat(40),
+        "history": history,
+        "tools": tools(),
+        "results": found(tracks),
+    })
+}
+
+fn silent_vendor_then_local(vendor: &Vendor, lane: &Lane) -> String {
     vendor.model("silent-model", Reply::Stream(Vec::new(), End::Stalls));
-    let lane = lane().await;
-    let reply = json!({
-        "ok": true,
-        "data": {"text": "{\"actions\":[],\"say\":\"Локально.\"}", "input_tokens": 40, "output_tokens": 9},
-    });
-    let worker = lane.worker(Some(reply)).await;
     let local = format!(
         "[providers.local]\nkind = \"worker\"\nsubject = \"{}\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n\n",
         lane.subject
     );
-    let llm = provider(
+    provider(
         "silent",
         "anthropic_compatible",
         &vendor.url(MESSAGES),
         "silent-model",
         "",
     ) + &local
-        + &ladder(&["silent", "local"], "")
-            .replace("hedge_after_ms = 3000", "hedge_after_ms = 300")
-        + CHAT_SECTION;
+        + &ladder(&["silent", "local"], "").replace("hedge_after_ms = 3000", "hedge_after_ms = 300")
+}
+
+fn local_reply() -> Value {
+    json!({
+        "ok": true,
+        "data": {"text": "{\"actions\":[],\"say\":\"Локально.\"}", "input_tokens": 40, "output_tokens": 9},
+    })
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis and NATS"]
+async fn merged_history_and_results_at_their_cap_reach_the_worker_cut_to_its_limits(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let vendor = Vendor::open().await?;
+    let lane = lane().await;
+    let worker = lane.worker(Some(local_reply())).await;
+    let llm = silent_vendor_then_local(&vendor, &lane)
+        + &CHAT_SECTION.replace("max_history = 6", "max_history = 70");
+    let app = chat_app(&pool, tuned(|_| {}), true, &llm, Some(&lane.nats)).await?;
+    let session = session_for(&pool, &fresh_user()).await?;
+
+    let heard = ask(&app, session, &merged_and_with_results_at_the_cap()).await?;
+
+    assert_eq!(
+        heard.named(),
+        [("say", &json!({"text": "Локально."})), ("done", &json!({}))],
+        "the worker is asked, not passed over as too small for the request"
+    );
+    let to_vendor = vendor.calls_of("silent-model")[0].body.clone();
+    let to_worker: Value = serde_json::from_slice(&worker.await?.payload)?;
+    let whole = to_vendor["messages"].as_array().unwrap();
+    let fitted = to_worker["messages"].as_array().unwrap();
+    assert_eq!(whole.len(), 65, "six user items in a row are one message");
+    assert_eq!(
+        fitted.len(),
+        63,
+        "the newest 64, less the reply they began with"
+    );
+    assert_eq!(fitted[0], json!({"role": "user", "content": "u2"}));
+    assert_eq!(fitted[..62], whole[2..64]);
+    let asked = whole[64]["content"].as_str().unwrap();
+    let kept = fitted[62]["content"].as_str().unwrap();
+    assert!(asked.len() > 2 * WORKER_MESSAGE_BYTES, "{}", asked.len());
+    assert!(
+        kept.len() <= WORKER_MESSAGE_BYTES && kept.len() > WORKER_MESSAGE_BYTES - 2,
+        "{}",
+        kept.len()
+    );
+    assert!(asked.ends_with(kept) && kept.starts_with('ж'));
+    let turn = format!("\n{}\n\n<tool_results>\n", "я".repeat(40));
+    assert!(
+        kept.contains(&turn),
+        "the phrase and its results outlive the older words"
+    );
+    assert!(kept.ends_with("\n</tool_results>"));
+    assert_eq!(kept.matches("\\u003c").count(), 200);
+    lane.close().await;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_request_at_every_cap_reaches_the_vendor_and_the_worker_within_their_limits(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let vendor = Vendor::open().await?;
+    let lane = lane().await;
+    let worker = lane.worker(Some(local_reply())).await;
+    let llm = silent_vendor_then_local(&vendor, &lane) + CHAT_SECTION;
     let app = chat_app(&pool, tuned(|_| {}), true, &llm, Some(&lane.nats)).await?;
     let session = session_for(&pool, &fresh_user()).await?;
 
