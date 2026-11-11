@@ -3,7 +3,7 @@ mod nats;
 #[cfg(test)]
 pub(crate) mod memory;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -11,6 +11,7 @@ use futures::future::{BoxFuture, join_all};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 pub(crate) use nats::NatsSpend;
 
@@ -18,6 +19,7 @@ use crate::config::{CapSettings, micro_usd};
 
 const READ_BUDGET: Duration = Duration::from_millis(800);
 const WRITE_BUDGET: Duration = Duration::from_secs(5);
+const OUTAGE_PAUSE: Duration = Duration::from_secs(10);
 const MAX_PLAIN_USER_LEN: usize = 64;
 const HASHED_USER_LEN: usize = 32;
 
@@ -41,6 +43,7 @@ pub(crate) struct Budget {
     store: Arc<dyn SpendStore>,
     ladder: String,
     caps: Caps,
+    outage: Mutex<Option<Instant>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -57,28 +60,53 @@ impl Budget {
             store,
             ladder: ladder.to_owned(),
             caps,
+            outage: Mutex::new(None),
         }
     }
 
     pub async fn is_spent(&self, user: Option<&str>, now: DateTime<Utc>) -> bool {
+        if self.in_outage() {
+            return true;
+        }
         let counters = self.counters(user, now);
         let reads = counters
             .iter()
             .map(|(key, _)| self.store.spent(key.clone()));
         let Ok(spent) = tokio::time::timeout(READ_BUDGET, join_all(reads)).await else {
-            tracing::warn!(ladder = %self.ladder, "spend counters did not answer in time, priced providers are skipped");
+            self.begin_outage("the spend counters did not answer in time");
             return true;
         };
-        counters
-            .iter()
-            .zip(spent)
-            .any(|((_, cap), spent)| match spent {
-                Ok(spent) => spent >= *cap,
+        let mut reached = false;
+        for ((_, cap), spent) in counters.iter().zip(spent) {
+            match spent {
+                Ok(spent) => reached |= spent >= *cap,
+                Err(SpendError::Unreachable(_)) => {
+                    self.begin_outage("the spend bucket is unreachable");
+                    return true;
+                }
                 Err(error) => {
                     tracing::warn!(ladder = %self.ladder, %error, "spend counter is unreadable, priced providers are skipped");
-                    true
+                    reached = true;
                 }
-            })
+            }
+        }
+        reached
+    }
+
+    fn in_outage(&self) -> bool {
+        let outage = self.outage.lock().unwrap_or_else(PoisonError::into_inner);
+        outage.is_some_and(|until| Instant::now() < until)
+    }
+
+    fn begin_outage(&self, reason: &'static str) {
+        *self.outage.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(Instant::now() + OUTAGE_PAUSE);
+        tracing::warn!(
+            ladder = %self.ladder,
+            reason,
+            pause_s = OUTAGE_PAUSE.as_secs(),
+            "priced providers are skipped until the spend counters can be read"
+        );
     }
 
     pub fn charge(

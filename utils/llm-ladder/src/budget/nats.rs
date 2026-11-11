@@ -36,22 +36,33 @@ impl NatsSpend {
     }
 
     async fn store(&self) -> Result<&kv::Store, SpendError> {
-        self.store
-            .get_or_try_init(|| async {
-                self.jetstream
-                    .create_or_update_key_value(kv::Config {
-                        bucket: self.bucket.clone(),
-                        history: 1,
-                        max_age: COUNTER_AGE,
-                        max_bytes: BUCKET_BYTES,
-                        max_value_size: MAX_COUNTER_MESSAGE,
-                        storage: StorageType::File,
-                        ..Default::default()
-                    })
-                    .await
-                    .map_err(unreachable)
+        self.store.get_or_try_init(|| self.open()).await
+    }
+
+    async fn open(&self) -> Result<kv::Store, SpendError> {
+        if let Ok(store) = self.jetstream.get_key_value(&self.bucket).await {
+            return Ok(store);
+        }
+        let created = self
+            .jetstream
+            .create_key_value(kv::Config {
+                bucket: self.bucket.clone(),
+                history: 1,
+                max_age: COUNTER_AGE,
+                max_bytes: BUCKET_BYTES,
+                max_value_size: MAX_COUNTER_MESSAGE,
+                storage: StorageType::File,
+                ..Default::default()
             })
-            .await
+            .await;
+        match created {
+            Ok(store) => Ok(store),
+            Err(error) => self
+                .jetstream
+                .get_key_value(&self.bucket)
+                .await
+                .map_err(|_| unreachable(error)),
+        }
     }
 
     async fn write(&self, key: &str, micro_usd: u64) -> Result<u64, SpendError> {
