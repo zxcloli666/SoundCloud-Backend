@@ -298,7 +298,7 @@ fn salut_body(sub: &str, text: &str, asr: &str, message_id: u64) -> Value {
         "messageName": "MESSAGE_TO_SKILL",
         "payload": {
             "intent": "run_app",
-            "projectName": "lolya",
+            "projectName": "loli",
             "new_session": false,
             "message": {
                 "original_text": text,
