@@ -15,7 +15,9 @@ from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import (
     Alignment,
     AudioEmbeddings,
+    ChatMessage,
     CollabTraining,
+    Completion,
     Draft,
     EngineUnavailable,
     Float32Array,
@@ -52,6 +54,7 @@ TOTAL_CHUNKS = "total_chunks"
 ELAPSED_S = "elapsed_s"
 SECONDS = "seconds"
 TASTE_SLOT = "train-taste"
+LLM_SLOT = "llm-local"
 TEXT_BYTES_PER_TOKEN = 4
 
 log = logging.getLogger(__name__)
@@ -108,10 +111,11 @@ class EngineSlots:
         deadline: Deadline,
         *,
         bad_input: Reason = Reason.MODEL_OUTPUT_INVALID,
+        priority: bool = False,
     ) -> Result:
         self._before_queue()
         with translated(slot, bad_input):
-            client = await self._supervisor.acquire(slot, deadline.at)
+            client = await self._supervisor.acquire(slot, deadline.at, priority=priority)
             call = asyncio.ensure_future(self._call(client, slot, method, arrays, args, deadline))
             try:
                 return await asyncio.shield(call)
@@ -401,24 +405,41 @@ class RuntimeEngines:
         )
         return taste_training(result)
 
-    async def generate(
+    async def complete(
         self,
-        prompt: str,
+        system: str,
+        messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
-        max_new_tokens: int,
+        max_tokens: int,
         deadline: Deadline,
-    ) -> str:
+    ) -> Completion:
         _, result = await self._slots.direct(
-            "llm-local",
-            "generate",
+            LLM_SLOT,
+            "complete",
             {},
-            {"prompt": prompt, "schema": dict(schema), "max_new_tokens": max_new_tokens},
+            {
+                "system": system,
+                "messages": [
+                    {"role": message.role, "content": message.content} for message in messages
+                ],
+                "schema": dict(schema),
+                "max_tokens": max_tokens,
+            },
             deadline,
+            bad_input=Reason.INVALID_REQUEST,
+            priority=True,
         )
         text = result.get("text")
-        if not isinstance(text, str):
-            raise invalid("llm-local", "text is not a string")
-        return text
+        finished = result.get("finished")
+        if not isinstance(text, str) or not isinstance(finished, bool):
+            raise invalid(LLM_SLOT, "text is not a string or finished is not a boolean")
+        return Completion(
+            text=text,
+            input_tokens=int(number(result, "input_tokens", LLM_SLOT)),
+            reused_tokens=int(number(result, "reused_tokens", LLM_SLOT)),
+            output_tokens=int(number(result, "output_tokens", LLM_SLOT)),
+            finished=finished,
+        )
 
     async def _draft_chunk(
         self,

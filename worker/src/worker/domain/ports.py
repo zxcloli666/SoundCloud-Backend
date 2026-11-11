@@ -15,6 +15,7 @@ Float32Array = NDArray[np.float32]
 Int16Array = NDArray[np.int16]
 
 TextKind = Literal["document", "query"]
+ChatRole = Literal["user", "assistant"]
 Grounding = Callable[[Mapping[str, object]], bool]
 
 
@@ -101,6 +102,21 @@ class CollabTraining:
     popularity_hr_at_20: float
 
 
+@dataclass(frozen=True)
+class ChatMessage:
+    role: ChatRole
+    content: str
+
+
+@dataclass(frozen=True)
+class Completion:
+    text: str
+    input_tokens: int
+    reused_tokens: int
+    output_tokens: int
+    finished: bool
+
+
 class Engines(Protocol):
     async def embed_audio(self, windows: Float32Array, deadline: Deadline) -> AudioEmbeddings: ...
 
@@ -173,13 +189,14 @@ class Engines(Protocol):
         deadline: Deadline,
     ) -> CollabTraining: ...
 
-    async def generate(
+    async def complete(
         self,
-        prompt: str,
+        system: str,
+        messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
-        max_new_tokens: int,
+        max_tokens: int,
         deadline: Deadline,
-    ) -> str: ...
+    ) -> Completion: ...
 
 
 class Refiner(Protocol):

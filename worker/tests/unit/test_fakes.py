@@ -21,7 +21,7 @@ from tests.fakes.object_store import FakeBlobStore
 from worker.contract import Contract
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
-from worker.domain.ports import EngineUnavailable
+from worker.domain.ports import ChatMessage, EngineUnavailable
 
 AUDIO_TASK = {"sc_track_id": "1", "s3_url": "https://s3/x", "upload_generation": 1, "attempt": 1}
 
@@ -296,8 +296,12 @@ async def test_engines_fake_is_deterministic_and_scriptable(tmp_path: Path) -> N
         deadline=deadline,
     )
     assert training.points_count == 300 and (tmp_path / "out").exists()
-    engines.generated = '{"primary_artist": "x"}'
-    assert await engines.generate("p", {}, 64, deadline) == '{"primary_artist": "x"}'
+    asked = [ChatMessage("user", "who?")]
+    assert await engines.complete("s", asked, {}, 64, deadline) == engines.completion
+    assert engines.calls[-1] == (
+        "complete",
+        {"system": "s", "messages": asked, "schema": {}, "max_tokens": 64},
+    )
     engines.fail("separate", EngineUnavailable("sep", "broken"))
     with pytest.raises(EngineUnavailable):
         await engines.separate(np.zeros((2, 10), dtype=np.float32), deadline, budget=deadline)

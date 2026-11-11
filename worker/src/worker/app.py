@@ -6,7 +6,7 @@ import os
 import signal
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import aiohttp
@@ -26,6 +26,7 @@ from worker.bus.status import StatusReporter
 from worker.contract import Contract, LaneSpec
 from worker.domain.audio.source import AudioSource
 from worker.domain.collab import CollabLane
+from worker.domain.complete import Completer
 from worker.domain.deadline import MonotonicClock
 from worker.domain.embed_lyrics import EmbedLyricsLane
 from worker.domain.encode_text import EncodeTextLane
@@ -188,7 +189,10 @@ class Blueprint:
             if replicas[TEXT_SLOT] < 1:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
-        plans = list(plan_engines(runtime.mode, specs, replicas, groups))
+        plans = [
+            local_llm_plan(settings, plan)
+            for plan in plan_engines(runtime.mode, specs, replicas, groups)
+        ]
         if isolated:
             encode = tuple(
                 slot_spec(settings, name, "text")
@@ -438,9 +442,19 @@ class Node:
                 )
                 resolver = ArtistResolver(refiner, self.counters)
                 matcher = TrackMatcher(refiner, self.counters)
+                completer = Completer(
+                    engines,
+                    self.contract.complete_limits,
+                    settings_module.local_llm_ref(settings),
+                    self.counters,
+                )
                 handler: RpcHandler | QueueHandler = RpcHandler(
                     lane,
-                    {"resolve_artist": resolver.resolve, "match_track": matcher.match},
+                    {
+                        "resolve_artist": resolver.resolve,
+                        "match_track": matcher.match,
+                        "complete": completer.complete,
+                    },
                     leases,
                     self.connection,
                     self.contract,
@@ -778,6 +792,12 @@ def check_slow_lanes(settings: Settings) -> None:
         raise StartupError(f"lanes {slow} on device=cpu need runtime.allow_slow_lanes=true")
 
 
+def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    if settings_module.LOCAL_LLM_SLOT not in plan.slot_names:
+        return plan
+    return replace(plan, reserved=True, idle_unload_s=float(settings.llm.local.idle_unload_s))
+
+
 def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:
     loader = SLOT_LOADERS.get(name)
     if loader is None:
@@ -785,7 +805,12 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
     slot = settings.slots[name]
     options: dict[str, object] = {}
     if name == settings_module.LOCAL_LLM_SLOT:
-        options["quantize"] = settings.llm.local.quantize
+        local = settings.llm.local
+        options.update(
+            file=local.file,
+            context_tokens=local.context_tokens,
+            prompt_states=local.prompt_states,
+        )
     if name == MULAN and mulan_towers is not None:
         options[MULAN_TOWERS] = mulan_towers
     return SlotSpec(
@@ -793,11 +818,17 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
         loader=loader,
         model=slot.model,
         revision=slot.revision,
-        device="cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device,
+        device=slot_device(settings, name),
         max_batch=slot.max_batch,
         max_wait_ms=slot.max_wait_ms,
         options=options,
     )
+
+
+def slot_device(settings: Settings, name: str) -> str:
+    if name == settings_module.LOCAL_LLM_SLOT:
+        return settings_module.LOCAL_LLM_DEVICE
+    return "cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device
 
 
 def cpu_tool_specs(settings: Settings) -> tuple[SlotSpec, ...]:

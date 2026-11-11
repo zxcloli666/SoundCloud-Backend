@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 
 import aiohttp
 import pytest
@@ -315,18 +316,13 @@ async def test_only_providers_with_keys_are_registered(
     assert refiner.fallback is None
 
 
-async def test_local_provider_is_registered_only_when_enabled(
+async def test_local_provider_is_registered_when_a_role_names_it(
     base_env: dict[str, str], clock: FakeClock
 ) -> None:
-    env = {
-        **base_env,
-        "ANTHROPIC_API_KEY": "sk-test",
-        "WORKER__LLM__FALLBACK": "local",
-        "WORKER__LLM__LOCAL__ENABLED": "true",
-    }
+    env = {**base_env, "ANTHROPIC_API_KEY": "sk-test", "WORKER__LLM__FALLBACK": "local"}
     settings = settings_module.load(CONFIG_DIR, env)
     engines = FakeEngines()
-    engines.generated = '{"name": "SZA"}'
+    engines.completion = replace(engines.completion, text='{"name": "SZA"}')
 
     async with aiohttp.ClientSession() as session:
         refiner = build_refiner(settings.llm, session, engines, clock, Counters())
@@ -338,4 +334,4 @@ async def test_local_provider_is_registered_only_when_enabled(
         )
 
     assert reply == {"name": "SZA"}
-    assert engines.calls[0][0] == "generate"
+    assert engines.calls[0][0] == "complete"

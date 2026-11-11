@@ -3,24 +3,31 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
 import pytest
 
 from tests.bus.conftest import BUILD, WORKER_ID, Harness, build_harness
 from tests.contract import samples
 from tests.fakes.clock import FakeClock
+from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
 from worker.bus.lease import ACK_ATTEMPTS, ACK_RETRY_PAUSE_S, Leases
 from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler, RpcMethod
 from worker.contract import Contract
+from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline
 from worker.domain.metadata.match import TrackMatcher
 from worker.domain.metadata.resolve import ArtistResolver
 from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
+from worker.domain.ports import ChatMessage, Completion
 from worker.settings import Settings
 
 RESOLVE = {"title": "Artist - Song", "uploader": "chan", "metadata_artist": None}
+COMPLETE = samples.RPC_REQUESTS["ai.rpc.complete"]
+LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
+ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
 
 
 class Rpc:
@@ -139,13 +146,19 @@ async def test_expired_deadline_replies_expired_and_acks(rpc: Rpc) -> None:
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
 
-@pytest.mark.parametrize("method", ["resolve_artist", "match_track"])
+@pytest.mark.parametrize("method", ["resolve_artist", "match_track", "complete"])
 async def test_domain_deadline_inside_the_process_margin_replies_expired(
     rpc: Rpc, contract: Contract, method: str
 ) -> None:
     resolver = ArtistResolver(None, rpc.harness.counters)
     matcher = TrackMatcher(None, rpc.harness.counters)
-    methods = {"resolve_artist": resolver.resolve, "match_track": matcher.match}
+    engines = FakeEngines()
+    completer = Completer(engines, contract.complete_limits, LOCAL_MODEL, rpc.harness.counters)
+    methods = {
+        "resolve_artist": resolver.resolve,
+        "match_track": matcher.match,
+        "complete": completer.complete,
+    }
     rpc.handler = rpc_handler(rpc.harness, contract, methods)
     rpc.enqueue(
         samples.RPC_REQUESTS[f"ai.rpc.{method}"],
@@ -153,6 +166,7 @@ async def test_domain_deadline_inside_the_process_margin_replies_expired(
         deadline_ms=epoch_ms(rpc.harness.clock, PROCESS_MARGIN_S),
     )
     assert await rpc.run_one() == {"ok": False, "error": "expired"}
+    assert engines.calls == []
     assert rpc.harness.counters.value("rpc_expired_total") == 1
     assert rpc.harness.counters.total("rpc_internal_total") == 0
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
@@ -271,3 +285,117 @@ async def test_unencodable_or_malformed_answer_replies_internal_and_acks(
     assert rpc.harness.counters.value("rpc_internal_total", method="resolve_artist") == 1
     assert len(rpc.harness.bus.acks("ack_sync")) == 1
     assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
+
+
+class TimedEngines(FakeEngines):
+    def __init__(self) -> None:
+        super().__init__()
+        self.remaining: list[float] = []
+        self.completion = replace(
+            self.completion, text=ANSWER, input_tokens=1500, reused_tokens=1320, output_tokens=18
+        )
+
+    async def complete(
+        self,
+        system: str,
+        messages: Sequence[ChatMessage],
+        schema: Mapping[str, object],
+        max_tokens: int,
+        deadline: Deadline,
+    ) -> Completion:
+        self.remaining.append(deadline.remaining())
+        return await super().complete(system, messages, schema, max_tokens, deadline)
+
+
+def serve_complete(rpc: Rpc, contract: Contract) -> TimedEngines:
+    engines = TimedEngines()
+    completer = Completer(engines, contract.complete_limits, LOCAL_MODEL, rpc.harness.counters)
+    rpc.handler = rpc_handler(rpc.harness, contract, {"complete": completer.complete})
+    return engines
+
+
+async def test_complete_replies_with_the_local_answer_inside_its_own_window(
+    rpc: Rpc, contract: Contract
+) -> None:
+    engines = serve_complete(rpc, contract)
+    seq = rpc.enqueue(COMPLETE, method="complete")
+
+    reply = await rpc.run_one()
+
+    assert reply == {
+        "ok": True,
+        "data": {"text": ANSWER, "model": LOCAL_MODEL, "input_tokens": 1500, "output_tokens": 18},
+    }
+    assert contract.validate("ai.rpc.complete.reply", reply) == []
+    assert engines.remaining == [pytest.approx(30 - PROCESS_MARGIN_S)]
+    [(method, asked)] = engines.calls
+    assert method == "complete"
+    assert (asked["system"], asked["schema"], asked["max_tokens"]) == (
+        COMPLETE["system"],
+        COMPLETE["schema"],
+        COMPLETE["max_tokens"],
+    )
+    [ack] = rpc.harness.bus.acks()
+    assert ack.kind == "ack_sync" and ack.seq == seq
+    assert rpc.harness.counters.value("rpc_replies_total", method="complete", ok="True") == 1
+    assert rpc.harness.counters.value("complete_reused_tokens_total") == 1320
+
+
+async def test_complete_follows_the_deadline_the_caller_sent(rpc: Rpc, contract: Contract) -> None:
+    engines = serve_complete(rpc, contract)
+    rpc.enqueue(COMPLETE, method="complete", deadline_ms=epoch_ms(rpc.harness.clock, 12))
+
+    reply = await rpc.run_one()
+
+    assert reply is not None and reply["ok"] is True
+    assert engines.remaining == [pytest.approx(12 - PROCESS_MARGIN_S)]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"max_tokens": 0}, "invalid_request"),
+        ({"messages": []}, "invalid_request"),
+        ({"schema": "object"}, "invalid_request"),
+    ],
+)
+async def test_complete_refuses_a_request_outside_the_contract(
+    rpc: Rpc, contract: Contract, change: Mapping[str, object], error: str
+) -> None:
+    engines = serve_complete(rpc, contract)
+    rpc.enqueue({**COMPLETE, **change}, method="complete")
+
+    assert await rpc.run_one() == {"ok": False, "error": error}
+    assert engines.calls == []
+    assert rpc.harness.bus.acks()[0].kind == "ack_sync"
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (TransientFailure(Reason.DEADLINE_EXCEEDED, "stage=engine"), "expired"),
+        (PermanentFailure(Reason.INVALID_REQUEST, "the prompt does not fit"), "invalid_request"),
+        (PermanentFailure(Reason.MODEL_OUTPUT_INVALID, "bad reply"), "internal"),
+    ],
+)
+async def test_complete_reports_what_the_local_model_could_not_do(
+    rpc: Rpc, contract: Contract, failure: Exception, error: str
+) -> None:
+    engines = serve_complete(rpc, contract)
+    engines.fail("complete", failure)
+    rpc.enqueue(COMPLETE, method="complete")
+
+    assert await rpc.run_one() == {"ok": False, "error": error}
+    assert rpc.harness.bus.acks()[0].kind == "ack_sync"
+
+
+async def test_complete_never_sends_an_answer_cut_at_the_token_limit(
+    rpc: Rpc, contract: Contract
+) -> None:
+    engines = serve_complete(rpc, contract)
+    engines.completion = replace(engines.completion, text='{"say": "Kendr', finished=False)
+    rpc.enqueue(COMPLETE, method="complete")
+
+    assert await rpc.run_one() == {"ok": False, "error": "internal"}
+    assert rpc.harness.counters.value("complete_rejected_total", why="cut_at_max_tokens") == 1
+    assert rpc.harness.counters.value("rpc_internal_total", method="complete") == 1

@@ -35,9 +35,9 @@ RPC — ответом на `X-Reply-To`. Устройство, профили �
 - `domain` не импортирует `nats`, `bus`, `runtime`, `llm`; движки и хранилище получает через
   `domain/ports.py`;
 - `runtime` не импортирует `domain`, `bus`, `nats`;
-- torch и прочий нативный ML-код (fastText, chromaprint, gensim, silero, transformers) — только в
-  `models/*` и в модулях исполнителя `runtime/{engine_main,allocator,devices}.py`. Процесс с
-  NATS-циклом их не импортирует; ffmpeg — дочерний процесс.
+- torch и прочий нативный ML-код (fastText, chromaprint, gensim, silero, transformers, llama.cpp) —
+  только в `models/*` и в модулях исполнителя `runtime/{engine_main,allocator,devices}.py`. Процесс
+  с NATS-циклом их не импортирует; ffmpeg — дочерний процесс.
 
 ## Проверка
 

@@ -14,7 +14,7 @@ import aiohttp
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.ports import Grounding
 from worker.llm.anthropic import AnthropicProvider
-from worker.llm.local import Generator, LocalProvider
+from worker.llm.local import LocalModel, LocalProvider
 from worker.llm.openai_compatible import OpenAiCompatibleProvider
 from worker.llm.provider import Provider
 from worker.llm.validate import validate
@@ -52,12 +52,12 @@ ANSWERED = frozenset({CallOutcome.OK, CallOutcome.UNGROUNDED})
 def build_refiner(
     llm: LlmSection,
     session: aiohttp.ClientSession,
-    generator: Generator,
+    local: LocalModel,
     clock: Clock,
     counters: Counters,
 ) -> Chain | None:
-    primary = link_for(llm.primary, llm, session, generator)
-    fallback = link_for(llm.fallback, llm, session, generator)
+    primary = link_for(llm.primary, llm, session, local)
+    fallback = link_for(llm.fallback, llm, session, local)
     log.info(
         "llm providers registered",
         extra={
@@ -78,14 +78,12 @@ def build_refiner(
 
 
 def link_for(
-    name: str, llm: LlmSection, session: aiohttp.ClientSession, generator: Generator
+    name: str, llm: LlmSection, session: aiohttp.ClientSession, local: LocalModel
 ) -> Link | None:
     if not name:
         return None
     if name == LOCAL_PROVIDER:
-        if not llm.local.enabled:
-            return None
-        return Link(LocalProvider(name, generator), math.inf, math.inf)
+        return Link(LocalProvider(name, local), math.inf, math.inf)
     settings = llm.providers[name]
     if not settings.enabled:
         return None

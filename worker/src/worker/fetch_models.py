@@ -15,7 +15,7 @@ from types import MappingProxyType
 
 import httpx
 import orjson
-from huggingface_hub import HfApi, constants, snapshot_download
+from huggingface_hub import HfApi, constants, hf_hub_download, snapshot_download
 from huggingface_hub.errors import EntryNotFoundError
 from huggingface_hub.file_download import repo_folder_name
 
@@ -64,6 +64,17 @@ class HubSnapshot:
 
 
 @dataclass(frozen=True)
+class HubFile:
+    repo: str
+    revision: str
+    filename: str
+    sha256: str
+
+    def describe(self) -> str:
+        return f"hf:{self.repo}@{self.revision}/{self.filename}"
+
+
+@dataclass(frozen=True)
 class VerifiedDownload:
     url: str
     sha256: str
@@ -84,7 +95,7 @@ class PackagedFile:
         return f"package:{self.package}/{self.relative}"
 
 
-Artifact = HubSnapshot | VerifiedDownload | PackagedFile
+Artifact = HubSnapshot | HubFile | VerifiedDownload | PackagedFile
 
 
 @dataclass(frozen=True)
@@ -162,18 +173,20 @@ def plan(settings: Settings, environ: Mapping[str, str]) -> list[Item]:
     items: list[Item] = []
     seen: set[Artifact] = set()
     for slot in settings_module.slots_for_lanes(settings):
-        for artifact in artifacts_for(slot, settings.slots[slot], environ):
+        for artifact in artifacts_for(slot, settings, environ):
             if artifact not in seen:
                 seen.add(artifact)
                 items.append(Item(slot, artifact))
     return items
 
 
-def artifacts_for(
-    slot: str, spec: settings_module.SlotSettings, environ: Mapping[str, str]
-) -> list[Artifact]:
+def artifacts_for(slot: str, settings: Settings, environ: Mapping[str, str]) -> list[Artifact]:
+    spec = settings.slots[slot]
     if not spec.model:
         return []
+    if slot == settings_module.LOCAL_LLM_SLOT:
+        local = settings.llm.local
+        return [HubFile(spec.model, spec.revision, local.file, local.sha256)]
     if slot == FASTTEXT_SLOT:
         target = home(environ, FASTTEXT_HOME_ENV) / spec.model.rsplit("/", 1)[-1]
         return [VerifiedDownload(spec.model, spec.revision, target)]
@@ -216,6 +229,8 @@ def fetch(artifact: Artifact) -> None:
     match artifact:
         case HubSnapshot():
             fetch_snapshot(artifact, HfApi())
+        case HubFile():
+            fetch_file(artifact)
         case VerifiedDownload():
             fetch_download(artifact)
         case PackagedFile():
@@ -235,6 +250,18 @@ def fetch_snapshot(snapshot: HubSnapshot, api: HfApi) -> None:
         raise FetchError(f"{snapshot.repo}: got snapshot {path.name}, pinned {snapshot.revision}")
     if repo != snapshot.repo:
         link_renamed_snapshot(path, snapshot)
+
+
+def fetch_file(file: HubFile) -> None:
+    path = Path(hf_hub_download(file.repo, file.filename, revision=file.revision))
+    if file.revision not in path.parts:
+        raise FetchError(f"{file.describe()}: got {path}, not the pinned commit")
+    if has_sha256(path, file.sha256):
+        return
+    blob = path.resolve()
+    path.unlink()
+    blob.unlink(missing_ok=True)
+    raise FetchError(f"{file.describe()}: sha256 != {file.sha256}")
 
 
 def link_renamed_snapshot(canonical: Path, snapshot: HubSnapshot) -> None:

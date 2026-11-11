@@ -10,7 +10,9 @@ from worker.domain.deadline import Deadline
 from worker.domain.ports import (
     Alignment,
     AudioEmbeddings,
+    ChatMessage,
     CollabTraining,
+    Completion,
     Draft,
     Float32Array,
     Int16Array,
@@ -44,7 +46,9 @@ class FakeEngines:
         self.default_language = [LanguageGuess("en", 0.95)]
         self.fingerprint_value: str | None = "AQADtEmUfake"
         self.collab_result = CollabTraining(120, 300, 300, 0.30, 0.20)
-        self.generated = "{}"
+        self.completion = Completion(
+            "{}", input_tokens=7, reused_tokens=0, output_tokens=2, finished=True
+        )
 
     def fail(self, method: str, error: Exception) -> None:
         def raiser(**kwargs: object) -> object:
@@ -216,20 +220,25 @@ class FakeEngines:
         vectors_path.write_bytes(b'{"dim":128,"points":[],"metrics":{}}')
         return self.collab_result
 
-    async def generate(
+    async def complete(
         self,
-        prompt: str,
+        system: str,
+        messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
-        max_new_tokens: int,
+        max_tokens: int,
         deadline: Deadline,
-    ) -> str:
-        deadline.check("generate")
+    ) -> Completion:
+        deadline.check("complete")
         forced = self._record(
-            "generate", prompt=prompt, schema=dict(schema), max_new_tokens=max_new_tokens
+            "complete",
+            system=system,
+            messages=list(messages),
+            schema=dict(schema),
+            max_tokens=max_tokens,
         )
         if forced is not None:
             return forced
-        return self.generated
+        return self.completion
 
 
 def even_alignment(duration_s: float, tokens: int, score: float) -> Alignment:

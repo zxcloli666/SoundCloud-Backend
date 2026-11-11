@@ -248,13 +248,18 @@ def test_cpu_profile_runs_encode_in_its_own_engine_and_lanes_in_parallel_process
         "sep": ("sep",),
         "train-collab": ("train-collab",),
         "train-taste": ("train-taste",),
+        "llm-local": ("llm-local",),
         "encode": ("text", "mulan"),
         "cpu-tools": ("vad", "lid", "fingerprint"),
     }
-    assert [name for name, plan in plans.items() if plan.reserved] == ["encode"]
+    assert sorted(name for name, plan in plans.items() if plan.reserved) == ["encode", "llm-local"]
     assert {name: plan.threads for name, plan in plans.items() if plan.threads} == {
         "encode": 4,
+        "llm-local": 4,
         "cpu-tools": 1,
+    }
+    assert {name: plan.idle_unload_s for name, plan in plans.items() if plan.idle_unload_s} == {
+        "llm-local": 600.0
     }
     towers = {
         name: spec.options.get("towers")
@@ -287,7 +292,7 @@ def test_runtime_threads_from_the_environment_fix_the_bulk_engines(
 def test_gpu_profiles_keep_encode_on_the_shared_slots(contract: Contract, tmp_path: Path) -> None:
     env = {**BASE_ENV, settings_module.PROFILE_ENV: "gpu-24", FASTTEXT_HOME_ENV: str(tmp_path)}
     blueprint = Blueprint.of(settings_module.load(CONFIG_DIR, env), contract, env, cpus=8)
-    assert not any(plan.reserved for plan in blueprint.plans)
+    assert [plan.name for plan in blueprint.plans if plan.reserved] == ["llm-local"]
     assert blueprint.policy.serial_loads is False
     assert all("towers" not in spec.options for spec in blueprint.specs.values())
 

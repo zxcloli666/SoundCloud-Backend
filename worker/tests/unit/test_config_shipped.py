@@ -239,4 +239,5 @@ def test_model_ref_and_slots_for_lanes(settings: s.Settings) -> None:
         "mms",
         "train-collab",
         "train-taste",
+        "llm-local",
     )

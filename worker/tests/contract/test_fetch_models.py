@@ -13,6 +13,7 @@ from worker import settings as s
 
 PROFILES = sorted(path.stem for path in (CONFIG_DIR / "profiles").glob("*.toml"))
 MULAN = "OpenMuQ/MuQ-MuLan-large"
+FETCHED_AS_FILES = (fm.FASTTEXT_SLOT, fm.ROFORMER_SLOT, s.LOCAL_LLM_SLOT)
 
 
 @pytest.fixture
@@ -58,7 +59,7 @@ def test_plan_fetches_exactly_the_models_the_profile_loads(
     expected = {
         settings.slots[slot].model
         for slot in s.slots_for_lanes(settings)
-        if settings.slots[slot].model and slot not in (fm.FASTTEXT_SLOT, fm.ROFORMER_SLOT)
+        if settings.slots[slot].model and slot not in FETCHED_AS_FILES
     }
     if MULAN in expected:
         expected |= {companion.repo for companion in fm.COMPANIONS[MULAN]}
@@ -82,10 +83,48 @@ def test_public_node_with_transcribe_fetches_every_public_lane_model(
     assert slots == {"muq", "mulan", "cpu-tools", "text", "sep", "asr", "align", "mms"}
 
 
-def test_local_llm_weights_come_only_with_the_48_gigabyte_profile(env: dict[str, str]) -> None:
+def test_local_llm_weights_come_as_one_pinned_file_with_the_ai_lane(env: dict[str, str]) -> None:
     for profile in PROFILES:
-        slots = {item.slot for item in plan_for(profile, env)}
-        assert (s.LOCAL_LLM_SLOT in slots) is (profile == "gpu-48"), profile
+        environ = {**env, s.PROFILE_ENV: profile}
+        settings = s.load(CONFIG_DIR, environ)
+        files = [item for item in fm.plan(settings, environ) if item.slot == s.LOCAL_LLM_SLOT]
+        if "ai" not in settings.lanes.enabled:
+            assert files == [], profile
+            continue
+        slot, local = settings.slots[s.LOCAL_LLM_SLOT], settings.llm.local
+        assert [item.artifact for item in files] == [
+            fm.HubFile(slot.model, slot.revision, local.file, local.sha256)
+        ], profile
+
+
+def test_hub_file_is_kept_only_at_its_pinned_commit_and_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit = "a" * 40
+    good = hashlib.sha256(b"gguf").hexdigest()
+    asked: list[tuple[str, str, str]] = []
+
+    def cached(repo: str, filename: str, revision: str) -> str:
+        asked.append((repo, filename, revision))
+        blob = tmp_path / "blobs" / good
+        blob.parent.mkdir(exist_ok=True)
+        blob.write_bytes(b"gguf")
+        link = tmp_path / "snapshots" / commit / filename
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.unlink(missing_ok=True)
+        link.symlink_to(blob)
+        return str(link)
+
+    monkeypatch.setattr(fm, "hf_hub_download", cached)
+    fm.fetch_file(fm.HubFile("org/model-GGUF", commit, "model.gguf", good))
+    assert asked == [("org/model-GGUF", "model.gguf", commit)]
+    assert (tmp_path / "snapshots" / commit / "model.gguf").read_bytes() == b"gguf"
+    with pytest.raises(fm.FetchError, match="sha256"):
+        fm.fetch_file(fm.HubFile("org/model-GGUF", commit, "model.gguf", "0" * 64))
+    assert not (tmp_path / "snapshots" / commit / "model.gguf").is_symlink()
+    assert list((tmp_path / "blobs").iterdir()) == []
+    with pytest.raises(fm.FetchError, match="pinned commit"):
+        fm.fetch_file(fm.HubFile("org/model-GGUF", "main", "model.gguf", good))
 
 
 def test_verified_files_land_where_their_libraries_look(env: dict[str, str]) -> None:

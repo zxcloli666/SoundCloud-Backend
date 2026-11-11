@@ -9,6 +9,8 @@ import pytest
 from tests.conftest import CONFIG_DIR
 from worker import settings as s
 
+LOCAL_LLM_REF = "unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf@f6d5376b"
+
 
 @pytest.fixture
 def config_copy(tmp_path: Path) -> Path:
@@ -56,27 +58,41 @@ def test_provider_key_without_endpoint_or_model_is_a_start_error(
         s.load(CONFIG_DIR, env)
 
 
-def test_local_llm_adds_its_slot_to_the_ai_lane(base_env: dict[str, str]) -> None:
-    assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(s.load(CONFIG_DIR, base_env))
-    env = {**base_env, "WORKER__LLM__LOCAL__ENABLED": "true", "WORKER__LLM__FALLBACK": "local"}
-    settings = s.load(CONFIG_DIR, env)
+def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None:
+    settings = s.load(CONFIG_DIR, base_env)
+    local = settings.llm.local
     assert s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
+    assert s.local_llm_ref(settings) == LOCAL_LLM_REF
+    assert local.file.endswith(".gguf") and len(local.sha256) == 64
+    assert (local.context_tokens, local.prompt_states, local.idle_unload_s) == (4096, 4, 600)
+    without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
+    assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
+
+
+def test_local_llm_can_back_the_refiner_without_a_switch(base_env: dict[str, str]) -> None:
+    settings = s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
     assert settings.llm.fallback == s.LOCAL_PROVIDER
-    assert s.model_ref(settings, s.LOCAL_LLM_SLOT) == "Qwen/Qwen3-4B-Instruct-2507@cdbee75f"
+    assert s.provider_enabled(settings.llm, s.LOCAL_PROVIDER)
 
 
-def test_local_llm_needs_a_replica_and_the_switch(base_env: dict[str, str]) -> None:
-    with pytest.raises(s.SettingsError, match="unknown provider 'local'"):
-        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
-    env = {
-        **base_env,
-        "WORKER__LLM__LOCAL__ENABLED": "true",
-        "WORKER__SLOTS__LLM_LOCAL__REPLICAS": "0",
-    }
-    with pytest.raises(s.SettingsError, match=r"slots\.llm-local\.replicas >= 1"):
-        s.load(CONFIG_DIR, env)
-    with pytest.raises(s.SettingsError, match="quantize"):
-        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__LOCAL__QUANTIZE": "int3"})
+@pytest.mark.parametrize(
+    ("override", "problem"),
+    [
+        ({"WORKER__SLOTS__LLM_LOCAL__REPLICAS": "0"}, r"slots\.llm-local\.replicas >= 1"),
+        ({"WORKER__SLOTS__LLM_LOCAL__MODEL": ""}, r"lane ai needs slots\.llm-local\.model"),
+        ({"WORKER__SLOTS__LLM_LOCAL__REVISION": ""}, r"lane ai needs slots\.llm-local\.model"),
+        ({"WORKER__LLM__LOCAL__FILE": "model.safetensors"}, r"llm\.local\.file must be a \.gguf"),
+        ({"WORKER__LLM__LOCAL__SHA256": "ABC"}, r"llm\.local\.sha256 must be 64 lowercase hex"),
+        ({"WORKER__LLM__LOCAL__CONTEXT_TOKENS": "512"}, r"llm\.local\.context_tokens must be"),
+        ({"WORKER__LLM__LOCAL__PROMPT_STATES": "0"}, r"llm\.local\.prompt_states must be >= 1"),
+        ({"WORKER__LLM__LOCAL__IDLE_UNLOAD_S": "-1"}, r"llm\.local\.idle_unload_s must be >= 0"),
+    ],
+)
+def test_local_llm_settings_are_checked_at_start(
+    base_env: dict[str, str], override: dict[str, str], problem: str
+) -> None:
+    with pytest.raises(s.SettingsError, match=problem):
+        s.load(CONFIG_DIR, {**base_env, **override})
 
 
 def test_missing_required_env_ref_is_a_start_error(base_env: dict[str, str]) -> None:

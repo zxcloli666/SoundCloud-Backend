@@ -9,6 +9,7 @@ from worker import settings as s
 from worker.app import Blueprint
 from worker.contract import Contract
 from worker.fetch_models import FASTTEXT_HOME_ENV
+from worker.runtime import devices
 
 TRUSTED_LANES = {
     "audio": 16,
@@ -48,8 +49,8 @@ DESIGN = {
     "gpu-16": Profile(
         "slot", "public", {"audio": 8, "lyrics": 16, "transcribe": 2}, dict.fromkeys(SYNC_X2, 1)
     ),
-    "gpu-24": Profile("slot", "trusted", TRUSTED_LANES, SYNC_X2),
-    "gpu-24-lane": Profile("lane", "trusted", TRUSTED_LANES, SYNC_X2),
+    "gpu-24": Profile("slot", "trusted", TRUSTED_LANES, SYNC_X2, local_llm=True),
+    "gpu-24-lane": Profile("lane", "trusted", TRUSTED_LANES, SYNC_X2, local_llm=True),
     "gpu-48": Profile(
         "slot",
         "trusted",
@@ -78,6 +79,7 @@ DESIGN = {
             "ai": 16,
         },
         dict.fromkeys(SYNC_X2, 1),
+        local_llm=True,
     ),
 }
 
@@ -101,7 +103,7 @@ def test_profile_matches_the_design(name: str) -> None:
     assert {lane: settings.lanes.capacity[lane] for lane in design.lanes} == design.lanes
     for slot, replicas in design.replicas.items():
         assert settings.slots[slot].replicas == replicas, slot
-    assert settings.llm.local.enabled is design.local_llm
+    assert (s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)) is design.local_llm
 
 
 @pytest.mark.parametrize("name", sorted(DESIGN))
@@ -209,10 +211,38 @@ def test_only_the_cpu_profile_isolates_encode() -> None:
         assert load(name).runtime.isolate_encode is (name == "cpu"), name
 
 
-def test_only_the_48_gigabyte_profile_loads_the_local_llm() -> None:
-    for name in DESIGN:
+def test_the_local_llm_loads_exactly_where_the_ai_lane_is_served() -> None:
+    for name, design in DESIGN.items():
         settings = load(name)
         loads_local = s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
-        assert loads_local is (name == "gpu-48"), name
+        assert loads_local is ("ai" in settings.lanes.enabled) is design.local_llm, name
+        assert loads_local is not settings.is_public, name
         if settings.llm.fallback == s.LOCAL_PROVIDER:
-            assert settings.llm.local.enabled
+            assert loads_local, name
+
+
+@pytest.mark.parametrize("name", sorted(name for name in DESIGN if DESIGN[name].local_llm))
+def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
+    name: str, contract: Contract
+) -> None:
+    settings = load(name)
+    local = settings.llm.local
+    blueprint = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=8)
+    hosts = [plan for plan in blueprint.plans if s.LOCAL_LLM_SLOT in plan.slot_names]
+    assert [plan.slot_names for plan in hosts] == [(s.LOCAL_LLM_SLOT,)]
+    plan = hosts[0]
+    assert (plan.reserved, plan.nice, plan.threads) == (True, 0, 4)
+    assert plan.idle_unload_s == local.idle_unload_s > 0
+    spec = plan.slots[0]
+    assert spec.device == s.LOCAL_LLM_DEVICE
+    assert not devices.uses_torch(spec.device)
+    assert (spec.model, spec.revision) == (
+        settings.slots[s.LOCAL_LLM_SLOT].model,
+        settings.slots[s.LOCAL_LLM_SLOT].revision,
+    )
+    assert spec.options == {
+        "file": local.file,
+        "context_tokens": local.context_tokens,
+        "prompt_states": local.prompt_states,
+    }
+    assert all(other.idle_unload_s == 0 for other in blueprint.plans if other is not plan)
