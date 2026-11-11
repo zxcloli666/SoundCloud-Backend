@@ -55,8 +55,8 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379
       QDRANT_URL: http://127.0.0.1:6334
-      TARGETS: api/target utils/redact/target utils/telemetry/target
-      TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock scripts/ci-sqlx-template.patch
+      TARGETS: api/target utils/redact/target utils/telemetry/target utils/llm-ladder/target
+      TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock utils/llm-ladder/Cargo.lock scripts/ci-sqlx-template.patch
       IGNORED: >-
         test(~common::admission::tests) | test(~modules::chat::channel::tests) | test(~modules::rooms::) | test(~modules::chat::rooms::)
         | test(~router_rooms_tests) | test(~rt::router::tests) | test(~rt::rooms::handoff_tests) | test(~modules::chat::sweeps::tests)
@@ -66,7 +66,7 @@ jobs:
         | test(~modules::chat::synthetic::tests) | test(~modules::chat::devices::tests) | test(~modules::chat::keys::tests)
         | test(~modules::chat::invites::tests) | test(~modules::chat::settings::tests) | test(~qdrant_io::live_tests)
         | test(~modules::users::public::tests) | test(~modules::resolve::miss_tests)
-        | test(~modules::remote::) | test(~router_voice_tests)
+        | test(~modules::remote::) | test(~router_voice_tests) | test(~modules::voice_chat::worker::)
     steps:
       - uses: actions/checkout@v7
 
@@ -94,6 +94,7 @@ jobs:
           cargo fetch --locked --manifest-path api/Cargo.toml
           cargo fetch --locked --manifest-path utils/redact/Cargo.toml
           cargo fetch --locked --manifest-path utils/telemetry/Cargo.toml
+          cargo fetch --locked --manifest-path utils/llm-ladder/Cargo.toml
           sh scripts/ci-sqlx-template.sh api
 
       - name: System packages
@@ -110,6 +111,8 @@ jobs:
         run: |
           cargo nextest run --manifest-path utils/redact/Cargo.toml --all-targets --locked
           cargo nextest run --manifest-path utils/telemetry/Cargo.toml --all-targets --locked
+          cargo nextest run --manifest-path utils/llm-ladder/Cargo.toml --all-targets --locked
+          cargo nextest run --manifest-path utils/llm-ladder/Cargo.toml --all-targets --locked --run-ignored only -E 'not binary(live)'
 
       - name: Tests
         working-directory: api
@@ -208,6 +211,7 @@ jobs:
           cargo fmt --manifest-path api/Cargo.toml --check
           cargo fmt --manifest-path utils/redact/Cargo.toml --check
           cargo fmt --manifest-path utils/telemetry/Cargo.toml --check
+          cargo fmt --manifest-path utils/llm-ladder/Cargo.toml --check
 
       - name: Restore targets
         id: targets
