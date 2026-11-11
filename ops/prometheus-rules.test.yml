@@ -569,3 +569,82 @@ tests:
               description: "The gauge appears after the first delete of a run. Absent for 30 minutes means every run since the restart was skipped or failed, or the job does not run on core."
       - eval_time: 31m
         alertname: AuthCleanupStalled
+
+  - interval: 1m
+    input_series:
+      - series: 'api_llm_spend_micro_usd_total{job="api",host="star",ladder="chat",provider="claude",basis="reported"}'
+        values: '0+1667x1600'
+      - series: 'api_llm_spend_micro_usd_total{job="api",host="main",ladder="chat",provider="claude",basis="reported"}'
+        values: '0+1667x1600'
+      - series: 'api_llm_spend_micro_usd_total{job="api",host="star",ladder="refine",provider="claude",basis="reported"}'
+        values: '0+167x1600'
+      - series: 'api_llm_budget_usd{job="api",host="star",ladder="chat",period="day"}'
+        values: '2.5+0x1600'
+      - series: 'api_llm_budget_usd{job="api",host="main",ladder="chat",period="day"}'
+        values: '2.5+0x1600'
+      - series: 'api_llm_budget_usd{job="api",host="star",ladder="refine",period="day"}'
+        values: '0.5+0x1600'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: ApiLlmDaySpendHigh
+      - eval_time: 26h
+        alertname: ApiLlmDaySpendHigh
+        exp_alerts:
+          - exp_labels:
+              ladder: chat
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "LLM ladder chat spent over 80% of its day budget in 24 hours"
+              description: "Spend is summed over all api hosts, like the shared budget in NATS KV llm_spend. The budget counts the UTC day and this alert the last 24 hours, so it can fire a little early. Once the day budget is spent the ladder skips its priced steps for everyone until 00:00 UTC and answers come from the free steps only. The budget is day_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
+
+  - interval: 2m
+    input_series:
+      - series: 'api_llm_spend_micro_usd_total{job="api",host="star",ladder="chat",provider="claude",basis="reported"}'
+        values: '0+3334x5200'
+      - series: 'api_llm_spend_micro_usd_total{job="api",host="star",ladder="refine",provider="claude",basis="reported"}'
+        values: '0+167x5200'
+      - series: 'api_llm_budget_usd{job="api",host="star",ladder="chat",period="month"}'
+        values: '50+0x5200'
+      - series: 'api_llm_budget_usd{job="api",host="star",ladder="refine",period="month"}'
+        values: '10+0x5200'
+    alert_rule_test:
+      - eval_time: 170h
+        alertname: ApiLlmMonthPaceHigh
+        exp_alerts:
+          - exp_labels:
+              ladder: chat
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "LLM ladder chat spends faster than its month budget allows"
+              description: "At the pace of the last 7 days the ladder would spend more than month_usd in 30 days. Once the month budget is spent the priced steps are skipped for everyone until the month ends. With less than 7 days of history the pace is underestimated, never overestimated. The budget is month_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_llm_steps_total{job="api",host="star",ladder="chat",provider="proxy_fast",result="failed_request"}'
+        values: '0+1x90'
+      - series: 'api_llm_steps_total{job="api",host="star",ladder="chat",provider="proxy_fast",result="won"}'
+        values: '0+4x90'
+      - series: 'api_llm_steps_total{job="api",host="star",ladder="chat",provider="local",result="failed_request"}'
+        values: '0+0.05x90'
+      - series: 'api_llm_steps_total{job="api",host="star",ladder="chat",provider="local",result="won"}'
+        values: '0+0.1x90'
+      - series: 'api_llm_steps_total{job="api",host="star",ladder="chat",provider="claude",result="won"}'
+        values: '0+5x90'
+      - series: 'api_llm_steps_total{job="api",host="star",ladder="chat",provider="claude",result="skipped_budget"}'
+        values: '0+50x90'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ApiLlmRequestsRefused
+      - eval_time: 75m
+        alertname: ApiLlmRequestsRefused
+        exp_alerts:
+          - exp_labels:
+              ladder: chat
+              provider: proxy_fast
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "Provider proxy_fast refuses the requests of ladder chat"
+              description: "failed_request means the request itself was refused: HTTP 400, 413 or 422, an invalid or too large request, or a request over the worker limits. Retrying the same request cannot help and the breaker does not count it. A share over 5% of the steps that ran, at least 3 in 30 minutes, held for 30 minutes, means this provider refuses every such request, for example an account out of credit or a request shape it does not take: every turn loses one call to that step until the account or the config is fixed. Read the step error in the api log."

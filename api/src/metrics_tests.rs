@@ -331,3 +331,54 @@ fn an_estimated_charge_has_its_own_basis_and_the_token_kinds_stay_apart() {
     let steps = line(llm::STEPS, "guessed", "result=\"failed_timeout\"").unwrap();
     assert!(steps.ends_with(" 1"), "{steps}");
 }
+
+#[test]
+fn each_ladder_cap_is_a_budget_gauge_and_an_unset_cap_is_left_out() {
+    use llm_ladder::{BreakerSettings, CapSettings, LadderSettings, Settings};
+
+    init();
+    let ladder = LadderSettings {
+        steps: Vec::new(),
+        hedge_after_ms: 0,
+        deadline_ms: 0,
+        breaker: BreakerSettings {
+            failures: 1,
+            window_s: 1,
+            open_s: 1,
+        },
+        budget: CapSettings {
+            month_usd: Some(50.0),
+            day_usd: Some(2.5),
+            user_month_usd: None,
+            user_day_usd: Some(0.1),
+        },
+    };
+    let settings = Settings {
+        ladders: [("metrics_budget".to_owned(), ladder)].into(),
+        ..Settings::default()
+    };
+    record_llm_budgets(&settings);
+
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
+    let rendered = handle.render();
+    let gauge = |period: &str| {
+        rendered
+            .lines()
+            .find(|line| {
+                line.starts_with(llm::BUDGET)
+                    && line.contains("ladder=\"metrics_budget\"")
+                    && line.contains(&format!("period=\"{period}\""))
+            })
+            .map(str::to_owned)
+    };
+    assert!(gauge("day").expect("a day budget").ends_with(" 2.5"));
+    assert!(gauge("month").expect("a month budget").ends_with(" 50"));
+    assert!(
+        gauge("user_day")
+            .expect("a user day budget")
+            .ends_with(" 0.1")
+    );
+    assert!(gauge("user_month").is_none());
+}

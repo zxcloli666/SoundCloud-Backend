@@ -800,6 +800,143 @@
           "legendFormat": "unresolved {{peer}} {{tbl}}"
         }
       ]
+    },
+    {
+      "id": 28,
+      "type": "row",
+      "title": "Voice chat LLM",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 109
+      }
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "LLM spend in the last 24 hours against the day budget",
+      "description": "Spend of each ladder over the last 24 hours, all api hosts together, and its day budget from the ladder config. The budget itself counts the UTC day.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 110
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (ladder) (increase(api_llm_spend_micro_usd_total{job=\"api\"}[24h])) / 1e6",
+          "legendFormat": "spent {{ladder}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (ladder) (api_llm_budget_usd{job=\"api\",period=\"day\"})",
+          "legendFormat": "day budget {{ladder}}"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "LLM steps by provider and result",
+      "description": "Steps per minute. won answered the turn, lost and cancelled ran beside the winner, failed_request is a request the provider refuses, skipped_budget and skipped_breaker did not run.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 110
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (ladder, provider, result) (rate(api_llm_steps_total{job=\"api\"}[15m])) * 60",
+          "legendFormat": "{{ladder}} {{provider}} {{result}}"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "LLM step time by provider",
+      "description": "Median and p90 of a step that answered the turn.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 118
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, provider) (rate(api_llm_step_duration_seconds_bucket{job=\"api\",result=\"won\"}[30m])))",
+          "legendFormat": "p50 {{provider}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.9, sum by (le, provider) (rate(api_llm_step_duration_seconds_bucket{job=\"api\",result=\"won\"}[30m])))",
+          "legendFormat": "p90 {{provider}}"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "LLM tokens per hour by kind",
+      "description": "cache_read far above cache_write means the prompt prefix cache works; cache_write near the prompt size on every call means the shared sections change between calls.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 118
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, kind) (increase(api_llm_tokens_total{job=\"api\"}[1h]))",
+          "legendFormat": "{{provider}} {{kind}}"
+        }
+      ]
     }
   ]
 }
