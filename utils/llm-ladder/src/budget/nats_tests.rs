@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_nats::jetstream;
@@ -8,6 +9,8 @@ use futures::future::join_all;
 use super::*;
 use crate::budget::{Budget, Caps};
 use crate::config::CapSettings;
+
+static BUCKETS: AtomicUsize = AtomicUsize::new(0);
 
 const HOSTS: usize = 4;
 const CHARGES_PER_HOST: u64 = 60;
@@ -21,7 +24,8 @@ fn bucket() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_micros();
-    format!("spend_test_{micros}")
+    let nth = BUCKETS.fetch_add(1, Ordering::Relaxed);
+    format!("spend_test_{micros}_{nth}")
 }
 
 async fn context() -> Context {
@@ -108,6 +112,42 @@ async fn the_bucket_keeps_one_small_value_per_counter_and_forgets_old_ones() {
     assert_eq!(
         stored.get("chat.day.2026-03-09").await.unwrap().unwrap(),
         "11"
+    );
+
+    jetstream.delete_key_value(&bucket).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_bucket_that_already_exists_is_used_as_it_is() {
+    let bucket = bucket();
+    let jetstream = context().await;
+    let made_elsewhere = Duration::from_secs(3 * 24 * 3600);
+    jetstream
+        .create_key_value(kv::Config {
+            bucket: bucket.clone(),
+            history: 3,
+            max_age: made_elsewhere,
+            storage: StorageType::Memory,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let spend = host(&bucket).await;
+    spend
+        .add("chat.day.2026-03-09".to_owned(), 7)
+        .await
+        .unwrap();
+
+    let mut stream = jetstream.get_stream(format!("KV_{bucket}")).await.unwrap();
+    let config = stream.info().await.unwrap().config.clone();
+    assert_eq!(config.max_messages_per_subject, 3);
+    assert_eq!(config.max_age, made_elsewhere);
+    assert_eq!(config.storage, StorageType::Memory);
+    assert_eq!(
+        spend.spent("chat.day.2026-03-09".to_owned()).await.unwrap(),
+        7
     );
 
     jetstream.delete_key_value(&bucket).await.unwrap();
