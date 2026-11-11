@@ -32,6 +32,7 @@ subject = "ai.rpc.complete"
 max_output_tokens = 350
 total_timeout_ms = 21000
 hedge = false
+plain = true
 
 [ladders.chat]
 steps = ["alpha", "beta", "onsite"]

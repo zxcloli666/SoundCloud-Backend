@@ -450,6 +450,11 @@ async fn the_local_model_answers_over_nats_when_the_http_step_is_down(
             .contains("A cheerful voice named Loli.")
     );
     assert_eq!(call["schema"]["required"], json!(["actions", "say"]));
+    let system = call["system"].as_str().unwrap();
+    let marks: Vec<usize> = serde_json::from_value(call["system_marks"].clone())?;
+    assert_eq!(marks.len(), 2, "{marks:?}");
+    assert!(system[..marks[1]].ends_with("or the data are written in."));
+    assert!(system[marks[0]..].starts_with("\n\nYour character:"));
     lane.close().await;
     Ok(())
 }

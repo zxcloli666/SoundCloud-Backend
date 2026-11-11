@@ -121,11 +121,12 @@ pub fn request() -> Request {
         ]),
         budget_user: None,
         deadline: None,
+        plain: None,
     }
 }
 
 pub fn any_text() -> Commit {
-    Arc::new(|_| true)
+    Arc::new(|_, _| true)
 }
 
 pub async fn answer(ladder: &Arc<Ladder>) -> Answer {
@@ -133,6 +134,10 @@ pub async fn answer(ladder: &Arc<Ladder>) -> Answer {
 }
 
 pub async fn answer_to(ladder: &Arc<Ladder>, request: Request) -> Answer {
+    answer_judged(ladder, request, any_text()).await
+}
+
+pub async fn answer_judged(ladder: &Arc<Ladder>, request: Request, commit: Commit) -> Answer {
     let started = Instant::now();
     let mut answer = Answer {
         document: String::new(),
@@ -141,7 +146,7 @@ pub async fn answer_to(ladder: &Arc<Ladder>, request: Request) -> Answer {
         finished: Duration::ZERO,
         deltas: 0,
     };
-    match ladder.stream(request, any_text()).await {
+    match ladder.stream(request, commit).await {
         Ok(mut events) => {
             while let Some(event) = events.next().await {
                 match event {

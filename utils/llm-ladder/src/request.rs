@@ -14,6 +14,20 @@ pub struct Request {
     pub schema: Schema,
     pub budget_user: Option<String>,
     pub deadline: Option<Duration>,
+    pub plain: Option<Plain>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Plain {
+    pub system: System,
+    pub messages: Vec<Message>,
+    pub schema: Schema,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Form {
+    Full,
+    Plain,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +78,24 @@ impl System {
             .collect();
         texts.join(BETWEEN_SECTIONS)
     }
+
+    pub(crate) fn shared_ends(&self) -> Vec<usize> {
+        let mut ends = Vec::new();
+        let mut length = 0;
+        for section in &self.sections {
+            if !section.text.is_empty() {
+                let lead = match length {
+                    0 => 0,
+                    _ => BETWEEN_SECTIONS.len(),
+                };
+                length += lead + section.text.len();
+            }
+            if section.ends_shared_prefix && length > 0 && ends.last() != Some(&length) {
+                ends.push(length);
+            }
+        }
+        ends
+    }
 }
 
 impl Section {
@@ -99,6 +131,18 @@ impl Message {
 }
 
 impl Request {
+    pub(crate) fn plainly(&self) -> Option<Self> {
+        let plain = self.plain.clone()?;
+        Some(Self {
+            system: plain.system,
+            messages: plain.messages,
+            schema: plain.schema,
+            budget_user: self.budget_user.clone(),
+            deadline: self.deadline,
+            plain: None,
+        })
+    }
+
     pub(crate) fn size(&self) -> usize {
         let messages: usize = self
             .messages
@@ -161,6 +205,27 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_prefix_ends_where_its_last_section_ends_in_the_joined_text() {
+        let system = System {
+            sections: vec![
+                Section::shared("правила"),
+                Section::shared(""),
+                Section::own("character"),
+                Section::shared("state"),
+            ],
+        };
+        let joined = system.joined();
+        assert_eq!(system.shared_ends(), [14, joined.len()]);
+        assert_eq!(&joined[..14], "правила");
+        assert_eq!(System::fixed("rules").shared_ends(), [5]);
+        let own = System {
+            sections: vec![Section::shared(""), Section::own("state")],
+        };
+        assert_eq!(own.shared_ends(), Vec::<usize>::new());
+        assert_eq!(System::default().shared_ends(), Vec::<usize>::new());
+    }
+
+    #[test]
     fn the_prompt_is_the_three_input_counts_together() {
         let usage = Usage {
             input_tokens: 40,
@@ -185,6 +250,7 @@ mod tests {
             schema: Schema::String,
             budget_user: None,
             deadline: None,
+            plain: None,
         };
         assert_eq!(request.size(), 5 + 5 + 2 + "{\"type\":\"string\"}".len());
         assert_eq!(

@@ -1,37 +1,35 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures::stream::{self, StreamExt};
-use llm_ladder::{AnswerStream, Commit, LadderError};
+use llm_ladder::{AnswerStream, Commit, Form, LadderError};
 use serde::Serialize;
 use serde_json::json;
 
 use super::answer::{Answer, Piece};
-use super::tools::Tools;
+use super::tools::{Action, Tools};
 
 const KEEPALIVE: Duration = Duration::from_secs(15);
 
-pub fn commit(tools: Arc<Tools>) -> Commit {
-    Arc::new(move |held: &str| {
-        Answer::default()
-            .push(held)
-            .into_iter()
-            .any(|piece| match piece {
-                Piece::Say(text) => !text.trim().is_empty(),
-                Piece::Action(raw) => tools.fit(raw).is_some(),
-            })
-    })
+pub struct Offered {
+    tools: Tools,
+    answered_plainly: AtomicBool,
 }
 
-pub fn respond(answer: AnswerStream, tools: Arc<Tools>, started: Instant) -> Response {
+pub fn commit(offered: Arc<Offered>) -> Commit {
+    Arc::new(move |form, held| offered.accepts(form, held))
+}
+
+pub fn respond(answer: AnswerStream, offered: Arc<Offered>, started: Instant) -> Response {
     let reply = Reply {
         answer,
         parser: Answer::default(),
-        tools,
+        offered,
         ready: VecDeque::new(),
         tally: Tally {
             started,
@@ -57,10 +55,53 @@ pub fn respond(answer: AnswerStream, tools: Arc<Tools>, started: Instant) -> Res
         .into_response()
 }
 
+impl Offered {
+    pub fn new(tools: Tools) -> Arc<Self> {
+        Arc::new(Self {
+            tools,
+            answered_plainly: AtomicBool::new(false),
+        })
+    }
+
+    fn accepts(&self, form: Form, held: &str) -> bool {
+        let pieces = Answer::default().push(held);
+        let accepted = match form {
+            Form::Full => pieces.into_iter().any(|piece| match piece {
+                Piece::Say(text) => !text.trim().is_empty(),
+                Piece::Action(raw) => self.tools.fit(raw).is_some(),
+            }),
+            Form::Plain => only_speaks(pieces),
+        };
+        if accepted {
+            self.answered_plainly
+                .store(form == Form::Plain, Ordering::Relaxed);
+        }
+        accepted
+    }
+
+    fn fit(&self, raw: serde_json::Value) -> Option<Action> {
+        match self.answered_plainly.load(Ordering::Relaxed) {
+            true => None,
+            false => self.tools.fit(raw),
+        }
+    }
+}
+
+fn only_speaks(pieces: Vec<Piece>) -> bool {
+    let mut speaks = false;
+    for piece in pieces {
+        match piece {
+            Piece::Action(_) => return false,
+            Piece::Say(text) => speaks |= !text.trim().is_empty(),
+        }
+    }
+    speaks
+}
+
 struct Reply {
     answer: AnswerStream,
     parser: Answer,
-    tools: Arc<Tools>,
+    offered: Arc<Offered>,
     ready: VecDeque<Event>,
     tally: Tally,
 }
@@ -87,7 +128,7 @@ impl Reply {
         for piece in self.parser.push(delta) {
             match piece {
                 Piece::Say(text) => self.send("say", json!({"text": text})),
-                Piece::Action(raw) => match self.tools.fit(raw) {
+                Piece::Action(raw) => match self.offered.fit(raw) {
                     Some(action) => {
                         self.tally.actions += 1;
                         self.send("action", action);
@@ -128,3 +169,7 @@ impl Drop for Tally {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "reply_tests.rs"]
+mod tests;

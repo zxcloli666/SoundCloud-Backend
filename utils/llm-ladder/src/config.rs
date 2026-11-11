@@ -36,6 +36,7 @@ pub struct ProviderSettings {
     pub max_output_tokens: u32,
     pub total_timeout_ms: u64,
     pub hedge: Option<bool>,
+    pub plain: Option<bool>,
     #[serde(default)]
     pub input_usd_per_mtok: f64,
     #[serde(default)]

@@ -14,7 +14,7 @@ use crate::error::LadderError;
 use crate::ladder::{Commit, Ladder, Outcome};
 use crate::observer::{Failure, Skip, StepResult};
 use crate::provider::StepEvent;
-use crate::request::Request;
+use crate::request::{Form, Request};
 use run::Run;
 use settle::{Settled, settle};
 
@@ -34,7 +34,7 @@ pub(crate) struct Rule {
 pub(crate) struct Race {
     ladder: Arc<Ladder>,
     request: Arc<Request>,
-    sent_bytes: usize,
+    plain: Option<Arc<Request>>,
     waiting: VecDeque<usize>,
     running: Vec<Run>,
     winner: Option<Run>,
@@ -63,7 +63,7 @@ impl Race {
             .map_or(ladder.deadline, |deadline| deadline.min(ladder.deadline));
         Self {
             ladder,
-            sent_bytes: request.size(),
+            plain: request.plainly().map(Arc::new),
             request: Arc::new(request),
             waiting: steps.into(),
             running: Vec::new(),
@@ -143,6 +143,7 @@ impl Race {
     }
 
     fn hear(&mut self, index: usize, event: StepEvent) -> Option<Item> {
+        let (form, _) = self.asked(self.running[index].step);
         let run = &mut self.running[index];
         let held = run.held.len();
         run.take(event);
@@ -150,7 +151,7 @@ impl Race {
             return None;
         }
         self.hedge_at = None;
-        if (self.rule.commit)(&run.held) {
+        if (self.rule.commit)(form, &run.held) {
             let held = self.crown(index);
             return self.deliver(held);
         }
@@ -171,7 +172,8 @@ impl Race {
                 continue;
             };
             let time_left = self.deadline.saturating_duration_since(now);
-            let stream = step.provider.start(self.request.clone(), time_left);
+            let (_, asked) = self.asked(index);
+            let stream = step.provider.start(asked.clone(), time_left);
             let expires = now + step.provider.total_timeout;
             self.running
                 .push(Run::new(index, stream, pass, now, expires));
@@ -302,7 +304,15 @@ impl Race {
     }
 
     fn settle(&self, run: Run, result: StepResult) -> Settled {
-        settle(&self.ladder, &self.request, self.sent_bytes, run, result)
+        let (_, asked) = self.asked(run.step);
+        settle(&self.ladder, asked, asked.size(), run, result)
+    }
+
+    fn asked(&self, step: usize) -> (Form, &Arc<Request>) {
+        match &self.plain {
+            Some(plain) if self.ladder.steps[step].provider.plain => (Form::Plain, plain),
+            _ => (Form::Full, &self.request),
+        }
     }
 }
 

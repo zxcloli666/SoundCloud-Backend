@@ -43,6 +43,7 @@ pub(crate) struct Provider {
     pub price: Price,
     pub total_timeout: Duration,
     pub hedged: bool,
+    pub plain: bool,
     pub streams: bool,
     backend: Box<dyn Backend>,
 }
@@ -72,6 +73,7 @@ impl Provider {
             price: Price::of(settings),
             total_timeout: Duration::from_millis(settings.total_timeout_ms),
             hedged: settings.hedge.unwrap_or(true),
+            plain: settings.plain.unwrap_or(false),
             streams: settings.kind != Kind::Worker && settings.stream.unwrap_or(true),
             backend,
         })
@@ -89,6 +91,7 @@ impl Provider {
             price,
             total_timeout,
             hedged: true,
+            plain: false,
             streams: true,
             backend,
         }

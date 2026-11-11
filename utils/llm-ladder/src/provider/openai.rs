@@ -339,6 +339,7 @@ mod tests {
             schema: crate::schema::Schema::object([("say", crate::schema::Schema::String)]),
             budget_user: None,
             deadline: None,
+            plain: None,
         };
         assert_eq!(
             ChatCompletions::body(&call, &request),

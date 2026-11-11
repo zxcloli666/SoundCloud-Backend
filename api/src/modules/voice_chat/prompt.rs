@@ -2,6 +2,7 @@ use llm_ladder::{Message, Role, Section, System};
 use serde_json::json;
 
 use super::request::Turn;
+use super::tools::Tools;
 use crate::config::VoiceChatCfg;
 
 const SETTING: &str = "You are the voice of a music player app. The user talks to you out loud and your reply is spoken aloud.";
@@ -31,22 +32,38 @@ const APP_STATE: &str = "app_state";
 const TOOL_RESULTS: &str = "tool_results";
 
 pub fn system(chat: &VoiceChatCfg, turn: &Turn) -> System {
+    system_with(chat, turn, &turn.tools)
+}
+
+pub fn plain_system(chat: &VoiceChatCfg, turn: &Turn) -> System {
+    system_with(chat, turn, &Tools::default())
+}
+
+pub fn messages(turn: &Turn) -> Vec<Message> {
+    messages_with(turn, &turn.tools)
+}
+
+pub fn plain_messages(turn: &Turn) -> Vec<Message> {
+    messages_with(turn, &Tools::default())
+}
+
+fn system_with(chat: &VoiceChatCfg, turn: &Turn, tools: &Tools) -> System {
     System {
         sections: vec![
-            Section::shared(joined(rules(chat, turn))),
+            Section::shared(joined(rules(chat, tools))),
             Section::shared(joined(character(chat, turn))),
             Section::own(joined(state(turn))),
         ],
     }
 }
 
-pub fn messages(turn: &Turn) -> Vec<Message> {
+fn messages_with(turn: &Turn, tools: &Tools) -> Vec<Message> {
     let mut messages: Vec<Message> = turn
         .history
         .iter()
         .map(|said| match said.role {
             Role::User => Message::user(said.content.clone()),
-            Role::Assistant => Message::assistant(earlier_reply(turn, &said.content)),
+            Role::Assistant => Message::assistant(earlier_reply(tools, &said.content)),
         })
         .collect();
     let mut text = turn.text.clone();
@@ -64,8 +81,8 @@ pub fn messages(turn: &Turn) -> Vec<Message> {
     messages
 }
 
-fn rules(chat: &VoiceChatCfg, turn: &Turn) -> Vec<String> {
-    let format = match turn.tools.is_empty() {
+fn rules(chat: &VoiceChatCfg, tools: &Tools) -> Vec<String> {
+    let format = match tools.is_empty() {
         true => FORMAT_WITHOUT_TOOLS,
         false => FORMAT_WITH_TOOLS,
     };
@@ -74,9 +91,9 @@ fn rules(chat: &VoiceChatCfg, turn: &Turn) -> Vec<String> {
         chat.instructions.trim().to_owned(),
         format.to_owned(),
     ];
-    if !turn.tools.is_empty() {
-        let tools: Vec<String> = turn.tools.described().collect();
-        sections.push(format!("Tools:\n{}", tools.join("\n")));
+    if !tools.is_empty() {
+        let described: Vec<String> = tools.described().collect();
+        sections.push(format!("Tools:\n{}", described.join("\n")));
     }
     sections.push(TRUST.to_owned());
     sections
@@ -118,8 +135,8 @@ fn joined(mut sections: Vec<String>) -> String {
     sections.join("\n\n")
 }
 
-fn earlier_reply(turn: &Turn, said: &str) -> String {
-    match turn.tools.is_empty() {
+fn earlier_reply(tools: &Tools, said: &str) -> String {
+    match tools.is_empty() {
         true => json!({"say": said}).to_string(),
         false => json!({"actions": [], "say": said}).to_string(),
     }
