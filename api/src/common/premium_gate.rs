@@ -46,7 +46,7 @@ fn is_open_path(path: &str) -> bool {
         || path.starts_with("/oauth/")
         || path.starts_with("/skills/")
         || path.starts_with("/remote/")
-        || path.starts_with("/voice/")
+        || path == "/voice/chat"
         || path.starts_with("/.well-known/")
         || path.starts_with("/diag/")
         || path.starts_with("/admin/diag/")
@@ -69,6 +69,8 @@ mod tests {
             assert!(is_open_path(path), "{path}");
         }
         assert!(!is_open_path("/search/resolve"));
+        assert!(!is_open_path("/voice/other"));
+        assert!(!is_open_path("/voice/chat/extra"));
         assert!(!is_open_path("/me/likes"));
     }
 }
