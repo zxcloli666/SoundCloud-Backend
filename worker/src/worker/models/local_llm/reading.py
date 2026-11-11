@@ -29,7 +29,10 @@ def read(
         evaluate(model, tokens, len(tokens) - 1, pace, chunk_tokens)
     except CallExpired:
         if model.read_tokens > reused:
-            states.keep(tokens[: model.read_tokens], model.save(), False)
+            inside_system = model.read_tokens < prompt.shared
+            states.keep(
+                tokens[: model.read_tokens], model.save(), inside_system, unfinished=inside_system
+            )
         raise
     return reused
 

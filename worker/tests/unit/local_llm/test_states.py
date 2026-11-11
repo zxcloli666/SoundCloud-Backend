@@ -71,6 +71,41 @@ def test_short_prefixes_are_not_kept_and_turns_go_on_unload() -> None:
     assert states.sizes() == ([8], [])
 
 
+def test_an_unfinished_anchor_survives_the_unload_and_goes_when_a_state_continues_it() -> None:
+    states: PromptStates[bytes] = PromptStates(budget_bytes=1000, min_tokens=CHUNK)
+    system = tokens(1, 12)
+    states.keep(system[:6], bytes(1), anchor=True, unfinished=True)
+    states.forget_turns()
+    after_unload = states.sizes()
+    states.keep(system[:9], bytes(1), anchor=True, unfinished=True)
+    deeper = states.sizes()
+    states.keep(system, bytes(1), anchor=True)
+
+    assert (after_unload, deeper) == (([6], []), ([9], []))
+    assert states.sizes() == ([12], [])
+
+
+def test_a_finished_anchor_is_not_dropped_by_a_state_that_continues_it() -> None:
+    states: PromptStates[bytes] = PromptStates(budget_bytes=1000, min_tokens=CHUNK)
+    system = tokens(1, 12)
+    states.keep(system[:6], bytes(1), anchor=True, unfinished=True)
+    states.keep(system[:6], bytes(1), anchor=True)
+    states.keep(system, bytes(1), anchor=True)
+
+    assert states.sizes() == ([6, 12], [])
+
+
+def test_an_evicted_unfinished_anchor_leaves_no_trace() -> None:
+    states: PromptStates[bytes] = PromptStates(budget_bytes=15, min_tokens=CHUNK)
+    system = tokens(1, 12)
+    states.keep(system[:6], bytes(10), anchor=True, unfinished=True)
+    states.keep(tokens(2, 8), bytes(10), anchor=True)
+    states.keep(system[:6], bytes(1), anchor=True)
+    states.keep(system, bytes(1), anchor=True)
+
+    assert sorted(states.sizes()[0]) == [6, 8, 12]
+
+
 def test_the_stable_part_is_a_long_enough_common_start_inside_the_system() -> None:
     states: PromptStates[bytes] = PromptStates(budget_bytes=1000, min_tokens=CHUNK)
     states.keep([1, 2, 3, 4, 5, 6, 7, 8], bytes(1), anchor=True)

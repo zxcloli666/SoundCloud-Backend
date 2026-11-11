@@ -12,6 +12,7 @@ class PromptStates[S: Sized]:
         self._min_tokens = min_tokens
         self._anchors: OrderedDict[Prefix, S] = OrderedDict()
         self._turns: OrderedDict[Prefix, S] = OrderedDict()
+        self._unfinished: set[Prefix] = set()
 
     def sizes(self) -> tuple[list[int], list[int]]:
         return [len(prefix) for prefix in self._anchors], [len(prefix) for prefix in self._turns]
@@ -40,30 +41,36 @@ class PromptStates[S: Sized]:
         )
         return common if self._min_tokens <= common < shared else 0
 
-    def keep(self, tokens: Sequence[int], state: S, anchor: bool) -> None:
+    def keep(self, tokens: Sequence[int], state: S, anchor: bool, unfinished: bool = False) -> None:
         if len(tokens) < self._min_tokens:
             return
         prefix = tuple(tokens)
         if prefix in self._anchors:
+            if anchor and not unfinished:
+                self._unfinished.discard(prefix)
             return
-        for outgrown in [held for held in self._turns if starts_with(prefix, held)]:
-            del self._turns[outgrown]
+        for outgrown in [
+            held for held in (*self._turns, *self._unfinished) if starts_with(prefix, held)
+        ]:
+            self.drop(outgrown)
         self._turns.pop(prefix, None)
         held = self._anchors if anchor else self._turns
         held[prefix] = state
+        if anchor and unfinished:
+            self._unfinished.add(prefix)
         self._fit()
 
     def drop(self, prefix: Prefix) -> None:
         self._anchors.pop(prefix, None)
         self._turns.pop(prefix, None)
+        self._unfinished.discard(prefix)
 
     def forget_turns(self) -> None:
         self._turns.clear()
 
     def _fit(self) -> None:
         while self.held_bytes() > self._budget_bytes:
-            held = self._turns or self._anchors
-            held.popitem(last=False)
+            self.drop(next(iter(self._turns or self._anchors)))
 
 
 def starts_with(tokens: Sequence[int], prefix: Prefix) -> bool:

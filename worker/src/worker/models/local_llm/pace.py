@@ -8,6 +8,10 @@ class Pace:
         self._full_tokens = full_tokens
         self._seconds_per_token = 0.0
 
+    @property
+    def known(self) -> bool:
+        return self._seconds_per_token > 0.0
+
     def guard(self, tokens: int) -> None:
         CALL_GUARD.check(tokens * self._seconds_per_token)
 

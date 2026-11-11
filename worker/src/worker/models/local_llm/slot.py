@@ -71,6 +71,8 @@ class LocalLlmSlot:
     def warmup(self) -> None:
         if self._model is None or self._source is None:
             raise RuntimeError(f"{LOCAL_LLM_SLOT} is not loaded")
+        if self._reading.known:
+            return
         chunk_tokens = self._source[1].chunk_tokens
         system = WARMUP_SENTENCE
         while len(self._model.tokenize(system, special=False)) < chunk_tokens:

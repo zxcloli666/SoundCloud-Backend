@@ -84,23 +84,62 @@ def test_a_state_that_fails_to_load_gives_way_to_a_shallower_one_or_a_cold_read(
     assert sum(model.evals) == len(asked.tokens) - 1
 
 
-def test_an_expired_read_keeps_what_it_read_and_the_next_try_anchors_the_whole_system() -> None:
-    model, held = FakeModel(), states()
-    ask = reader(model, held)
-    own = system(1, length=40)
-    asked = prompt(own, [50, 60, 61])
-
-    def expire_after_two_chunks(tokens: Sequence[int]) -> None:
-        if len(model.evals) == 1:
+def expire_after(model: FakeModel, chunks: int) -> None:
+    def expire(tokens: Sequence[int]) -> None:
+        if len(model.evals) == chunks - 1:
             CALL_GUARD.expires_at = time.monotonic()
 
-    model.on_eval = expire_after_two_chunks
+    model.evals.clear()
+    model.on_eval = expire
+
+
+def expired(model: FakeModel, ask: Callable[[Prompt], int], asked: Prompt, chunks: int) -> None:
+    expire_after(model, chunks)
     with pytest.raises(CallExpired):
         ask(asked)
     CALL_GUARD.expires_at = math.inf
     model.on_eval = lambda tokens: None
 
-    assert held.sizes() == ([], [2 * CHUNK])
+
+def test_an_expired_read_keeps_what_it_read_and_the_next_try_anchors_the_whole_system() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    own = system(1, length=40)
+    asked = prompt(own, [50, 60, 61])
+    expired(model, ask, asked, chunks=2)
+
+    assert held.sizes() == ([2 * CHUNK], [])
     assert ask(asked) == 2 * CHUNK
     assert held.sizes()[0] == [len(own)]
     assert ask(prompt(own, [51, 60, 61])) == len(own)
+
+
+def test_a_system_read_cut_into_calls_goes_on_after_each_unload() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    own = system(1, length=40)
+    asked = prompt(own, [50, 60, 61])
+    resumed_at = []
+    for _ in range(3):
+        expired(model, ask, asked, chunks=2)
+        held.forget_turns()
+        resumed_at.append(held.sizes())
+    answered_from = ask(asked)
+    held.forget_turns()
+
+    assert resumed_at == [([2 * CHUNK], []), ([4 * CHUNK], []), ([6 * CHUNK], [])]
+    assert answered_from == 6 * CHUNK
+    assert held.sizes() == ([len(own)], [])
+
+
+def test_a_read_cut_short_after_the_system_is_kept_only_until_the_unload() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    own = system(1, length=2 * CHUNK)
+    asked = prompt(own, [50, *range(60, 60 + 3 * CHUNK)])
+    expired(model, ask, asked, chunks=3)
+    kept = held.sizes()
+    held.forget_turns()
+
+    assert kept == ([len(own)], [3 * CHUNK])
+    assert held.sizes() == ([len(own)], [])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
@@ -85,6 +86,9 @@ SCHEMA: Mapping[str, object] = {
 LONG_SYSTEM_SENTENCES = 150
 ENGINE_DEADLINE_S = 4.0
 ENGINE_SYSTEM_SENTENCES = 380
+CUT_SYSTEM_SENTENCES = 60
+CUT_AFTER_CHUNKS = 2
+CUT_READ_CALLS = 6
 
 
 @pytest.fixture(scope="module")
@@ -371,6 +375,73 @@ def test_a_call_past_its_deadline_stops_between_chunks_and_keeps_what_it_read(
     assert resumed["reused_tokens"] == chunk_tokens
     assert resumed["input_tokens"] > 4 * chunk_tokens
     assert {"name": "pause", "args": {}} in json.loads(str(resumed["text"]))["actions"]
+
+
+def test_a_cold_read_cut_into_calls_goes_on_after_every_unload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from worker.models.local_llm.slot import LocalLlmSlot
+
+    chunk_tokens = SETTINGS.llm.local.eval_chunk_tokens
+    system = long_system("a read cut into calls", CUT_SYSTEM_SENTENCES)
+    slow = LocalLlmSlot()
+    kept: list[tuple[list[int], list[int]]] = []
+    answer: dict[str, object] = {}
+    for _ in range(CUT_READ_CALLS):
+        slow.load(slot_spec(SETTINGS, SLOT))
+        slow.warmup()
+        try:
+            with monkeypatch.context() as patched:
+                expire_after_full_chunks(patched, slow, chunk_tokens)
+                answer = ask(slow, system, [user("pause the music")])
+        except CallExpired:
+            pass
+        finally:
+            CALL_GUARD.expires_at = math.inf
+            slow.unload()
+        kept.append(slow._states.sizes())
+        if answer:
+            break
+
+    assert answer, kept
+    assert all(len(anchors) == 1 and not turns for anchors, turns in kept), kept
+    depths = [anchors[0] for anchors, _ in kept[:-1]]
+    assert depths[0] == CUT_AFTER_CHUNKS * chunk_tokens
+    assert len(depths) >= 2 and depths == sorted(set(depths))
+    assert answer["reused_tokens"] == depths[-1]
+    assert {"name": "pause", "args": {}} in json.loads(str(answer["text"]))["actions"]
+
+
+def expire_after_full_chunks(patched: pytest.MonkeyPatch, slot: object, chunk_tokens: int) -> None:
+    model = slot._model
+    evaluate = model.eval
+    full: list[int] = []
+
+    def counted(tokens: Sequence[int]) -> None:
+        evaluate(tokens)
+        if len(tokens) == chunk_tokens:
+            full.append(len(tokens))
+        if len(full) == CUT_AFTER_CHUNKS:
+            CALL_GUARD.expires_at = time.monotonic()
+
+    patched.setattr(model, "eval", counted)
+
+
+def test_a_model_loaded_again_is_not_warmed_up_again() -> None:
+    from worker.models.local_llm.slot import LocalLlmSlot
+
+    reloaded = LocalLlmSlot()
+    read_by_warmup = []
+    for _ in range(2):
+        reloaded.load(slot_spec(SETTINGS, SLOT))
+        try:
+            reloaded.warmup()
+            read_by_warmup.append(reloaded._model.read_tokens)
+        finally:
+            reloaded.unload()
+
+    assert read_by_warmup[0] > 0
+    assert read_by_warmup[1] == 0
 
 
 def test_the_warmup_teaches_the_first_call_how_long_a_chunk_takes(
