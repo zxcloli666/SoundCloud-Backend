@@ -189,6 +189,26 @@ async def test_call_threads_and_niceness_reach_the_engine_process() -> None:
         await supervisor.stop()
 
 
+async def test_an_engine_without_torch_still_learns_the_threads_of_each_call() -> None:
+    supervisor = await started_supervisor(
+        plans_of(
+            EnginePlan("a", (fake_spec("a"),)),
+            EnginePlan("llm-local", (fake_spec("llm-local"),), reserved=True),
+        ),
+        SHARED,
+    )
+    try:
+        bulk = await call(supervisor, "a", "granted_threads")
+        other = await supervisor.acquire("llm-local", time.monotonic() + 5)
+        shared = await call(supervisor, "a", "granted_threads")
+        supervisor.release(other)
+        urgent = await call(supervisor, "llm-local", "granted_threads", priority=True)
+        assert (bulk.result["threads"], shared.result["threads"]) == (6, 3)
+        assert urgent.result["threads"] == reserved_threads(8) == 4
+    finally:
+        await supervisor.stop()
+
+
 async def test_encode_is_served_by_the_reserved_engine_while_the_bulk_one_is_busy() -> None:
     supervisor = await started_supervisor(
         plans_of(
@@ -220,8 +240,8 @@ async def test_encode_is_served_by_the_reserved_engine_while_the_bulk_one_is_bus
         await supervisor.stop()
 
 
-async def call(supervisor: Supervisor, slot: str, method: str) -> Reply:
-    client: EngineClient = await supervisor.acquire(slot, time.monotonic() + 30)
+async def call(supervisor: Supervisor, slot: str, method: str, *, priority: bool = False) -> Reply:
+    client: EngineClient = await supervisor.acquire(slot, time.monotonic() + 30, priority=priority)
     call_id = next_message_id()
     blocks = shm.SharedBlocks(os.getpid(), client.pid, call_id, "in")
     try:

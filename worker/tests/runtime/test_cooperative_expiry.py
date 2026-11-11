@@ -46,7 +46,7 @@ async def test_a_preempted_bulk_lyric_expires_on_the_encode_engine_without_a_kil
         await supervisor.stop()
 
 
-@pytest.mark.parametrize("slot", ["text", "muq", "mulan"])
+@pytest.mark.parametrize("slot", ["text", "muq", "mulan", "llm-local"])
 async def test_a_late_call_returns_expired_and_keeps_the_engine(slot: str) -> None:
     counters = Counters()
     supervisor = await started_supervisor(

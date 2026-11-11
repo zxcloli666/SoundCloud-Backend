@@ -147,6 +147,7 @@ class Engine:
         self._log = log
         self._torch_configured = False
         self._threads = options.threads
+        CALL_GUARD.threads = options.threads
 
     def serve(self, conn: Connection) -> int:
         while True:
@@ -254,7 +255,10 @@ class Engine:
             return 0
 
     def _apply_threads(self, threads: int) -> None:
-        if threads < 1 or threads == self._threads or not self._torch_configured:
+        if threads < 1:
+            return
+        CALL_GUARD.threads = threads
+        if threads == self._threads or not self._torch_configured:
             return
         devices.set_threads(threads)
         self._threads = threads

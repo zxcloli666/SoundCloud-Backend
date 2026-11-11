@@ -340,6 +340,24 @@ async def test_idle_unload_then_reload_on_demand() -> None:
         await supervisor.stop()
 
 
+async def test_an_engine_with_its_own_idle_limit_unloads_while_the_others_stay_loaded() -> None:
+    plans = [
+        EnginePlan("a", (fake_spec("a"),)),
+        EnginePlan("llm-local", (fake_spec("llm-local"),), idle_unload_s=0.3),
+    ]
+    supervisor = await started_supervisor(plans)
+    try:
+        assert await wait_until(lambda: supervisor.slot_state("llm-local") == STATE_UNLOADED, 5.0)
+        assert supervisor.slot_state("a") == STATE_READY
+        reply = await call_once(supervisor, "llm-local", args={"tags": ["q"]})
+        assert reply.ok and reply.result["tags"] == ["q!"]
+        assert supervisor.slot_state("llm-local") == STATE_READY
+        assert await wait_until(lambda: supervisor.slot_state("llm-local") == STATE_UNLOADED, 5.0)
+        assert supervisor.slot_state("a") == STATE_READY
+    finally:
+        await supervisor.stop()
+
+
 async def test_oom_report_unloads_idlest_other_slot_and_marks_recycle() -> None:
     policy = replace(TEST_POLICY, oom_recycle_count=2)
     plans = [EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))]
