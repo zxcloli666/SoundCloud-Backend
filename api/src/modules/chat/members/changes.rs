@@ -208,7 +208,9 @@ pub async fn accept(pg: &PgPool, access: &Access) -> ChatResult<Change> {
     let mut change = Change::to(access.recipients.clone());
     let mut tx = pg.begin().await?;
     lock_chat(&mut tx, access).await?;
-    if !members::activate(&mut tx, access.conversation, me, &[MemberState::Invited]).await? {
+    let joined =
+        members::activate(&mut tx, access.conversation, me, &[MemberState::Invited]).await?;
+    if !joined && !members::mark_accepted(&mut tx, access.conversation, me).await? {
         tx.rollback().await?;
         return match access.state {
             MemberState::Active => Ok(change),
@@ -216,15 +218,17 @@ pub async fn accept(pg: &PgPool, access: &Access) -> ChatResult<Change> {
         };
     }
     change.requests.push(me.to_owned());
-    if access.is_group() {
-        let event = SystemEvent::Joined {
-            actor: me.to_owned(),
-        };
-        change
-            .rows
-            .push(system::insert(&mut tx, access.conversation, &event, None).await?);
+    if joined {
+        if access.is_group() {
+            let event = SystemEvent::Joined {
+                actor: me.to_owned(),
+            };
+            change
+                .rows
+                .push(system::insert(&mut tx, access.conversation, &event, None).await?);
+        }
+        members::recount(&mut tx, access.conversation).await?;
     }
-    members::recount(&mut tx, access.conversation).await?;
     tx.commit().await?;
     Ok(change)
 }

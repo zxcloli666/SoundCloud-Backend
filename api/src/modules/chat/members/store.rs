@@ -152,6 +152,21 @@ pub async fn activate(
     .is_some())
 }
 
+pub async fn mark_accepted(
+    conn: &mut PgConnection,
+    conversation: Uuid,
+    user_id: &str,
+) -> ChatResult<bool> {
+    let marked = sqlx::query_file!(
+        "queries/chat/members/mark_accepted.sql",
+        conversation,
+        user_id
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(marked.rows_affected() > 0)
+}
+
 pub async fn set_role(
     conn: &mut PgConnection,
     conversation: Uuid,

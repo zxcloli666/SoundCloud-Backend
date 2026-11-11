@@ -213,6 +213,32 @@ async fn a_dm_request_is_accepted_without_a_system_row(pool: PgPool) -> ChatResu
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_dm_from_a_known_sender_is_accepted_in_place(pool: PgPool) -> ChatResult<()> {
+    let id = dm(&pool, "101", "202", MemberState::Active).await;
+    assert!(!access_of(&pool, id, "202").await.accepted);
+    let accepted = accept(&pool, &access_of(&pool, id, "202").await).await?;
+    assert!(accepted.rows.is_empty());
+    assert_eq!(accepted.requests, vec!["202".to_owned()]);
+    let peer = access_of(&pool, id, "202").await;
+    assert_eq!((peer.state, peer.accepted), (MemberState::Active, true));
+    let again = accept(&pool, &access_of(&pool, id, "202").await).await?;
+    assert!(again.requests.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn an_added_member_accepts_without_joining_again(pool: PgPool) -> ChatResult<()> {
+    let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
+    let before = seqs(&pool, id).await;
+    let accepted = accept(&pool, &access_of(&pool, id, "202").await).await?;
+    assert!(accepted.rows.is_empty());
+    assert_eq!(accepted.requests, vec!["202".to_owned()]);
+    assert!(access_of(&pool, id, "202").await.accepted);
+    assert_eq!(seqs(&pool, id).await, before);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn adding_respects_the_200_cap_and_hidden_history(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[]).await;
     exec(
