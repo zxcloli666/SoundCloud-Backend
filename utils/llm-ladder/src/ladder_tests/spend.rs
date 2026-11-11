@@ -1,15 +1,23 @@
+use tokio::time::timeout;
+
 use super::*;
+
+const SOON: Duration = Duration::from_secs(1);
 
 fn estimate(received: usize) -> u64 {
     Price::per_million_tokens(2_000_000, 8_000_000)
         .cost(&Usage::estimated(request().size(), received))
 }
 
-async fn settled(bench: &Bench) -> Vec<u64> {
-    for _ in 0..4 {
-        tokio::task::yield_now().await;
-    }
+async fn charged(bench: &Bench) -> Vec<u64> {
+    timeout(SOON, bench.spend.written(1))
+        .await
+        .expect("the charge is written");
     bench.spend.counters().values().copied().collect()
+}
+
+async fn nothing_is_charged(bench: &Bench) -> bool {
+    timeout(SOON, bench.spend.written(1)).await.is_err()
 }
 
 #[tokio::test(start_paused = true)]
@@ -33,6 +41,9 @@ async fn a_priced_answer_is_charged_to_the_ladder_and_the_user() {
     let (_, outcome) = answer(&bench.ladder).await;
 
     assert_eq!(outcome.unwrap().cost_micro_usd, 2_800);
+    timeout(SOON, bench.spend.written(4))
+        .await
+        .expect("every counter is written");
     let counters = bench.spend.counters();
     assert_eq!(counters.len(), 4);
     assert!(
@@ -119,7 +130,7 @@ async fn a_cancelled_loser_is_charged_for_the_input_it_reported() {
 
     assert!(answer(&bench.ladder).await.1.is_ok());
 
-    assert_eq!(settled(&bench).await, [2_000]);
+    assert_eq!(charged(&bench).await, [2_000]);
     assert_eq!(bench.seen.reports()[0].basis, "estimated");
 }
 
@@ -156,7 +167,7 @@ async fn a_run_cut_before_its_last_usage_is_charged_for_the_output_it_sent() {
         },
         "what the provider counted is kept, the output is what it sent"
     );
-    assert_eq!(settled(&bench).await, [3_240 * 2 + sent * 8]);
+    assert_eq!(charged(&bench).await, [3_240 * 2 + sent * 8]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -173,7 +184,7 @@ async fn an_output_count_above_the_estimate_is_kept() {
     assert!(matches!(events.next().await, Some(Ok(Event::Delta(_)))));
     drop(events);
 
-    assert_eq!(settled(&bench).await, [2_000 + 4_000]);
+    assert_eq!(charged(&bench).await, [2_000 + 4_000]);
     assert_eq!(bench.seen.reports()[0].basis, "estimated");
 }
 
@@ -186,7 +197,7 @@ async fn a_losing_priced_step_that_reported_no_usage_is_charged_an_estimate() {
     assert!(answer(&bench.ladder).await.1.is_ok());
 
     assert!(estimate(0) > 0);
-    assert_eq!(settled(&bench).await, [estimate(0)]);
+    assert_eq!(charged(&bench).await, [estimate(0)]);
     let loser = &bench.seen.reports()[0];
     assert_eq!((loser.result, loser.basis), ("lost", "estimated"));
     assert_eq!(loser.usage, Usage::estimated(request().size(), 0));
@@ -202,7 +213,7 @@ async fn a_winner_that_reported_no_usage_is_charged_an_estimate() {
 
     assert_eq!(outcome.basis, Basis::Estimated);
     assert_eq!(outcome.cost_micro_usd, estimate(said.len()));
-    assert_eq!(settled(&bench).await, [estimate(said.len())]);
+    assert_eq!(charged(&bench).await, [estimate(said.len())]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -220,7 +231,7 @@ async fn a_client_that_leaves_mid_answer_is_charged_for_what_was_sent_and_heard(
     assert!(matches!(events.next().await, Some(Ok(Event::Delta(_)))));
     drop(events);
 
-    assert_eq!(settled(&bench).await, [estimate(heard.len())]);
+    assert_eq!(charged(&bench).await, [estimate(heard.len())]);
     let report = &bench.seen.reports()[0];
     assert_eq!((report.result, report.basis), ("cancelled", "estimated"));
 }
@@ -243,7 +254,7 @@ async fn a_step_cut_by_the_deadline_is_charged_an_estimate() {
     assert_eq!(events.next().await, Some(Err(LadderError::Deadline)));
     drop(events);
 
-    assert_eq!(settled(&bench).await, [estimate(0)]);
+    assert_eq!(charged(&bench).await, [estimate(0)]);
     let report = &bench.seen.reports()[0];
     assert_eq!(
         (report.result, report.basis),
@@ -259,7 +270,7 @@ async fn a_step_refused_before_it_answered_costs_nothing() {
 
         assert_eq!(answer(&bench.ladder).await.1, Err(LadderError::Exhausted));
 
-        assert_eq!(settled(&bench).await, Vec::<u64>::new(), "{failure:?}");
+        assert!(nothing_is_charged(&bench).await, "{failure:?}");
         let report = &bench.seen.reports()[0];
         assert_eq!((report.basis, report.cost_micro_usd), ("reported", 0));
     }
@@ -272,7 +283,7 @@ async fn a_failure_after_the_provider_took_the_request_is_charged_an_estimate() 
 
     assert_eq!(answer(&bench.ladder).await.1, Err(LadderError::Exhausted));
 
-    assert_eq!(settled(&bench).await, [estimate(0)]);
+    assert_eq!(charged(&bench).await, [estimate(0)]);
     let report = &bench.seen.reports()[0];
     assert_eq!(
         (report.result, report.basis),
@@ -291,5 +302,5 @@ async fn a_free_step_without_usage_stays_free() {
         (outcome.basis, outcome.cost_micro_usd),
         (Basis::Reported, 0)
     );
-    assert!(settled(&bench).await.is_empty());
+    assert!(nothing_is_charged(&bench).await);
 }
