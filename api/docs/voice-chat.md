@@ -10,7 +10,7 @@ Endpoint: `api/src/modules/voice_chat`. Model ladder: `utils/llm-ladder`.
 3. Restart the api.
 
 `LLM_CONFIG` unset: the endpoint answers 503 `chat_unavailable`. An unknown key or a bad value stops the start.
-Spend caps need NATS JetStream: the api creates the KV bucket named in `[budget]` on first use.
+Spend caps need NATS JetStream: the api opens the KV bucket named in `[budget]` and creates it only when it is missing; it never changes an existing bucket. NATS unreachable: priced steps are skipped for 10 s, one warning per pause.
 
 ## Config file
 
@@ -26,9 +26,11 @@ Spend caps need NATS JetStream: the api creates the KV bucket named in `[budget]
 | `cache_read_usd_per_mtok`, `cache_write_usd_per_mtok` | optional price of input the provider read from its prefix cache or wrote to it. Missing = `input_usd_per_mtok` |
 | `prefix_cache` | `anthropic_compatible` only: the object sent as `cache_control` on the system blocks that end a shared prefix, for example `{ type = "ephemeral" }`. Missing = the system text goes as one string and nothing is cached |
 | `body` | optional JSON object merged into the request body, for provider-specific knobs |
+| `headers` | http kinds: static request headers, for example the API version a vendor needs: `{ "anthropic-version" = "..." }`. `authorization`, `x-api-key`, `content-type`, `content-length` and `host` are refused |
+| `hedge` | default `true`. `false`: the step starts only when every earlier step has failed, never because they are silent. Set it on a model that must not get parallel calls, such as a local CPU model |
 | `subject` | `worker` only: NATS subject of the local model |
 
-A `worker` step fails without a publish when the request is over the limits of the worker method: system text 48 000 bytes, 64 messages of 12 000 bytes each, schema 64 000 bytes.
+A `worker` step fails without a publish when the request is over the limits of the worker method: system text 48 000 bytes, 64 messages of 12 000 bytes each, schema 64 000 bytes. The call carries `X-Deadline`: the time the ladder has left, at most `total_timeout_ms`. A started worker call runs until it answers or reaches that deadline, even when another step has already won.
 
 `[ladders.<id>]`
 
@@ -36,11 +38,17 @@ A `worker` step fails without a publish when the request is over the limits of t
 | --- | --- |
 | `steps` | provider ids, most wanted first |
 | `hedge_after_ms` | the next step starts when the running ones gave no output for this long, or at once when a step fails |
-| `deadline_ms` | limit for the whole answer |
-| `breaker` | `failures` within `window_s` seconds skip the provider for `open_s` seconds |
+| `deadline_ms` | limit for the whole answer. Every step's `total_timeout_ms` must be below it |
+| `breaker` | `failures` within `window_s` seconds skip the provider for `open_s` seconds, then one call probes |
 | `[ladders.<id>.budget]` | optional caps in USD: `month_usd`, `day_usd`, `user_month_usd`, `user_day_usd`. A reached cap skips priced steps, free steps keep answering |
 
 `[budget] bucket`: NATS KV bucket with the spend counters, shared by every host. Counters are whole micro-USD, UTC periods, kept 40 days.
+
+Times are at most 600 000 ms, `window_s` and `open_s` at most 86 400.
+
+The breaker counts only faults of the provider: a transport error, a timeout, HTTP 5xx, 429, 401, 403, an overloaded error, and a step that gave no output for longer than `hedge_after_ms` when the deadline came. A refusal, an answer cut at `max_output_tokens`, HTTP 400, 413 or 422, a worker `invalid_request` and an answer that is not the JSON document fail the step for this request only; the ladder goes on to the next step.
+
+A priced provider that reports no usage (a loser, a client that left, a deadline, a provider that never sends it) is charged an estimate: input from the request size, output from the bytes it sent, 3 bytes per token. A refusal before any answer costs nothing.
 
 `[voice_chat]`
 
@@ -49,6 +57,7 @@ A `worker` step fails without a publish when the request is over the limits of t
 | `ladder` | ladder id |
 | `requests_per_minute` | per user, per host |
 | `max_text_chars`, `max_history`, `max_notes`, `max_tools` | request caps |
+| `max_system_bytes` | cap on the system text the tools, notes and app state make, in bytes. A request over it gets 400. At most 48 000 when the ladder has a `worker` step |
 | `max_tool_rounds` | requests one turn may take. A request that may be the last one (it carries at least `max_tool_rounds - 1` results of `returns: true` tools) is offered no such tools, so the model has to answer |
 | `instructions` | system text added for every persona |
 | `[voice_chat.personas.<id>] prompt` | who the character is. `default` is required and serves unknown ids |
@@ -67,7 +76,7 @@ A change to `instructions`, a persona prompt or the app's tool list starts a new
 
 ## Request
 
-Header `x-session-id`. The user needs Star. JSON body, only `text` is required:
+Header `x-session-id`. The user needs Star. The Star check and the per-user limit run before the body is read. JSON body, only `text` is required:
 
 ```json
 {
@@ -91,12 +100,14 @@ Header `x-session-id`. The user needs Star. JSON body, only `text` is required:
 
 - `persona`: a `[voice_chat.personas.<id>]` id, an unknown one gets `default`. `language`: the language the app listens and speaks in, the reply is written in it; without it the reply follows the language of `text`.
 - Tool and argument names: `^[a-z][a-z0-9_]{0,31}$`, unique. Arguments are flat: `string`, `integer`, `number`, `boolean` or `enum` of strings; `description`, `minimum` and `maximum` are read, other keywords are ignored. At most 16 arguments per tool.
-- `context` and `results`: at most 8 KiB each as JSON, at most 16 results. A history item: at most 2000 characters. A note: at most 300. A description: at most 600.
+- `context` and `results`: at most 8 KiB each as JSON, at most 16 results. A description: at most 600 characters.
+- `history` and `notes`: only the newest `max_history` items and `max_notes` notes are kept; a longer history item is cut to 2000 characters, a note to 300. A wrong shape is still refused.
+- The body may be as large as the caps allow: 4 bytes per counted character or byte plus 4 KiB, at most 256 KiB. A larger one gets 413.
 - `results` are what the tools of this turn answered: send the same `text` and `history` again with them.
 
 ## Untrusted text
 
-Track and playlist names, search results, notes and earlier messages can carry text written to look like an order. The system text tells the model that only its rules and the latest `text` are instructions; `context`, `notes` and `results` reach it inside `<app_state>`, `<notes>` and `<tool_results>` blocks with `<` and `>` escaped, so a value cannot close its block.
+Track and playlist names, search results, notes and earlier messages can carry text written to look like an order. The system text tells the model that only its rules and the latest `text` are instructions; `context`, `notes` and `results` reach it inside `<app_state>`, `<notes>` and `<tool_results>` blocks with `<` and `>` escaped, so a value cannot close its block. Tool descriptions and enum values are escaped the same way.
 
 Check it against the real providers (needs `LLM_CONFIG`, its keys and `NATS_URL`):
 
@@ -113,7 +124,9 @@ cargo test --bin api -- --ignored --nocapture modules::voice_chat::live_tests
 | `action` | `{"name": "volume_set", "args": {"level": 60}}` | once per action, as soon as it is complete. `args` is always an object with the declared types; an optional argument the model did not give is absent. Actions that fit no offered tool are left out |
 | `say` | `{"text": "piece"}` | pieces of the spoken text, in order |
 | `done` | `{}` | the turn is complete |
-| `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or ended with no action and no speech |
+| `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or no step gave an action that fits a tool or any speech |
+
+A step's answer reaches the client from its first action that fits a tool or its first spoken word. An answer with neither falls through to the next step.
 
 Closing the connection cancels the provider calls.
 
@@ -130,7 +143,11 @@ Errors before the stream are JSON, `{"statusCode": 403, "code": "star_required",
 
 ## Metrics
 
-`api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`, `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`.
+`api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`; steps and durations add `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`.
+
+`result`: `won`, `lost`, `cancelled`, `failed_status`, `failed_transport`, `failed_timeout` (these three feed the breaker), `failed_request`, `failed_refused`, `failed_length`, `failed_invalid`, `skipped_breaker`, `skipped_budget`.
+
+`api_llm_tokens_total` and `api_llm_spend_micro_usd_total` have the label `basis`: `reported` by the provider or `estimated` by the api.
 
 `api_llm_tokens_total` has the label `kind`: `input` (full price), `cache_read`, `cache_write`, `output`. The prompt size is `input + cache_read + cache_write`. A working prefix cache shows `cache_read` far above `cache_write`; `cache_write` near the prompt size on every call means the shared sections change between calls.
 
