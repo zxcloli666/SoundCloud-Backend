@@ -21,6 +21,25 @@ const MAX_MESSAGES: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 12_000;
 const MAX_SCHEMA_BYTES: usize = 64_000;
 
+pub const WORKER_LIMITS: WorkerLimits = WorkerLimits {
+    max_tokens: MAX_TOKENS,
+    system_bytes: MAX_SYSTEM_BYTES,
+    system_marks: MAX_SYSTEM_MARKS,
+    messages: MAX_MESSAGES,
+    message_bytes: MAX_MESSAGE_BYTES,
+    schema_bytes: MAX_SCHEMA_BYTES,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerLimits {
+    pub max_tokens: u32,
+    pub system_bytes: usize,
+    pub system_marks: usize,
+    pub messages: usize,
+    pub message_bytes: usize,
+    pub schema_bytes: usize,
+}
+
 pub trait WorkerTransport: Send + Sync {
     fn call<'a>(
         &'a self,

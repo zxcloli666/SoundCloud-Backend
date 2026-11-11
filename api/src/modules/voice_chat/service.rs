@@ -30,13 +30,17 @@ impl VoiceChat {
         config: &LlmCfg,
         nats: Option<&Arc<NatsService>>,
     ) -> Result<Arc<Self>, ConfigError> {
-        let Some(limits) = config.voice_chat.clone() else {
-            return Ok(Self::off());
-        };
         let hosting = Hosting {
             jetstream: nats.map(|nats| nats.jetstream().clone()),
             worker: nats.map(|nats| WorkerRpc::new(nats.clone()) as Arc<dyn WorkerTransport>),
             observer: Arc::new(LadderMetrics),
+        };
+        Self::hosted(config, hosting)
+    }
+
+    pub fn hosted(config: &LlmCfg, hosting: Hosting) -> Result<Arc<Self>, ConfigError> {
+        let Some(limits) = config.voice_chat.clone() else {
+            return Ok(Self::off());
         };
         let ladders = Ladders::build(&config.ladders, hosting)?;
         let live = ladders
