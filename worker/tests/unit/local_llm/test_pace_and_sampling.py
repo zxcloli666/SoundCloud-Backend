@@ -93,13 +93,20 @@ def test_a_grammar_that_allows_nothing_fails_before_accepting_a_token() -> None:
     assert grammar.accepted == []
 
 
-def test_writing_learns_the_step_time_with_the_pick() -> None:
-    model, grammar = FakeModel(), FakeGrammar()
-    model.next_logits = favouring(7, 8, END)
-    model.on_eval = lambda tokens: time.sleep(0.05)
-    pace = Pace(1)
-    write(model, 5, grammar, 10, pace)
+def test_writing_learns_the_step_time_with_the_pick(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = FakeModel()
+    clock = iter(range(0, 1000, 10))
+    steps = favouring(7, 8, END)
 
-    CALL_GUARD.expires_at = time.monotonic() + 0.03
+    def picked_after_a_while() -> np.ndarray:
+        next(clock)
+        return steps()
+
+    model.next_logits = picked_after_a_while
+    monkeypatch.setattr(time, "monotonic", lambda: float(next(clock)))
+    pace = Pace(1)
+    write(model, 5, FakeGrammar(), 10, pace)
+
+    CALL_GUARD.expires_at = time.monotonic() + 30.0
     with pytest.raises(CallExpired):
         pace.guard(1)

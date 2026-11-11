@@ -14,6 +14,7 @@ from tests.contract import samples
 from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
+from tests.fakes.llm import FakeRefiner
 from worker import settings as settings_module
 from worker.bus.lane_runner import LaneRunner
 from worker.bus.lease import ACK_ATTEMPTS, ACK_RETRY_PAUSE_S, Leases
@@ -29,6 +30,17 @@ from worker.settings import Settings
 
 RESOLVE = {"title": "Artist - Song", "uploader": "chan", "metadata_artist": None}
 COMPLETE = samples.RPC_REQUESTS["ai.rpc.complete"]
+REFINED: Mapping[str, Mapping[str, object]] = {
+    "resolve_artist": {"title": "Kendrick Lamar & SZA - luther", "uploader": "TDE"},
+    "match_track": {
+        "target": {"artist": "Billie Eilish", "title": "Ocean Eyes"},
+        "candidates": [
+            {"id": 1, "artist": "Billie Eilish", "title": "Ocean Eyes", "duration_sec": 200.0},
+            {"id": 2, "artist": "billie", "title": "Ocean Eyes", "duration_sec": 201.0},
+        ],
+    },
+    "complete": COMPLETE,
+}
 LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
 ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
 LOCAL = settings_module.load(CONFIG_DIR, BASE_ENV).llm.local
@@ -204,20 +216,20 @@ class GatedEngines(FakeEngines):
 async def test_resolve_and_match_answer_while_complete_holds_the_local_model(
     rpc: Rpc, contract: Contract
 ) -> None:
-    engines = GatedEngines()
+    engines, chain = GatedEngines(), FakeRefiner()
     completer = Completer(
         engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
     )
     methods = {
-        "resolve_artist": ArtistResolver(None, rpc.harness.counters).resolve,
-        "match_track": TrackMatcher(None, rpc.harness.counters).match,
+        "resolve_artist": ArtistResolver(chain, rpc.harness.counters).resolve,
+        "match_track": TrackMatcher(chain, rpc.harness.counters).match,
         "complete": completer.complete,
     }
     rpc.handler = rpc_handler(rpc.harness, contract, methods)
     handled = []
     for offset_s, method in enumerate(("complete", "resolve_artist", "match_track")):
         due = epoch_ms(rpc.harness.clock, 20 + offset_s)
-        rpc.enqueue(samples.RPC_REQUESTS[f"ai.rpc.{method}"], method=method, deadline_ms=due)
+        rpc.enqueue(REFINED[method], method=method, deadline_ms=due)
         [msg] = await rpc.harness.fetch()
         handled.append(asyncio.ensure_future(rpc.handler.handle(msg, asyncio.Event())))
     await asyncio.wait(handled[1:])
@@ -226,6 +238,7 @@ async def test_resolve_and_match_answer_while_complete_holds_the_local_model(
     await asyncio.gather(*handled)
 
     assert early == 2
+    assert len(chain.calls) == 2
     assert [method for method, _ in engines.calls] == ["complete"]
     assert rpc.harness.counters.value("rpc_replies_total", method="complete", ok="True") == 1
 

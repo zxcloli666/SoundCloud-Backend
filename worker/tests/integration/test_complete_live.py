@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import uuid
 from collections.abc import Mapping
@@ -50,6 +51,11 @@ DEEP = 100_000
 REFUSED = {"ok": False, "error": "invalid_request"}
 EXPIRED = {"ok": False, "error": "expired"}
 COLD_TRIES = 4
+READ_SHARE = 0.5
+NO_GRAMMAR: Mapping[str, object] = {
+    "type": "object",
+    "properties": {"x": {"$ref": "#/nowhere"}},
+}
 OFF_REPLY_S = 2.0
 OFF_WORKER_ID = "e2e-worker-off"
 HAND_OVERS = 4
@@ -84,13 +90,14 @@ async def test_complete_is_served_by_the_local_model_over_nats(
     )
     try:
         await wait_for_status(worker, all_lanes_serving(LANES))
-        first, first_tries = await answered(live, request("поставь громкость на 30"), window_s)
+        first = await answered(live, request("поставь громкость на 30"), window_s)
         started = time.monotonic()
         second = await ask(live, request("set the volume to 70 please"), window_s)
         warm_s = time.monotonic() - started
         refused = await ask_raw(live, {**request("hi"), "max_tokens": 0}, window_s)
         too_big = await ask(live, too_big_request(), window_s)
-        no_grammar = await ask(live, {**request("hi"), "schema": {"type": "wat"}}, window_s)
+        no_grammar = await ask(live, {**request("hi"), "schema": NO_GRAMMAR}, window_s)
+        not_an_object = await ask(live, {**request("hi"), "schema": {"type": "array"}}, window_s)
         started = time.monotonic()
         late = await ask(live, hurried_request(), HURRIED_S)
         late_s = time.monotonic() - started
@@ -111,7 +118,7 @@ async def test_complete_is_served_by_the_local_model_over_nats(
         code = await worker.terminate()
 
     assert code == 0, worker.tail()
-    for reply, level in ((first, 30), (second, 70)):
+    for reply, level in ((first.reply, 30), (second, 70)):
         assert live.contract.validate(f"{METHOD}.reply", reply) == [], reply
         assert reply["ok"] is True, reply
         data = reply["data"]
@@ -124,21 +131,27 @@ async def test_complete_is_served_by_the_local_model_over_nats(
     assert refused == {"ok": False, "error": "invalid_request"}
     assert too_big == {"ok": False, "error": "invalid_request"}
     assert no_grammar == {"ok": False, "error": "invalid_request"}
+    assert not_an_object == {"ok": False, "error": "invalid_request"}
     assert late == EXPIRED
     assert late_s < HURRIED_S
     assert after["ok"] is True
     assert {"name": "pause", "args": {}} in json.loads(after["data"]["text"])["actions"]
     assert off_schema == {"ok": False, "error": "internal"}
     assert hostile == [REFUSED] * len(hostile_bodies())
-    assert all(reply["ok"] is True for reply, _ in alternating), alternating
-    assert [tries for _, tries in alternating[2:]] == [1, 1]
+    assert all(call.reply["ok"] is True for call in alternating), alternating
+    assert [call.tries for call in alternating[2:]] == [1, 1]
     assert capped_s < window_s
     assert capped["ok"] is True or capped == EXPIRED
     assert left == 0
     answers = [event for event in worker.events() if event.get("event") == "complete_answered"]
     reused = [event["reused_tokens"] > 0 for event in answers]
-    cold = [first_tries > 1, True, True, *(tries > 1 for _, tries in alternating[:2]), True, True]
-    assert reused == cold, [(event["input_tokens"], event["reused_tokens"]) for event in answers]
+    cold = [first.tries > 1, True, True, *(call.tries > 1 for call in alternating[:2]), True, True]
+    assert len(answers) == len(cold) + (capped["ok"] is True)
+    assert reused[: len(cold)] == cold, [
+        (event["input_tokens"], event["reused_tokens"]) for event in answers
+    ]
+    for call, event in zip([first, *alternating], [answers[0], *answers[3:7]], strict=True):
+        assert call.tries <= tries_at_the_speed_of(event, call.seconds, window_s), (call, event)
     assert all(event["input_tokens"] > event["output_tokens"] > 0 for event in answers)
     assert worker.event_names().isdisjoint(KILL_EVENTS), worker.tail()
     exits = [event for event in worker.events() if event.get("event") == "engine_exited"]
@@ -162,15 +175,27 @@ def hurried_request() -> dict[str, object]:
     }
 
 
-async def answered(
-    live: Live, payload: Mapping[str, object], window_s: float
-) -> tuple[dict[str, object], int]:
-    tries = 1
-    reply = await ask(live, payload, window_s)
-    while reply == EXPIRED and tries < COLD_TRIES:
+@dataclass(frozen=True)
+class Answered:
+    reply: dict[str, object]
+    tries: int
+    seconds: float
+
+
+async def answered(live: Live, payload: Mapping[str, object], window_s: float) -> Answered:
+    tries = 0
+    while True:
         tries += 1
+        started = time.monotonic()
         reply = await ask(live, payload, window_s)
-    return reply, tries
+        if reply != EXPIRED or tries == COLD_TRIES:
+            return Answered(reply, tries, time.monotonic() - started)
+
+
+def tries_at_the_speed_of(event: Mapping[str, int], seconds: float, window_s: float) -> int:
+    handled = event["input_tokens"] - event["reused_tokens"] + event["output_tokens"]
+    read_per_try = handled / seconds * window_s * READ_SHARE
+    return 1 + math.ceil(event["reused_tokens"] / read_per_try)
 
 
 async def ask(live: Live, payload: Mapping[str, object], window_s: float) -> dict[str, object]:
@@ -260,7 +285,7 @@ async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_
     ]
     try:
         await wait_for_status(workers[0], all_lanes_serving(LANES))
-        warmed, _ = await answered(live, request("pause the music"), window_s)
+        warmed = await answered(live, request("pause the music"), window_s)
         workers.append(
             await start_serve(
                 live,
@@ -284,7 +309,7 @@ async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_
 
     having, without = workers
     assert codes == [0, 0], (having.tail(), without.tail())
-    assert warmed["ok"] is True, warmed
+    assert warmed.reply["ok"] is True, warmed
     assert all(reply.body["ok"] is True or reply.body == EXPIRED for reply in replies), replies
     assert {reply.worker for reply in replies} == {WORKER_ID}
     assert replies[-1].body["ok"] is True and replies[-1].deliveries > 1, replies
@@ -314,17 +339,18 @@ async def test_a_new_tail_after_a_mark_of_the_system_is_all_that_its_first_call_
     )
     try:
         await wait_for_status(worker, all_lanes_serving(LANES))
-        first, first_tries = await answered(live, marked_request(MARKED_TAILS[0]), window_s)
+        first = await answered(live, marked_request(MARKED_TAILS[0]), window_s)
         second = await ask(live, marked_request(MARKED_TAILS[1]), window_s)
         left = await live.messages_left("AI_RPC")
     finally:
         code = await worker.terminate()
 
     assert code == 0, worker.tail()
-    assert first["ok"] is True and second["ok"] is True, (first, second)
+    assert first.reply["ok"] is True and second["ok"] is True, (first, second)
     answers = [event for event in worker.events() if event.get("event") == "complete_answered"]
     assert len(answers) == 2
-    assert (answers[0]["reused_tokens"] > 0) == (first_tries > 1)
+    assert (answers[0]["reused_tokens"] > 0) == (first.tries > 1)
+    assert first.tries <= tries_at_the_speed_of(answers[0], first.seconds, window_s)
     assert 0 < answers[1]["input_tokens"] - answers[1]["reused_tokens"] < TAIL_TOKENS, answers
     assert left == 0
     assert_nothing_left(worker)
