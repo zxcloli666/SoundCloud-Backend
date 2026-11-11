@@ -39,6 +39,19 @@ def test_an_anchor_that_others_continue_outlives_them() -> None:
     assert [prefix[8:9] for prefix in states._anchors] == [(), (2,), (3,)]
 
 
+def test_a_turn_just_kept_stays_with_its_anchor_when_the_cache_is_full_of_anchors() -> None:
+    states: PromptStates[bytes] = PromptStates(budget_bytes=30, min_tokens=CHUNK)
+    for head in (1, 2, 3):
+        states.keep(tokens(head, 8), bytes(10), anchor=True)
+    states.keep([*tokens(1, 8), 9, 9, 9, 9], bytes(10), anchor=False)
+    after_the_first = [[prefix[0] for prefix in held] for held in (states._anchors, states._turns)]
+    states.keep([*tokens(3, 8), 9, 9, 9, 9], bytes(10), anchor=False)
+
+    assert after_the_first == [[1, 3], [1]]
+    assert [prefix[0] for prefix in states._anchors] == [1, 3]
+    assert [prefix[0] for prefix in states._turns] == [3]
+
+
 def test_a_used_state_is_the_last_to_go() -> None:
     states: PromptStates[bytes] = PromptStates(budget_bytes=25, min_tokens=CHUNK)
     first, second = tokens(1, 8), tokens(2, 8)

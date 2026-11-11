@@ -58,7 +58,7 @@ class PromptStates[S: Sized]:
         held[prefix] = state
         if anchor and unfinished:
             self._unfinished.add(prefix)
-        self._fit()
+        self._fit(prefix)
 
     def drop(self, prefix: Prefix) -> None:
         self._anchors.pop(prefix, None)
@@ -68,15 +68,17 @@ class PromptStates[S: Sized]:
     def forget_turns(self) -> None:
         self._turns.clear()
 
-    def _fit(self) -> None:
+    def _fit(self, kept: Prefix) -> None:
         while self.held_bytes() > self._budget_bytes:
-            self.drop(next(iter(self._turns or self._last_anchors())))
+            older = (prefix for prefix in (*self._turns, *self._last_anchors()) if prefix != kept)
+            self.drop(next(older, kept))
 
     def _last_anchors(self) -> list[Prefix]:
+        held = (*self._anchors, *self._turns)
         return [
             prefix
             for prefix in self._anchors
-            if not any(starts_with(longer, prefix) for longer in self._anchors)
+            if not any(starts_with(longer, prefix) for longer in held)
         ]
 
 
