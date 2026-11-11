@@ -9,7 +9,7 @@ import orjson
 from worker.contract import CompleteLimits
 from worker.domain.deadline import Deadline
 from worker.domain.metadata import fields
-from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
+from worker.domain.outcome import NotServedHere, PermanentFailure, Reason
 from worker.domain.ports import ChatMessage, ChatRole, Completion, Engines, EngineUnavailable
 from worker.domain.validate import validate
 from worker.observability.counters import Counters
@@ -44,7 +44,7 @@ class Completer:
     ) -> Mapping[str, object]:
         if not self._local.enabled:
             self._counters.inc("complete_unavailable_total", state="off")
-            raise TransientFailure(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+            raise NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
         deadline.minus(RPC_MARGIN_S).check(METHOD)
         try:
             asked = Request.parse(request, self._limits)
@@ -80,7 +80,7 @@ class Completer:
         ):
             self._counters.inc("complete_rejected_total", why="busy")
             log.warning("complete_model_busy", extra={"in_flight": ahead, "call_s": self._call_s})
-            raise TransientFailure(Reason.DEADLINE_EXCEEDED, "the local model is busy")
+            raise NotServedHere(Reason.DEADLINE_EXCEEDED, "the local model is busy")
         self._in_flight += 1
         started = deadline.now()
         try:
@@ -97,7 +97,7 @@ class Completer:
         except EngineUnavailable as error:
             self._counters.inc("complete_unavailable_total", state=error.state)
             log.warning("complete_model_unavailable", extra={"state": error.state})
-            raise TransientFailure(Reason.INTERNAL_ERROR, str(error)) from error
+            raise NotServedHere(Reason.INTERNAL_ERROR, str(error)) from error
 
     def _check(self, completion: Completion, schema: Mapping[str, object]) -> None:
         if not completion.finished:

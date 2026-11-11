@@ -15,6 +15,7 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
 from worker import settings as settings_module
+from worker.bus.lane_runner import LaneRunner
 from worker.bus.lease import ACK_ATTEMPTS, ACK_RETRY_PAUSE_S, Leases
 from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler, RpcMethod
 from worker.contract import Contract
@@ -22,7 +23,7 @@ from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline
 from worker.domain.metadata.match import TrackMatcher
 from worker.domain.metadata.resolve import ArtistResolver
-from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
+from worker.domain.outcome import NotServedHere, PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import ChatMessage, Completion
 from worker.settings import Settings
 
@@ -32,6 +33,9 @@ LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
 ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
 LOCAL = settings_module.load(CONFIG_DIR, BASE_ENV).llm.local
 DEEP = 100_000
+MAX_DELIVER = 5
+CALLS = 3
+SETTLE_TURNS = 100
 
 
 class Rpc:
@@ -108,7 +112,7 @@ def rpc_handler(
         harness.connection,
         harness.counters,
         clock,
-        lambda: 5,
+        lambda: MAX_DELIVER,
         contract.headers.msg_id,
     )
     return RpcHandler(
@@ -281,6 +285,90 @@ async def test_failures_map_to_the_error_envelope(
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
 
+@pytest.mark.parametrize(
+    ("reason", "error"),
+    [(Reason.INTERNAL_ERROR, "internal"), (Reason.DEADLINE_EXCEEDED, "expired")],
+    ids=["off", "busy"],
+)
+async def test_a_call_this_worker_cannot_serve_is_handed_on_and_answered_on_its_last_delivery(
+    rpc: Rpc, reason: Reason, error: str
+) -> None:
+    rpc.failure = NotServedHere(reason, "the local model cannot take it")
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
+    silent = [await rpc.run_one() for _ in range(MAX_DELIVER - 1)]
+
+    assert silent == [None] * (MAX_DELIVER - 1)
+    assert rpc.harness.counters.total("rpc_replies_total") == 0
+    assert await rpc.run_one() == {"ok": False, "error": error}
+    assert rpc.reply_headers()["X-Deliveries"] == str(MAX_DELIVER)
+    assert [(ack.kind, ack.delay) for ack in rpc.harness.bus.acks()] == [
+        *[("nak", None)] * (MAX_DELIVER - 1),
+        ("ack_sync", None),
+    ]
+    assert rpc.harness.counters.value("rpc_handed_on_total", method="resolve_artist") == 4
+    assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
+
+
+async def test_a_call_with_no_time_left_for_another_worker_is_answered_at_once(rpc: Rpc) -> None:
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, PROCESS_MARGIN_S + REPLY_MARGIN_S))
+
+    assert await rpc.run_one() == {"ok": False, "error": "internal"}
+    assert [ack.kind for ack in rpc.harness.bus.acks()] == ["ack_sync"]
+    assert rpc.harness.counters.total("rpc_handed_on_total") == 0
+
+
+async def test_a_call_is_answered_when_the_connection_cannot_be_trusted_with_a_hand_over(
+    rpc: Rpc,
+) -> None:
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.harness.connection.suspect("test")
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
+
+    assert await rpc.run_one() == {"ok": False, "error": "internal"}
+    assert [ack.kind for ack in rpc.harness.bus.acks()] == ["ack_sync"]
+    assert rpc.harness.counters.total("rpc_handed_on_total") == 0
+
+
+async def test_a_redelivery_that_overtakes_the_hand_over_is_handled_as_a_new_delivery(
+    rpc: Rpc,
+) -> None:
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
+    [msg] = await rpc.harness.fetch()
+    send_nak = msg.nak
+
+    async def nak_overtaken_by_the_redelivery(delay: float | None = None) -> None:
+        await send_nak(delay)
+        [again] = await rpc.harness.fetch()
+        await rpc.handler.handle(again, asyncio.Event())
+
+    msg.nak = nak_overtaken_by_the_redelivery
+    await rpc.handler.handle(msg, asyncio.Event())
+
+    assert [ack.num_delivered for ack in rpc.harness.bus.acks("nak")] == [1, 2]
+    assert rpc.harness.counters.value("redelivered_to_owner_total", lane="ai") == 0
+
+
+async def test_a_hand_over_that_cannot_be_sent_leaves_the_call_to_the_ack_wait(rpc: Rpc) -> None:
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
+    [msg] = await rpc.harness.fetch()
+    rpc.harness.bus.closed = True
+    handling = asyncio.create_task(rpc.handler.handle(msg, asyncio.Event()))
+    await rpc.harness.settle()
+    given_up = handling.done()
+    handling.cancel()
+    await asyncio.gather(handling, return_exceptions=True)
+
+    assert given_up
+    assert rpc.harness.counters.value("nak_failures_total", lane="ai") == 1
+    assert rpc.harness.counters.value("naks_total", lane="ai") == 0
+    assert rpc.harness.counters.value("rpc_reply_failures_total") == 0
+    assert rpc.harness.counters.value("ack_failures_total", lane="ai") == 0
+    assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
+
+
 async def test_abort_during_shutdown_replies_expired(rpc: Rpc) -> None:
     rpc.release.clear()
     rpc.enqueue()
@@ -370,6 +458,54 @@ def serve_complete(rpc: Rpc, contract: Contract) -> TimedEngines:
     )
     rpc.handler = rpc_handler(rpc.harness, contract, {"complete": completer.complete})
     return engines
+
+
+def local_worker(harness: Harness, contract: Contract, enabled: bool) -> LaneRunner:
+    completer = Completer(
+        TimedEngines(),
+        contract.complete_limits,
+        replace(LOCAL, enabled=enabled),
+        LOCAL_MODEL,
+        harness.counters,
+    )
+    handler = rpc_handler(harness, contract, {"complete": completer.complete})
+    return LaneRunner(
+        harness.lane,
+        harness.watch,
+        handler,
+        harness.connection.js,
+        harness.connection,
+        harness.outbox,
+        harness.runner.capacity,
+        harness.counters,
+        harness.clock,
+    )
+
+
+async def test_a_call_taken_by_a_worker_with_the_model_off_is_answered_by_one_that_has_it(
+    rpc: Rpc, fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    without, having = rpc.harness, await build_harness(fake_nats, contract, settings, clock, "ai")
+    runners = [local_worker(without, contract, False), local_worker(having, contract, True)]
+    for harness, runner in zip((without, having), runners, strict=True):
+        await harness.watch.check()
+        harness.tasks.append(asyncio.create_task(runner.run()))
+        await clock.tick()
+    try:
+        for _ in range(CALLS):
+            rpc.enqueue(COMPLETE, method="complete", deadline_ms=epoch_ms(clock, 20))
+            await clock.tick(turns=SETTLE_TURNS)
+    finally:
+        for harness, runner in zip((without, having), runners, strict=True):
+            await harness.stop()
+            await runner.cancel()
+    replies = [entry for entry in fake_nats.core_published if entry[0].startswith("_INBOX")]
+
+    assert [json.loads(body)["ok"] for _, body, _ in replies] == [True] * CALLS
+    assert [headers["X-Deliveries"] for _, _, headers in replies] == ["2"] * CALLS
+    assert without.counters.value("rpc_handed_on_total", method="complete") == CALLS
+    assert without.counters.total("rpc_replies_total") == 0
+    assert having.counters.value("rpc_replies_total", method="complete", ok="True") == CALLS
 
 
 async def test_complete_replies_with_the_local_answer_inside_its_own_window(

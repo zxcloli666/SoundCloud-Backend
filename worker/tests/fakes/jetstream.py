@@ -505,15 +505,20 @@ class FakeNats:
     def serve_pulls(self) -> None:
         now = self.clock.now()
         self.open_pulls = [pull for pull in self.open_pulls if pull.subscription.active]
-        for pull in list(self.open_pulls):
-            for message in self.deliver_due(pull.subscription._consumer, pull.left):
-                pull.subscription._sub.put(message)
-                pull.left -= 1
-            expired = now >= pull.expires_at
-            if pull.left and expired:
-                self.linger_status(pull.subscription, "408", "Request Timeout")
-            if expired or not pull.left:
-                self.open_pulls.remove(pull)
+        while (pull := self._pull_with_work(now)) is not None:
+            [message] = self.deliver_due(pull.subscription._consumer, 1)
+            pull.subscription._sub.put(message)
+            pull.left -= 1
+            self.open_pulls.remove(pull)
+            if pull.left:
+                self.open_pulls.append(pull)
+        for pull in [pull for pull in self.open_pulls if now >= pull.expires_at]:
+            self.linger_status(pull.subscription, "408", "Request Timeout")
+            self.open_pulls.remove(pull)
+
+    def _pull_with_work(self, now: float) -> OpenPull | None:
+        waiting = (pull for pull in self.open_pulls if pull.subscription._consumer.due(now))
+        return next(waiting, None)
 
     def next_pull_event_at(self) -> float:
         now = self.clock.now()

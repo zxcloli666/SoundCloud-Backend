@@ -14,7 +14,7 @@ from worker import settings as settings_module
 from worker.contract import Contract
 from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline
-from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
+from worker.domain.outcome import NotServedHere, PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import ChatMessage, Completion, EngineUnavailable
 from worker.observability.counters import Counters
 
@@ -165,6 +165,7 @@ async def test_a_request_without_time_left_never_reaches_the_model(
         await subject.complete(request(), deadline(clock, seconds=0.4))
 
     assert late.value.reason is Reason.DEADLINE_EXCEEDED
+    assert not isinstance(late.value, NotServedHere)
     assert engines.calls == []
 
 
@@ -176,16 +177,17 @@ async def test_an_expired_model_call_stays_expired(contract: Contract, clock: Fa
         await subject.complete(request(), deadline(clock))
 
     assert late.value.reason is Reason.DEADLINE_EXCEEDED
+    assert not isinstance(late.value, NotServedHere)
     assert counters.value("complete_answers_total") == 0
 
 
-async def test_an_unavailable_model_is_an_internal_error_with_a_counter(
+async def test_an_unavailable_model_leaves_the_call_to_another_worker_as_an_internal_error(
     contract: Contract, clock: FakeClock
 ) -> None:
     subject, engines, counters = completer(contract)
     engines.fail("complete", EngineUnavailable("llm-local", "broken"))
 
-    with pytest.raises(TransientFailure) as failed:
+    with pytest.raises(NotServedHere) as failed:
         await subject.complete(request(), deadline(clock))
 
     assert failed.value.reason is Reason.INTERNAL_ERROR
@@ -251,7 +253,7 @@ async def test_requests_beyond_the_queue_of_one_model_are_turned_away_at_once(
     for _ in queued:
         await engines.entered.acquire()
 
-    with pytest.raises(TransientFailure) as busy:
+    with pytest.raises(NotServedHere) as busy:
         await subject.complete(request(), deadline(clock))
     assert busy.value.reason is Reason.DEADLINE_EXCEEDED
     assert counters.value("complete_rejected_total", why="busy") == 1
@@ -278,7 +280,7 @@ async def test_a_request_that_cannot_wait_out_the_call_ahead_is_turned_away(
     ahead = asyncio.ensure_future(subject.complete(request(), deadline(clock)))
     await engines.entered.acquire()
 
-    with pytest.raises(TransientFailure) as busy:
+    with pytest.raises(NotServedHere) as busy:
         await subject.complete(request(), deadline(clock, seconds=20.0))
     roomy = asyncio.ensure_future(subject.complete(request(), deadline(clock, seconds=30.0)))
     await engines.entered.acquire()
@@ -301,7 +303,7 @@ async def test_a_request_the_model_refuses_is_counted(contract: Contract, clock:
     assert counters.value("complete_rejected_total", why="invalid_request") == 2
 
 
-async def test_a_worker_with_the_local_model_off_refuses_at_once(
+async def test_a_worker_with_the_local_model_off_leaves_the_call_to_another_worker(
     contract: Contract, clock: FakeClock
 ) -> None:
     engines, counters = FakeEngines(), Counters()
@@ -309,7 +311,7 @@ async def test_a_worker_with_the_local_model_off_refuses_at_once(
         engines, contract.complete_limits, replace(LOCAL, enabled=False), MODEL, counters
     )
 
-    with pytest.raises(TransientFailure) as off:
+    with pytest.raises(NotServedHere) as off:
         await subject.complete(request(), deadline(clock))
 
     assert off.value.reason is Reason.INTERNAL_ERROR

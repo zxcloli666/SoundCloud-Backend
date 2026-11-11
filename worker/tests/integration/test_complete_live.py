@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import jsonschema
@@ -13,6 +14,7 @@ from nats.aio.subscription import Subscription
 from tests.conftest import BASE_ENV, CONFIG_DIR
 from tests.contract import samples
 from tests.integration.test_end_to_end import (
+    WORKER_ID,
     Live,
     all_lanes_serving,
     assert_nothing_left,
@@ -30,6 +32,7 @@ __all__ = ["fixtures", "live"]
 
 LANES = ("ai",)
 METHOD = "ai.rpc.complete"
+RESOLVE = "ai.rpc.resolve_artist"
 SHIPPED = s.load(CONFIG_DIR, BASE_ENV)
 PATIENT_S = 300.0
 HURRIED_S = 5.0
@@ -48,6 +51,19 @@ REFUSED = {"ok": False, "error": "invalid_request"}
 EXPIRED = {"ok": False, "error": "expired"}
 COLD_TRIES = 4
 OFF_REPLY_S = 2.0
+OFF_WORKER_ID = "e2e-worker-off"
+HAND_OVERS = 4
+TURNS_OF_THE_QUEUE = 4
+SHARED_PHRASES = (
+    "pause the music",
+    "skip this track",
+    "like this track",
+    "set the volume to 40",
+    "set the volume to 55",
+    "pause the music please",
+    "skip this one too",
+    "like this one too",
+)
 
 
 async def test_complete_is_served_by_the_local_model_over_nats(
@@ -164,16 +180,37 @@ async def ask_raw(live: Live, payload: Mapping[str, object], window_s: float) ->
 
 
 async def send(live: Live, body: bytes, window_s: float) -> dict[str, object]:
+    return (await call(live, METHOD, body, window_s)).body
+
+
+@dataclass(frozen=True)
+class Reply:
+    body: dict[str, object]
+    deliveries: int
+    worker: str
+
+
+async def call(live: Live, subject: str, body: bytes, window_s: float) -> Reply:
     inbox = f"_INBOX.e2e.{uuid.uuid4().hex}"
     subscription: Subscription = await live.admin.subscribe(inbox, max_msgs=1)
     headers = {
-        "Nats-Msg-Id": f"rpc:complete:{uuid.uuid4().hex}",
+        "Nats-Msg-Id": f"rpc:{uuid.uuid4().hex}",
         "X-Reply-To": inbox,
         "X-Deadline": str(int((time.time() + window_s) * 1000)),
     }
-    await live.js.publish(METHOD, body, headers=headers)
-    reply: dict[str, object] = json.loads((await subscription.next_msg(REPLY_TIMEOUT_S)).data)
-    return reply
+    await live.js.publish(subject, body, headers=headers)
+    answer = await subscription.next_msg(REPLY_TIMEOUT_S)
+    names = live.contract.headers
+    sent = answer.headers or {}
+    return Reply(json.loads(answer.data), int(sent[names.deliveries]), sent[names.worker_id])
+
+
+async def put_the_other_worker_next(live: Live, window_s: float) -> None:
+    body = json.dumps(samples.RPC_REQUESTS[RESOLVE]).encode()
+    for _ in range(TURNS_OF_THE_QUEUE):
+        if (await call(live, RESOLVE, body, window_s)).worker == WORKER_ID:
+            return
+    raise AssertionError("the worker with the model never took a call")
 
 
 def too_big_request() -> dict[str, object]:
@@ -200,7 +237,66 @@ def alternating_turns() -> list[tuple[str, str]]:
     return [(systems[turn % 2], phrase) for turn, phrase in enumerate(phrases)]
 
 
-async def test_a_worker_with_the_local_model_off_refuses_complete_at_once(
+async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_the_one_that_has_it(
+    live: Live, fixtures: object, tmp_path: Path
+) -> None:
+    window_s = float(live.contract.rpc.windows_s["complete"])
+    homes = [tmp_path / "having", tmp_path / "without"]
+    for home in homes:
+        home.mkdir()
+    workers = [
+        await start_serve(
+            live,
+            fixtures,
+            homes[0],
+            LANES,
+            WORKER__RUNTIME__DEVICE="cpu",
+            WORKER__LLM__LOCAL__THREADS=THREADS,
+            WORKER__LLM__LOCAL__STATE_CACHE_MIB=STATE_CACHE_MIB,
+        )
+    ]
+    try:
+        await wait_for_status(workers[0], all_lanes_serving(LANES))
+        warmed, _ = await answered(live, request("pause the music"), window_s)
+        workers.append(
+            await start_serve(
+                live,
+                fixtures,
+                homes[1],
+                LANES,
+                WORKER_NODE_NAME=OFF_WORKER_ID,
+                WORKER__LLM__LOCAL__ENABLED="false",
+            )
+        )
+        await wait_for_status(workers[1], all_lanes_serving(LANES))
+        replies: list[Reply] = []
+        for phrase in SHARED_PHRASES:
+            await put_the_other_worker_next(live, window_s)
+            replies.append(await call(live, METHOD, json.dumps(request(phrase)).encode(), window_s))
+            if replies[-1].body["ok"] is True and replies[-1].deliveries > 1:
+                break
+        left = await live.messages_left("AI_RPC")
+    finally:
+        codes = [await worker.terminate() for worker in workers]
+
+    having, without = workers
+    assert codes == [0, 0], (having.tail(), without.tail())
+    assert warmed["ok"] is True, warmed
+    assert all(reply.body["ok"] is True or reply.body == EXPIRED for reply in replies), replies
+    assert {reply.worker for reply in replies} == {WORKER_ID}
+    assert replies[-1].body["ok"] is True and replies[-1].deliveries > 1, replies
+    assert left == 0
+    handed_on = [event for event in without.events() if event.get("event") == "rpc_handed_on"]
+    assert len(handed_on) == sum(reply.deliveries - 1 for reply in replies)
+    answered_by_the_other = {
+        event["method"] for event in without.events() if event.get("event") == "rpc_finished"
+    }
+    assert answered_by_the_other <= {"resolve_artist"}
+    for worker in workers:
+        assert_nothing_left(worker)
+
+
+async def test_a_lone_worker_with_the_local_model_off_refuses_complete_after_its_hand_overs(
     live: Live, fixtures: object, tmp_path: Path
 ) -> None:
     window_s = float(live.contract.rpc.windows_s["complete"])
@@ -210,7 +306,7 @@ async def test_a_worker_with_the_local_model_off_refuses_complete_at_once(
         started = time.monotonic()
         off = await ask(live, request("pause the music"), window_s)
         off_s = time.monotonic() - started
-        resolved = await live_call(live, "ai.rpc.resolve_artist", window_s)
+        resolved = await live_call(live, RESOLVE, window_s)
         left = await live.messages_left("AI_RPC")
     finally:
         code = await worker.terminate()
@@ -218,6 +314,8 @@ async def test_a_worker_with_the_local_model_off_refuses_complete_at_once(
     assert code == 0, worker.tail()
     assert off == {"ok": False, "error": "internal"}
     assert off_s < OFF_REPLY_S
+    handed_on = [event for event in worker.events() if event.get("event") == "rpc_handed_on"]
+    assert [event["num_delivered"] for event in handed_on] == list(range(1, HAND_OVERS + 1))
     assert resolved["ok"] is True
     assert left == 0
     spawned = [event for event in worker.events() if event.get("event") == "engine_spawned"]
@@ -232,13 +330,4 @@ async def test_a_worker_with_the_local_model_off_refuses_complete_at_once(
 async def live_call(live: Live, subject: str, window_s: float) -> dict[str, object]:
     payload = samples.RPC_REQUESTS[subject]
     assert live.contract.validate(subject, payload) == [], payload
-    inbox = f"_INBOX.e2e.{uuid.uuid4().hex}"
-    subscription: Subscription = await live.admin.subscribe(inbox, max_msgs=1)
-    headers = {
-        "Nats-Msg-Id": f"rpc:resolve:{uuid.uuid4().hex}",
-        "X-Reply-To": inbox,
-        "X-Deadline": str(int((time.time() + window_s) * 1000)),
-    }
-    await live.js.publish(subject, json.dumps(payload).encode(), headers=headers)
-    reply: dict[str, object] = json.loads((await subscription.next_msg(REPLY_TIMEOUT_S)).data)
-    return reply
+    return (await call(live, subject, json.dumps(payload).encode(), window_s)).body

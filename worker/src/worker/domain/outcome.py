@@ -207,5 +207,9 @@ class TransientFailure(Failure):
         return Outcome.failed(self.reason, self.detail, **fields)
 
 
+class NotServedHere(TransientFailure):
+    pass
+
+
 class LeaseDropped(Exception):
     pass

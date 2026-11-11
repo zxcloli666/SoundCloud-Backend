@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
@@ -19,6 +20,8 @@ from nats.aio.client import Client
 from nats.js import JetStreamContext
 from nats.js.manager import JetStreamManager
 
+from tests.contract import samples
+from tests.fakes.engines import FakeEngines
 from tests.integration.provision import consumer_config, provision_like_jobs, reset
 from worker.bus.connection import Connection
 from worker.bus.consumers import EX_CONFIG, ConsumerWatch, LaneState
@@ -26,7 +29,9 @@ from worker.bus.inflight import Inflight
 from worker.bus.lane_runner import IDLE_POLL_S, LaneRunner, QueueHandler
 from worker.bus.lease import Leases
 from worker.bus.outbox import Outbox
+from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler
 from worker.contract import Contract, LaneSpec
+from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline, MonotonicClock
 from worker.domain.outcome import Outcome, Producer
 from worker.observability.counters import Counters
@@ -65,6 +70,14 @@ PICKUP_LIMIT_S = 0.5
 COLLAB_TASKS = 3
 PULLS_WATCHED_S = 3.0
 PULLS_ALLOWED = 2 * int(PULLS_WATCHED_S / IDLE_POLL_S)
+COMPLETE = "ai.rpc.complete"
+LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
+LOCAL_ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
+LOCAL_CALLS = 6
+CALL_WINDOW_S = 20.0
+REPLY_WAIT_S = 10.0
+HAND_OVERS = 4
+NO_TIME_S = PROCESS_MARGIN_S + REPLY_MARGIN_S
 DRIFT_SCRIPT = """
 import asyncio, sys
 from pathlib import Path
@@ -176,6 +189,13 @@ class Worker:
 
 
 @dataclass
+class Answer:
+    body: dict[str, object]
+    deliveries: int
+    seconds: float
+
+
+@dataclass
 class Pulls:
     allowed: int
     asked: int = 0
@@ -224,7 +244,11 @@ async def live(contract: Contract, settings: Settings) -> AsyncIterator[Live]:
 
 
 async def build_worker(
-    live: Live, lane_name: str, url: str | None = None, capacity: int = 2
+    live: Live,
+    lane_name: str,
+    url: str | None = None,
+    capacity: int = 2,
+    local_model: bool | None = None,
 ) -> Worker:
     _, section = nats_section(url or live.url, live.settings)
     lane = live.contract.lane(lane_name)
@@ -240,11 +264,40 @@ async def build_worker(
     processor = HoldingProcessor()
     sync_version = LIVE_SYNC_VERSION if lane_name == "transcribe" else None
     producer = Producer("live-worker", "live", {"mert": "m@1", "clap": "c@1"}, sync_version)
-    handler = QueueHandler(
+    handler: RpcHandler | QueueHandler = QueueHandler(
         lane, processor, leases, Inflight(), outbox, watch, live.contract, producer, counters, clock
     )
+    if local_model is not None:
+        methods = {"complete": completer(live, local_model, counters).complete}
+        handler = RpcHandler(
+            lane, methods, leases, connection, live.contract, counters, clock, "live-worker", "live"
+        )
     runner = LaneRunner(lane, watch, handler, js, connection, outbox, capacity, counters, clock)
     return Worker(connection, counters, watch, runner, outbox, processor)
+
+
+def completer(live: Live, enabled: bool, counters: Counters) -> Completer:
+    engines = FakeEngines()
+    engines.completion = dataclasses.replace(engines.completion, text=LOCAL_ANSWER)
+    local = dataclasses.replace(live.settings.llm.local, enabled=enabled)
+    return Completer(engines, live.contract.complete_limits, local, LOCAL_MODEL, counters)
+
+
+async def call_complete(live: Live, window_s: float) -> Answer:
+    inbox = f"_INBOX.live.{uuid.uuid4().hex}"
+    replies = await live.admin.subscribe(inbox, max_msgs=1)
+    headers = {
+        "Nats-Msg-Id": f"rpc:complete:{uuid.uuid4().hex}",
+        live.contract.rpc.reply_header: inbox,
+        live.contract.rpc.deadline_header: str(int((time.time() + window_s) * 1000)),
+    }
+    body = json.dumps(samples.RPC_REQUESTS[COMPLETE]).encode()
+    started = time.monotonic()
+    await live.js.publish(COMPLETE, body, headers=headers)
+    reply = await replies.next_msg(REPLY_WAIT_S)
+    seconds = time.monotonic() - started
+    deliveries = int((reply.headers or {})[live.contract.headers.deliveries])
+    return Answer(json.loads(reply.data), deliveries, seconds)
 
 
 async def test_ok_task_is_published_once_and_acked(live: Live) -> None:
@@ -337,6 +390,60 @@ async def test_a_worker_whose_pull_the_server_refuses_asks_again_after_a_pause(l
         await refused.close()
     assert asked <= PULLS_ALLOWED
     assert sum(failures) >= 1
+
+
+async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_the_other(
+    live: Live,
+) -> None:
+    without = await build_worker(live, "ai", capacity=16, local_model=False)
+    having = await build_worker(live, "ai", capacity=16, local_model=True)
+    try:
+        for worker in (without, having):
+            assert await worker.watch.verify_at_start() is LaneState.SERVING
+            worker.start()
+        await wait_for(partial(_waiting, live, "ai", 2))
+        answers = [await call_complete(live, CALL_WINDOW_S) for _ in range(LOCAL_CALLS)]
+        await wait_for(partial(_left, live, "AI_RPC", 0))
+    finally:
+        await without.close()
+        await having.close()
+    handed_on = without.counters.value("rpc_handed_on_total", method="complete")
+    assert [answer.body["ok"] for answer in answers] == [True] * LOCAL_CALLS, answers
+    assert handed_on >= 1
+    assert sum(answer.deliveries - 1 for answer in answers) == handed_on
+    assert max(answer.seconds for answer in answers) < PICKUP_LIMIT_S, answers
+    assert without.counters.total("rpc_replies_total") == 0
+
+
+async def test_a_call_no_worker_can_serve_is_answered_once_after_four_hand_overs(
+    live: Live,
+) -> None:
+    workers = [await build_worker(live, "ai", capacity=16, local_model=False) for _ in range(2)]
+    try:
+        for worker in workers:
+            assert await worker.watch.verify_at_start() is LaneState.SERVING
+            worker.start()
+        await wait_for(partial(_waiting, live, "ai", 2))
+        unserved = await call_complete(live, CALL_WINDOW_S)
+        hurried = await call_complete(live, NO_TIME_S)
+        await wait_for(partial(_left, live, "AI_RPC", 0))
+    finally:
+        for worker in workers:
+            await worker.close()
+    handed_on = [
+        worker.counters.value("rpc_handed_on_total", method="complete") for worker in workers
+    ]
+    assert unserved.body == {"ok": False, "error": "internal"}
+    assert (unserved.deliveries, sum(handed_on)) == (HAND_OVERS + 1, HAND_OVERS)
+    assert unserved.seconds < PICKUP_LIMIT_S
+    assert hurried.body == {"ok": False, "error": "internal"}
+    assert hurried.deliveries == 1
+    assert hurried.seconds < PICKUP_LIMIT_S
+
+
+async def _waiting(live: Live, lane_name: str, pulls: int) -> bool:
+    lane = live.contract.lane(lane_name)
+    return (await live.jsm.consumer_info(lane.stream, lane.durable)).num_waiting == pulls
 
 
 async def _called(count: int, *workers: Worker) -> bool:
