@@ -23,6 +23,7 @@ from worker.bus.outbox import (
     PublishTimedOut,
     encode,
 )
+from worker.bus.pull import pulled
 from worker.contract import Contract, ContractError, LaneSpec
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.outcome import (
@@ -39,8 +40,7 @@ from worker.observability.counters import Counters
 
 log = logging.getLogger("worker.bus.lane_runner")
 
-FETCH_TIMEOUT_S = 5.0
-FETCH_HEARTBEAT_S = 2.0
+PULL_EXPIRES_S = 5.0
 IDLE_POLL_S = 1.0
 FETCH_ERROR_PAUSE_S = 1.0
 PUBLISH_GIVE_UP_S = 60.0
@@ -121,8 +121,7 @@ class LaneRunner:
             if free <= 0:
                 await self._wait_for_room()
                 continue
-            for msg in await self._fetch(free):
-                self._spawn(msg)
+            await self._pull(free)
 
     def stop_fetching(self) -> None:
         self._stop.set()
@@ -178,21 +177,17 @@ class LaneRunner:
             "task_p95_ms": task_ms["p95"],
         }
 
-    async def _fetch(self, batch: int) -> list[Msg]:
+    async def _pull(self, batch: int) -> None:
         subscription = await self._bound()
         if subscription is None:
-            return []
+            return
         try:
-            return await subscription.fetch(
-                batch=batch, timeout=FETCH_TIMEOUT_S, heartbeat=FETCH_HEARTBEAT_S
-            )
-        except TimeoutError:
-            return []
+            async for msg in pulled(subscription, batch, PULL_EXPIRES_S, self._clock):
+                self._spawn(msg)
         except (nats.js.errors.Error, nats.errors.Error, ValueError) as error:
             self._counters.inc("fetch_failures_total", lane=self.lane.name)
             log.warning("fetch_failed", extra={"lane": self.lane.name, "error": str(error)})
             await sleep_unless(self._clock, FETCH_ERROR_PAUSE_S, self._stop)
-            return []
 
     async def _bound(self) -> JetStreamContext.PullSubscription | None:
         if self._subscription is not None:

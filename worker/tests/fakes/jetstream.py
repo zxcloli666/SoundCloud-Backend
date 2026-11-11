@@ -16,6 +16,8 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.object_store import FakeObjectStore
 
 PERMISSIONS_VIOLATION = "nats: Permissions Violation for Publish to"
+PULL_PREFIX = "$JS.API.CONSUMER.MSG.NEXT."
+NANOS_PER_S = 1_000_000_000
 
 
 class ForbiddenCall(AssertionError):
@@ -247,6 +249,9 @@ class FakePullSubscription:
         self._bus = bus
         self._consumer = consumer
         self._sub = FakePending()
+        self._nc = bus
+        self._nms = f"{PULL_PREFIX}{consumer.stream.name}.{consumer.durable}"
+        self._deliver = f"_INBOX.fake.{id(self)}"
         self.fetches: list[tuple[int, float | None, float | None]] = []
         self.active = True
 
@@ -300,6 +305,15 @@ class FakePending:
     def put(self, message: FakeMsg | Msg) -> None:
         self._pending_queue.put_nowait(message)
         self._pending_size += len(message.data)
+
+    async def next_msg(self, timeout: float | None = 1.0) -> FakeMsg | Msg:
+        await asyncio.sleep(0)
+        if self._pending_queue.empty():
+            raise nats.errors.TimeoutError
+        message = self._pending_queue.get_nowait()
+        self._pending_queue.task_done()
+        self._pending_size -= len(message.data)
+        return message
 
 
 class FakeJetStream:
@@ -586,11 +600,28 @@ class FakeNats:
     ) -> None:
         if self.closed:
             raise nats.errors.ConnectionClosedError
+        if subject.startswith(PULL_PREFIX):
+            await self._serve_pull(reply, payload)
+            return
         record = (subject, payload, dict(headers) if headers else None)
         if self.is_connected:
             self.core_published.append(record)
         else:
             self._buffered.append(lambda: self.core_published.append(record))
+
+    async def _serve_pull(self, reply: str, payload: bytes) -> None:
+        await asyncio.sleep(0)
+        subscription = next(bound for bound in self.bound if bound._deliver == reply)
+        request = json.loads(payload)
+        batch = int(request["batch"])
+        subscription.fetches.append((batch, int(request["expires"]) / NANOS_PER_S, None))
+        if not self.is_connected or not subscription.active:
+            return
+        messages = self.deliver_due(subscription._consumer, batch)
+        for message in messages:
+            subscription._sub.put(message)
+        if len(messages) < batch:
+            self.linger_status(subscription, "404" if messages else "408")
 
     async def subscribe(
         self,

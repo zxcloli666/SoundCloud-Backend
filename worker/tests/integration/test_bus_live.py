@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -37,6 +38,30 @@ WORKER_ROOT = Path(__file__).resolve().parents[2]
 AUDIO_TASK = {"sc_track_id": "42", "s3_url": "https://s3/x", "upload_generation": 1, "attempt": 1}
 LYRICS_TASK = {"sc_track_id": "42", "request_id": "lyr:42:1", "text": "la la", "language": None}
 LIVE_SYNC_VERSION = "s4.live0001.live0002.live0003"
+IDLE_GAPS_S = (
+    0.0,
+    0.0,
+    0.05,
+    0.3,
+    1.0,
+    2.5,
+    0.0,
+    4.9,
+    5.1,
+    0.0,
+    0.2,
+    6.0,
+    0.0,
+    0.0,
+    3.0,
+    0.0,
+    7.5,
+    0.1,
+    5.5,
+    0.0,
+    0.0,
+)
+PICKUP_LIMIT_S = 0.5
 DRIFT_SCRIPT = """
 import asyncio, sys
 from pathlib import Path
@@ -87,9 +112,11 @@ class HoldingProcessor:
         self.release = asyncio.Event()
         self.release.set()
         self.calls = 0
+        self.picked: dict[str, float] = {}
 
     async def process(self, request: Mapping[str, object], deadline: Deadline) -> Outcome:
         self.calls += 1
+        self.picked[str(request.get("request_id"))] = time.monotonic()
         self.started.set()
         await self.release.wait()
         return Outcome.ok(mert=[0.0] * 1024, clap=[0.0] * 512, fingerprint=None)
@@ -211,6 +238,30 @@ async def test_ok_task_is_published_once_and_acked(live: Live) -> None:
         assert worker.counters.value("done_total", lane="audio", status="ok") == 1
     finally:
         await worker.close()
+
+
+async def test_a_task_after_an_idle_spell_is_picked_up_at_once(live: Live) -> None:
+    lane = live.contract.lane("lyrics")
+    worker = await build_worker(live, "lyrics", capacity=16)
+    delays = []
+    try:
+        assert await worker.watch.verify_at_start() is LaneState.SERVING
+        worker.start()
+        for index, gap in enumerate(IDLE_GAPS_S):
+            await asyncio.sleep(gap)
+            request_id = f"lyr:{index}:1"
+            task = {**LYRICS_TASK, "sc_track_id": str(index), "request_id": request_id}
+            sent = time.monotonic()
+            await live.publish_task(lane, task, request_id)
+            await wait_for(partial(_picked, worker, request_id))
+            delays.append(round(worker.processor.picked[request_id] - sent, 3))
+    finally:
+        await worker.close()
+    assert max(delays) < PICKUP_LIMIT_S, list(zip(IDLE_GAPS_S, delays, strict=True))
+
+
+async def _picked(worker: Worker, request_id: str) -> bool:
+    return request_id in worker.processor.picked
 
 
 async def _done(live: Live, count: int) -> bool:
