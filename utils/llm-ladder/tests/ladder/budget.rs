@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::bench::any_text;
 use crate::vendor::{self, COMPLETIONS, MESSAGES, Reply, Seen, Vendor};
 use crate::{ANSWER, NoHostSections};
 use async_nats::jetstream::{self, kv};
@@ -10,28 +12,31 @@ use llm_ladder::{
     Event, Hosting, Ladder, LadderError, Ladders, Message, Request, Schema, Settings, System,
 };
 
+static BUCKETS: AtomicUsize = AtomicUsize::new(0);
+
 const ANSWER_COST: u64 = 2_800;
 const USERS: usize = 3;
 const ANSWERS_PER_USER: usize = 12;
 
-struct Host {
-    ladders: Ladders,
-    seen: Arc<Seen>,
+pub struct Host {
+    pub ladders: Ladders,
+    pub seen: Arc<Seen>,
 }
 
 fn nats_url() -> String {
     std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned())
 }
 
-fn bucket() -> String {
+pub fn bucket() -> String {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_micros();
-    format!("spend_test_{micros}")
+    let nth = BUCKETS.fetch_add(1, Ordering::Relaxed);
+    format!("spend_test_{micros}_{nth}")
 }
 
-async fn context() -> jetstream::Context {
+pub async fn context() -> jetstream::Context {
     jetstream::new(async_nats::connect(nats_url()).await.expect("nats"))
 }
 
@@ -65,7 +70,7 @@ async fn vendor() -> Vendor {
     vendor
 }
 
-async fn host(config: &str) -> Host {
+pub async fn host(config: &str) -> Host {
     let (settings, _): (Settings, NoHostSections) =
         Settings::parse(config).expect("a valid config");
     let seen = Arc::new(Seen::default());
@@ -80,7 +85,7 @@ async fn host(config: &str) -> Host {
     }
 }
 
-fn request(user: &str) -> Request {
+pub fn request(user: &str) -> Request {
     Request {
         system: System::fixed("Answer with one JSON object."),
         messages: vec![Message::user("hi")],
@@ -90,8 +95,8 @@ fn request(user: &str) -> Request {
     }
 }
 
-async fn winner(ladder: &Arc<Ladder>, user: &str) -> Result<String, LadderError> {
-    let mut events = ladder.stream(request(user)).await?;
+pub async fn winner(ladder: &Arc<Ladder>, user: &str) -> Result<String, LadderError> {
+    let mut events = ladder.stream(request(user), any_text()).await?;
     while let Some(event) = events.next().await {
         if let Event::Done(outcome) = event? {
             return Ok(outcome.provider);
@@ -100,7 +105,7 @@ async fn winner(ladder: &Arc<Ladder>, user: &str) -> Result<String, LadderError>
     Err(LadderError::ProviderFailed)
 }
 
-async fn spent(store: &kv::Store, prefix: &str) -> u64 {
+pub async fn spent(store: &kv::Store, prefix: &str) -> u64 {
     let keys: Vec<String> = store.keys().await.unwrap().try_collect().await.unwrap();
     let mut total = 0;
     for key in keys.iter().filter(|key| key.starts_with(prefix)) {
@@ -110,7 +115,7 @@ async fn spent(store: &kv::Store, prefix: &str) -> u64 {
     total
 }
 
-async fn settles(store: &kv::Store, prefix: &str, expected: u64) -> u64 {
+pub async fn settles(store: &kv::Store, prefix: &str, expected: u64) -> u64 {
     let limit = Instant::now() + Duration::from_secs(10);
     loop {
         let total = spent(store, prefix).await;

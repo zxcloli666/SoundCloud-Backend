@@ -113,7 +113,10 @@ fn request(user: Option<&str>) -> Request {
 
 async fn measure(ladder: &Arc<Ladder>, user: Option<&str>) -> Measured {
     let started = Instant::now();
-    let mut events = ladder.stream(request(user)).await.expect("a step is open");
+    let mut events = ladder
+        .stream(request(user), Arc::new(|_| true))
+        .await
+        .expect("a step is open");
     let mut document = String::new();
     let mut first_delta = None;
     let mut deltas = 0;

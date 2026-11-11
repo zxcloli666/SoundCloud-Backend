@@ -1,198 +1,36 @@
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
-use crate::vendor::{self, COMPLETIONS, MESSAGES, Reply, Seen, Step, Vendor};
-use crate::{ANSWER, NoHostSections};
-use bytes::Bytes;
-use futures::StreamExt;
-use futures::future::BoxFuture;
-use llm_ladder::{
-    Completion, Event, Hosting, Ladder, LadderError, Ladders, Message, Outcome, Request, Schema,
-    Section, Settings, System, Usage, WorkerError, WorkerTransport,
+use crate::ANSWER;
+use crate::bench::{
+    KEY, PIECES, Said, answer, answer_held_back, bench, http_provider, ladder, request, step,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use crate::vendor::{self, COMPLETIONS, MESSAGES, Reply, Vendor};
+use llm_ladder::{Completion, Usage};
+use serde_json::json;
 
-const KEY: &str = "llm-ladder";
-const PIECES: [&str; 3] = ["{\"say\":", "\"hello ", "there\"}"];
-const PIECE_GAP: Duration = Duration::from_millis(150);
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct Said {
-    say: String,
-}
-
-struct Bench {
-    ladders: Ladders,
-    seen: Arc<Seen>,
-}
-
-struct Answer {
-    document: String,
-    outcome: Result<Outcome, LadderError>,
-    first_delta: Option<Duration>,
-    finished: Duration,
-    deltas: usize,
-}
-
-#[derive(Default)]
-struct LocalModel {
-    reply: Mutex<Option<Result<Value, WorkerError>>>,
-    calls: Mutex<Vec<(String, Value, Duration)>>,
-}
-
-impl WorkerTransport for LocalModel {
-    fn call<'a>(
-        &'a self,
-        subject: &'a str,
-        payload: Bytes,
-        timeout: Duration,
-    ) -> BoxFuture<'a, Result<Value, WorkerError>> {
-        Box::pin(async move {
-            let payload = serde_json::from_slice(&payload).expect("the payload is JSON");
-            self.calls
-                .lock()
-                .unwrap()
-                .push((subject.to_owned(), payload, timeout));
-            self.reply
-                .lock()
-                .unwrap()
-                .clone()
-                .expect("the test set a reply")
-        })
-    }
-}
-
-fn http_provider(id: &str, kind: &str, url: &str, model: &str, more: &str) -> String {
-    format!(
-        "[providers.{id}]\nkind = \"{kind}\"\nendpoint = \"{url}\"\nmodel = \"{model}\"\n\
-         api_key = \"env:CARGO_PKG_NAME\"\nmax_output_tokens = 600\ntotal_timeout_ms = 4000\n{more}\n"
-    )
-}
-
-fn ladder(id: &str, steps: &[&str], hedge_after_ms: u64) -> String {
-    let steps: Vec<String> = steps.iter().map(|step| format!("\"{step}\"")).collect();
-    format!(
-        "[ladders.{id}]\nsteps = [{}]\nhedge_after_ms = {hedge_after_ms}\ndeadline_ms = 8000\n\
-         breaker = {{ failures = 3, window_s = 30, open_s = 90 }}\n",
-        steps.join(", ")
-    )
-}
-
-fn bench(config: &str, worker: Option<Arc<dyn WorkerTransport>>) -> Bench {
-    let (settings, _): (Settings, NoHostSections) =
-        Settings::parse(config).expect("a valid config");
-    let seen = Arc::new(Seen::default());
-    let hosting = Hosting {
-        jetstream: None,
-        worker,
-        observer: seen.clone(),
-    };
-    Bench {
-        ladders: Ladders::build(&settings, hosting).expect("the ladders are built"),
-        seen,
-    }
-}
-
-fn request() -> Request {
-    Request {
-        system: System {
-            sections: vec![
-                Section::shared("Answer with one JSON object."),
-                Section::shared("Speak as Loli."),
-                Section::own("The volume is 60."),
-            ],
-        },
-        messages: vec![
-            Message::user("hi"),
-            Message::assistant("hello"),
-            Message::user("how are you"),
-        ],
-        schema: Schema::object([
-            ("say", Schema::String),
-            ("mood", Schema::one_of(["calm", "glad"])),
-        ]),
-        budget_user: None,
-        deadline: None,
-    }
-}
-
-async fn answer(ladder: &Arc<Ladder>) -> Answer {
-    let started = Instant::now();
-    let mut answer = Answer {
-        document: String::new(),
-        outcome: Err(LadderError::Unavailable),
-        first_delta: None,
-        finished: Duration::ZERO,
-        deltas: 0,
-    };
-    match ladder.stream(request()).await {
-        Ok(mut events) => {
-            while let Some(event) = events.next().await {
-                match event {
-                    Ok(Event::Delta(delta)) => {
-                        answer.first_delta.get_or_insert(started.elapsed());
-                        answer.deltas += 1;
-                        answer.document.push_str(&delta);
-                    }
-                    Ok(Event::Done(outcome)) => answer.outcome = Ok(outcome),
-                    Err(error) => answer.outcome = Err(error),
-                }
-            }
-        }
-        Err(error) => answer.outcome = Err(error),
-    }
-    answer.finished = started.elapsed();
-    answer
-}
-
-fn step(provider: &str, result: &'static str, usage: (u64, u64), cost_micro_usd: u64) -> Step {
-    Step {
-        provider: provider.to_owned(),
-        result,
-        usage: Usage {
-            input_tokens: usage.0,
-            output_tokens: usage.1,
-            ..Usage::default()
-        },
-        cost_micro_usd,
-    }
-}
-
-fn results(pairs: &[(&str, &'static str)]) -> Vec<(String, &'static str)> {
-    pairs
-        .iter()
-        .map(|(provider, result)| ((*provider).to_owned(), *result))
-        .collect()
-}
+const LAST_PIECE: usize = 5;
 
 #[tokio::test]
 async fn a_messages_stream_is_asked_in_its_wire_shape_and_read_piece_by_piece() {
     let vendor = Vendor::open().await;
     vendor.model(
         "stream-model",
-        Reply::Events(vendor::message_events(&PIECES, 1_000, 100)),
+        Reply::Gated(vendor::message_events(&PIECES, 1_000, 100), LAST_PIECE),
     );
     let config = http_provider(
         "paid",
         "anthropic_compatible",
         &vendor.url(MESSAGES),
         "stream-model",
-        "input_usd_per_mtok = 2.0\noutput_usd_per_mtok = 8.0\nbody = { max_tokens = 300, output_config = { effort = \"low\" } }",
+        "input_usd_per_mtok = 2.0\noutput_usd_per_mtok = 8.0\nheaders = { \"example-version\" = \"2001-01-01\" }\n\
+         body = { max_tokens = 300, output_config = { effort = \"low\" } }",
     ) + &ladder("chat", &["paid"], 500);
     let bench = bench(&config, None);
 
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
+    let early = format!("{}{}", PIECES[0], PIECES[1]);
+    let answer = answer_held_back(&bench.ladders.get("chat").unwrap(), &vendor, &early).await;
 
     let outcome = answer.outcome.unwrap();
     assert_eq!(answer.document, ANSWER);
     assert_eq!(answer.deltas, 3);
-    assert!(
-        answer.finished - answer.first_delta.unwrap() >= PIECE_GAP,
-        "pieces arrive as they are sent, not all at the end: {answer_first:?} then {answer_end:?}",
-        answer_first = answer.first_delta,
-        answer_end = answer.finished
-    );
     assert_eq!(outcome.provider, "paid");
     assert_eq!(
         outcome.usage,
@@ -213,7 +51,8 @@ async fn a_messages_stream_is_asked_in_its_wire_shape_and_read_piece_by_piece() 
     let call = &calls[0];
     assert_eq!(call.path, MESSAGES);
     assert_eq!(call.header("x-api-key"), Some(KEY));
-    assert_eq!(call.header("anthropic-version"), Some("2026-10-21"));
+    assert_eq!(call.header("example-version"), Some("2001-01-01"));
+    assert_eq!(call.header("anthropic-version"), None);
     assert_eq!(call.header("content-type"), Some("application/json"));
     assert_eq!(call.header("authorization"), None);
     assert_eq!(
@@ -381,7 +220,7 @@ async fn a_chat_completions_stream_is_asked_in_its_wire_shape_and_reasoning_is_d
     let fenced = ["```json\n{\"say\":", "\"hello ", "there\"}\n```"];
     vendor.model(
         "stream-model",
-        Reply::Events(vendor::completion_chunks(&fenced, Some((90, 120)))),
+        Reply::Gated(vendor::completion_chunks(&fenced, Some((90, 120))), 3),
     );
     let config = http_provider(
         "proxy",
@@ -392,12 +231,12 @@ async fn a_chat_completions_stream_is_asked_in_its_wire_shape_and_reasoning_is_d
     ) + &ladder("chat", &["proxy"], 500);
     let bench = bench(&config, None);
 
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
+    let early = format!("{}{}", PIECES[0], PIECES[1]);
+    let answer = answer_held_back(&bench.ladders.get("chat").unwrap(), &vendor, &early).await;
 
     let outcome = answer.outcome.unwrap();
     assert_eq!(answer.document, ANSWER);
     assert_eq!(answer.deltas, 3);
-    assert!(answer.finished - answer.first_delta.unwrap() >= PIECE_GAP);
     assert_eq!(
         outcome.usage,
         Usage {
@@ -467,360 +306,4 @@ async fn a_chat_completions_one_shot_answer_without_usage_still_reads() {
     assert_eq!(completion.outcome.usage, Usage::default());
     let body = vendor.calls()[0].json();
     assert!(body.get("stream").is_none() && body.get("stream_options").is_none());
-}
-
-#[tokio::test]
-async fn a_refused_call_and_a_bad_answer_fall_through_to_the_next_step() {
-    let vendor = Vendor::open().await;
-    vendor.model(
-        "down-model",
-        Reply::Status(
-            529,
-            json!({"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}),
-        ),
-    );
-    vendor.model(
-        "prose-model",
-        Reply::Whole(
-            0,
-            vendor::whole_completion("I would rather chat in prose.", Some((5, 7))),
-        ),
-    );
-    vendor.model(
-        "good-model",
-        Reply::Events(vendor::completion_chunks(&PIECES, None)),
-    );
-    let config = http_provider(
-        "down",
-        "anthropic_compatible",
-        &vendor.url(MESSAGES),
-        "down-model",
-        "",
-    ) + &http_provider(
-        "prose",
-        "openai_compatible",
-        &vendor.url(COMPLETIONS),
-        "prose-model",
-        "stream = false",
-    ) + &http_provider(
-        "good",
-        "openai_compatible",
-        &vendor.url(COMPLETIONS),
-        "good-model",
-        "",
-    ) + &ladder("chat", &["down", "prose", "good"], 3_000);
-    let bench = bench(&config, None);
-
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
-
-    assert_eq!(answer.document, ANSWER);
-    assert_eq!(answer.outcome.unwrap().provider, "good");
-    assert!(
-        answer.finished < Duration::from_millis(2_500),
-        "a failure does not wait for the hedge: {:?}",
-        answer.finished
-    );
-    assert_eq!(
-        bench.seen.results(),
-        results(&[
-            ("down", "failed_status"),
-            ("prose", "failed_invalid"),
-            ("good", "won")
-        ])
-    );
-}
-
-#[tokio::test]
-async fn a_line_cut_in_the_middle_of_an_answer_fails_the_request() {
-    let vendor = Vendor::open().await;
-    let mut cut = vendor::message_events(&PIECES, 1_000, 100);
-    cut.truncate(5);
-    vendor.model("cut-model", Reply::Breaks(cut));
-    vendor.model(
-        "spare-model",
-        Reply::Events(vendor::completion_chunks(&PIECES, None)),
-    );
-    let config = http_provider(
-        "cut",
-        "anthropic_compatible",
-        &vendor.url(MESSAGES),
-        "cut-model",
-        "",
-    ) + &http_provider(
-        "spare",
-        "openai_compatible",
-        &vendor.url(COMPLETIONS),
-        "spare-model",
-        "",
-    ) + &ladder("chat", &["cut", "spare"], 3_000);
-    let bench = bench(&config, None);
-
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
-
-    assert_eq!(answer.document, "{\"say\":\"hello ");
-    assert_eq!(answer.outcome, Err(LadderError::ProviderFailed));
-    assert_eq!(
-        bench.seen.results(),
-        results(&[("cut", "failed_transport")])
-    );
-    assert!(vendor.calls_of("spare-model").is_empty());
-}
-
-#[tokio::test]
-async fn a_silent_provider_is_hedged_and_hung_up_on_once_the_other_speaks() {
-    let vendor = Vendor::open().await;
-    vendor.model(
-        "silent-model",
-        Reply::Whole(30_000, vendor::whole_message(ANSWER, 1, 1)),
-    );
-    vendor.model(
-        "quick-model",
-        Reply::Events(vendor::completion_chunks(&PIECES, None)),
-    );
-    let config = http_provider(
-        "silent",
-        "anthropic_compatible",
-        &vendor.url(MESSAGES),
-        "silent-model",
-        "stream = false",
-    ) + &http_provider(
-        "quick",
-        "openai_compatible",
-        &vendor.url(COMPLETIONS),
-        "quick-model",
-        "",
-    ) + &ladder("chat", &["silent", "quick"], 200);
-    let bench = bench(&config, None);
-
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
-
-    assert_eq!(answer.document, ANSWER);
-    assert_eq!(answer.outcome.unwrap().provider, "quick");
-    assert!(answer.first_delta.unwrap() >= Duration::from_millis(200));
-    assert!(
-        answer.finished < Duration::from_millis(3_500),
-        "{:?}",
-        answer.finished
-    );
-    assert_eq!(
-        bench.seen.results(),
-        results(&[("silent", "lost"), ("quick", "won")])
-    );
-    assert!(
-        vendor.hung_up(1).await,
-        "the losing call is closed on the wire"
-    );
-}
-
-#[tokio::test]
-async fn dropping_the_answer_hangs_up_on_the_provider() {
-    let vendor = Vendor::open().await;
-    let mut opening = vendor::message_events(&PIECES, 1_000, 100);
-    opening.truncate(4);
-    vendor.model("talking-model", Reply::Stalls(opening));
-    let config = http_provider(
-        "talker",
-        "anthropic_compatible",
-        &vendor.url(MESSAGES),
-        "talking-model",
-        "input_usd_per_mtok = 2.0",
-    ) + &ladder("chat", &["talker"], 500);
-    let bench = bench(&config, None);
-
-    let mut events = bench
-        .ladders
-        .get("chat")
-        .unwrap()
-        .stream(request())
-        .await
-        .unwrap();
-    assert_eq!(
-        events.next().await,
-        Some(Ok(Event::Delta("{\"say\":".to_owned())))
-    );
-    drop(events);
-
-    assert!(
-        vendor.hung_up(1).await,
-        "the provider call is closed on the wire"
-    );
-    assert_eq!(
-        bench.seen.steps(),
-        [step("talker", "cancelled", (1_000, 1), 2_000)]
-    );
-}
-
-#[tokio::test]
-async fn a_stream_that_stalls_past_the_step_timeout_fails_the_request() {
-    let vendor = Vendor::open().await;
-    let mut opening = vendor::completion_chunks(&PIECES, None);
-    opening.truncate(2);
-    vendor.model("stalling-model", Reply::Stalls(opening));
-    let config = http_provider(
-        "staller",
-        "openai_compatible",
-        &vendor.url(COMPLETIONS),
-        "stalling-model",
-        "",
-    )
-    .replace("total_timeout_ms = 4000", "total_timeout_ms = 600")
-        + &ladder("chat", &["staller"], 500);
-    let bench = bench(&config, None);
-
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
-
-    assert_eq!(answer.outcome, Err(LadderError::ProviderFailed));
-    assert!(
-        answer.finished >= Duration::from_millis(600) && answer.finished < Duration::from_secs(4)
-    );
-    assert_eq!(
-        bench.seen.results(),
-        results(&[("staller", "failed_timeout")])
-    );
-    assert!(vendor.hung_up(1).await);
-}
-
-#[tokio::test]
-async fn a_provider_whose_secret_is_unset_is_left_out_of_its_ladders() {
-    let vendor = Vendor::open().await;
-    vendor.model(
-        "good-model",
-        Reply::Events(vendor::completion_chunks(&PIECES, None)),
-    );
-    let config = http_provider(
-        "keyless",
-        "anthropic_compatible",
-        &vendor.url(MESSAGES),
-        "good-model",
-        "",
-    )
-    .replace("env:CARGO_PKG_NAME", "env:LLM_LADDER_TEST_UNSET_KEY")
-        + &http_provider(
-            "keyed",
-            "openai_compatible",
-            &vendor.url(COMPLETIONS),
-            "good-model",
-            "",
-        )
-        + &ladder("mixed", &["keyless", "keyed"], 500)
-        + &ladder("empty", &["keyless"], 500);
-    let bench = bench(&config, None);
-
-    let answer = answer(&bench.ladders.get("mixed").unwrap()).await;
-    assert_eq!(answer.outcome.unwrap().provider, "keyed");
-    assert_eq!(bench.seen.results(), results(&[("keyed", "won")]));
-    assert_eq!(vendor.calls().len(), 1);
-
-    let unavailable = bench.ladders.get("empty").unwrap().stream(request()).await;
-    assert_eq!(unavailable.err(), Some(LadderError::Unavailable));
-    assert!(bench.ladders.get("unknown").is_none());
-}
-
-#[tokio::test]
-async fn the_worker_kind_sends_the_contract_payload_and_reads_the_reply() {
-    let local = Arc::new(LocalModel::default());
-    *local.reply.lock().unwrap() = Some(Ok(json!({
-        "text": format!("<think>short</think>{ANSWER}"),
-        "model": "local-example",
-        "input_tokens": 40,
-        "output_tokens": 9,
-    })));
-    let config = "[providers.local]\nkind = \"worker\"\nsubject = \"ai.rpc.complete\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n"
-        .to_owned()
-        + &ladder("chat", &["local"], 500);
-    let bench = bench(&config, Some(local.clone()));
-
-    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
-
-    assert_eq!((answer.document.as_str(), answer.deltas), (ANSWER, 1));
-    assert_eq!(
-        answer.outcome.unwrap().usage,
-        Usage {
-            input_tokens: 40,
-            output_tokens: 9,
-            ..Usage::default()
-        }
-    );
-    let calls = local.calls.lock().unwrap();
-    let (subject, payload, timeout) = &calls[0];
-    assert_eq!(subject, "ai.rpc.complete");
-    assert_eq!(*timeout, Duration::from_secs(5));
-    assert_eq!(
-        *payload,
-        json!({
-            "system": "Answer with one JSON object.\n\nSpeak as Loli.\n\nThe volume is 60.",
-            "messages": [
-                {"role": "user", "content": "hi"},
-                {"role": "assistant", "content": "hello"},
-                {"role": "user", "content": "how are you"},
-            ],
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "say": {"type": "string"},
-                    "mood": {"type": "string", "enum": ["calm", "glad"]},
-                },
-                "required": ["say", "mood"],
-                "additionalProperties": false,
-            },
-            "max_tokens": 400,
-        })
-    );
-}
-
-#[tokio::test]
-async fn a_request_too_large_for_the_worker_is_never_published() {
-    let local = Arc::new(LocalModel::default());
-    *local.reply.lock().unwrap() = Some(Ok(json!({"text": ANSWER})));
-    let config = "[providers.local]\nkind = \"worker\"\nsubject = \"ai.rpc.complete\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n"
-        .to_owned()
-        + &ladder("chat", &["local"], 500);
-    let bench = bench(&config, Some(local.clone()));
-    let large = Request {
-        system: System::fixed("rules ".repeat(8_001)),
-        ..request()
-    };
-
-    let refused = bench
-        .ladders
-        .get("chat")
-        .unwrap()
-        .complete::<Said>(large)
-        .await;
-
-    assert_eq!(refused.err(), Some(LadderError::Exhausted));
-    assert_eq!(
-        bench.seen.results(),
-        results(&[("local", "failed_invalid")])
-    );
-    assert!(local.calls.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_worker_that_does_not_answer_gives_way_and_no_transport_turns_the_step_off() {
-    let vendor = Vendor::open().await;
-    vendor.model(
-        "good-model",
-        Reply::Events(vendor::completion_chunks(&PIECES, None)),
-    );
-    let local = Arc::new(LocalModel::default());
-    *local.reply.lock().unwrap() = Some(Err(WorkerError::Timeout));
-    let config = "[providers.local]\nkind = \"worker\"\nsubject = \"ai.rpc.complete\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n"
-        .to_owned()
-        + &http_provider("proxy", "openai_compatible", &vendor.url(COMPLETIONS), "good-model", "")
-        + &ladder("chat", &["local", "proxy"], 3_000);
-
-    let with_worker = bench(&config, Some(local.clone()));
-    let answer_after_timeout = answer(&with_worker.ladders.get("chat").unwrap()).await;
-    assert_eq!(answer_after_timeout.outcome.unwrap().provider, "proxy");
-    assert_eq!(
-        with_worker.seen.results(),
-        results(&[("local", "failed_timeout"), ("proxy", "won")])
-    );
-
-    let without_worker = bench(&config, None);
-    let answer_without = answer(&without_worker.ladders.get("chat").unwrap()).await;
-    assert_eq!(answer_without.outcome.unwrap().provider, "proxy");
-    assert_eq!(without_worker.seen.results(), results(&[("proxy", "won")]));
-    assert_eq!(local.calls.lock().unwrap().len(), 1);
 }

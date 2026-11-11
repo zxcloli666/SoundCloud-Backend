@@ -1,6 +1,11 @@
+mod bench;
+mod breaker;
 mod budget;
 mod providers;
+mod races;
+mod spend;
 mod vendor;
+mod worker;
 
 use serde::Deserialize;
 

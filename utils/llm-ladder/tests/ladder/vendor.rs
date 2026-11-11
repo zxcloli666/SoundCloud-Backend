@@ -14,6 +14,7 @@ use axum::routing::post;
 use futures::stream;
 use llm_ladder::{Observer, StepReport, Usage};
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
 pub const MESSAGES: &str = "/v1/messages";
@@ -26,7 +27,9 @@ pub enum Reply {
     Events(Vec<(u64, String)>),
     Stalls(Vec<(u64, String)>),
     Breaks(Vec<(u64, String)>),
+    Gated(Vec<(u64, String)>, usize),
     Whole(u64, Value),
+    GatedWhole(Value),
     Status(u16, Value),
 }
 
@@ -49,15 +52,16 @@ pub struct Seen(Mutex<Vec<Step>>);
 pub struct Step {
     pub provider: String,
     pub result: &'static str,
+    pub basis: &'static str,
     pub usage: Usage,
     pub cost_micro_usd: u64,
 }
 
-#[derive(Default)]
 struct Shared {
     replies: Mutex<HashMap<String, Reply>>,
     calls: Mutex<Vec<Call>>,
     hung_up: AtomicUsize,
+    gate: Semaphore,
 }
 
 struct Line {
@@ -67,7 +71,12 @@ struct Line {
 
 impl Vendor {
     pub async fn open() -> Self {
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            replies: Mutex::default(),
+            calls: Mutex::default(),
+            hung_up: AtomicUsize::new(0),
+            gate: Semaphore::new(0),
+        });
         let app = Router::new()
             .route(MESSAGES, post(answer))
             .route(COMPLETIONS, post(answer))
@@ -90,6 +99,10 @@ impl Vendor {
 
     pub fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.address)
+    }
+
+    pub fn release(&self) {
+        self.shared.gate.add_permits(1);
     }
 
     pub fn calls(&self) -> Vec<Call> {
@@ -134,6 +147,7 @@ impl Observer for Seen {
         self.0.lock().unwrap().push(Step {
             provider: report.provider.to_owned(),
             result: report.result.as_str(),
+            basis: report.basis.as_str(),
             usage: report.usage,
             cost_micro_usd: report.cost_micro_usd,
         });
@@ -178,6 +192,15 @@ pub fn message_events_counting(
     start: Value,
     output_tokens: u64,
 ) -> Vec<(u64, String)> {
+    message_events_ending(pieces, start, output_tokens, "end_turn")
+}
+
+pub fn message_events_ending(
+    pieces: &[&str],
+    start: Value,
+    output_tokens: u64,
+    stop_reason: &str,
+) -> Vec<(u64, String)> {
     let mut events = vec![
         event(
             0,
@@ -196,7 +219,7 @@ pub fn message_events_counting(
     }));
     events.extend([
         event(0, "content_block_stop", json!({"type": "content_block_stop", "index": 0})),
-        event(0, "message_delta", json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": output_tokens}})),
+        event(0, "message_delta", json!({"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": output_tokens}})),
         event(0, "message_stop", json!({"type": "message_stop"})),
     ]);
     events
@@ -264,8 +287,16 @@ async fn answer(
         Some(Reply::Events(chunks)) => streamed(chunks, line, End::Closes),
         Some(Reply::Stalls(chunks)) => streamed(chunks, line, End::Stalls),
         Some(Reply::Breaks(chunks)) => streamed(chunks, line, End::Breaks),
+        Some(Reply::Gated(chunks, before)) => streamed(chunks, line, End::Gated(before)),
         Some(Reply::Whole(delay, body)) => {
             sleep(Duration::from_millis(delay)).await;
+            line.finish();
+            axum::Json(body).into_response()
+        }
+        Some(Reply::GatedWhole(body)) => {
+            if let Ok(permit) = line.shared.gate.acquire().await {
+                permit.forget();
+            }
             line.finish();
             axum::Json(body).into_response()
         }
@@ -286,18 +317,25 @@ enum End {
     Closes,
     Stalls,
     Breaks,
+    Gated(usize),
 }
 
 fn streamed(chunks: Vec<(u64, String)>, line: Line, end: End) -> Response {
-    let state = (chunks.into_iter(), Some(line));
+    let state = (chunks.into_iter().enumerate(), Some(line));
     let body = stream::unfold(state, move |(mut chunks, mut line)| async move {
-        if let Some((delay, chunk)) = chunks.next() {
+        if let Some((index, (delay, chunk))) = chunks.next() {
+            if let (End::Gated(before), Some(line)) = (end, &line)
+                && index == before
+                && let Ok(permit) = line.shared.gate.acquire().await
+            {
+                permit.forget();
+            }
             sleep(Duration::from_millis(delay)).await;
             return Some((Ok(Bytes::from(chunk)), (chunks, line)));
         }
         let line = line.take()?;
         match end {
-            End::Closes => {
+            End::Closes | End::Gated(_) => {
                 line.finish();
                 None
             }
