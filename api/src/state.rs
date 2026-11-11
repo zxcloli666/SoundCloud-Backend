@@ -75,4 +75,5 @@ pub struct AppState {
     pub remote: Arc<crate::modules::remote::RemoteHub>,
     pub links: Arc<crate::modules::remote::LinksService>,
     pub confirm: Arc<crate::modules::remote::LinkConfirm>,
+    pub voice_chat: Arc<crate::modules::voice_chat::VoiceChat>,
 }

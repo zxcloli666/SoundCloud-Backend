@@ -1,0 +1,72 @@
+[providers.alpha]
+kind = "openai_compatible"
+endpoint = "https://llm.example/v1/chat/completions"
+model = "example-model-a"
+api_key = "env:EXAMPLE_ALPHA_KEY"
+stream = true
+max_output_tokens = 700
+total_timeout_ms = 9000
+input_usd_per_mtok = 0.7
+output_usd_per_mtok = 2.9
+headers = { "x-example-team" = "voice" }
+body = { }
+
+[providers.beta]
+kind = "anthropic_compatible"
+endpoint = "https://llm.example/v1/messages"
+model = "example-model-b"
+api_key = "env:EXAMPLE_BETA_KEY"
+stream = true
+max_output_tokens = 900
+total_timeout_ms = 14000
+input_usd_per_mtok = 1.3
+output_usd_per_mtok = 6.1
+cache_read_usd_per_mtok = 0.13
+cache_write_usd_per_mtok = 1.6
+prefix_cache = { type = "ephemeral" }
+headers = { "anthropic-version" = "2023-06-01" }
+
+[providers.onsite]
+kind = "worker"
+subject = "ai.rpc.complete"
+max_output_tokens = 350
+total_timeout_ms = 21000
+hedge = false
+
+[ladders.chat]
+steps = ["alpha", "beta", "onsite"]
+hedge_after_ms = 2500
+deadline_ms = 24000
+breaker = { failures = 4, window_s = 45, open_s = 75 }
+
+[ladders.chat.budget]
+month_usd = 123.0
+day_usd = 12.3
+user_month_usd = 4.56
+user_day_usd = 0.45
+
+[budget]
+bucket = "example_spend"
+
+[voice_chat]
+ladder = "chat"
+requests_per_minute = 15
+max_text_chars = 400
+max_history = 12
+max_notes = 24
+max_tools = 48
+max_tool_rounds = 4
+max_system_bytes = 40000
+instructions = """
+Answer in one or two short sentences.
+"""
+
+[voice_chat.personas.default]
+prompt = """
+You are a friendly voice of a music player.
+"""
+
+[voice_chat.personas.nova]
+prompt = """
+Your name is Nova. You are a cheerful voice of a music player.
+"""

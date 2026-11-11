@@ -62,6 +62,7 @@ return {1, 0}
 static SCRIPT: LazyLock<Script> = LazyLock::new(|| Script::new(ADMISSION_SCRIPT));
 const WARNING_INTERVAL_MILLISECONDS: u64 = 30_000;
 const DIAG_WINDOW: Duration = Duration::from_secs(3600);
+const CHAT_WINDOW: Duration = Duration::from_secs(60);
 
 pub struct PublicAdmission {
     redis: RedisPool,
@@ -90,6 +91,7 @@ pub enum Endpoint {
     VoiceSalutSub,
     VoiceUtterance,
     VoiceResolve,
+    VoiceChat,
     VoiceAliceIp,
     VoiceSalutIp,
     DiagBundle,
@@ -310,13 +312,15 @@ impl PublicAdmission {
             | Endpoint::VoiceLinkCode
             | Endpoint::VoiceRemote
             | Endpoint::VoiceRemoteWait
-            | Endpoint::VoiceResolve => &self.session_in_flight,
+            | Endpoint::VoiceResolve
+            | Endpoint::VoiceChat => &self.session_in_flight,
         }
     }
 
     fn window(&self, endpoint: Endpoint) -> Duration {
         match endpoint {
             Endpoint::DiagBundle | Endpoint::DiagEvents | Endpoint::DiagBytes => DIAG_WINDOW,
+            Endpoint::VoiceChat => CHAT_WINDOW,
             _ => self.config.window,
         }
     }
@@ -339,6 +343,7 @@ impl PublicAdmission {
             Endpoint::VoiceSalutSub => self.config.voice_salut_sub,
             Endpoint::VoiceUtterance => self.config.voice_utterance,
             Endpoint::VoiceResolve => self.config.voice_resolve,
+            Endpoint::VoiceChat => self.config.voice_chat,
             Endpoint::VoiceAliceIp => self.config.voice_alice_ip,
             Endpoint::VoiceSalutIp => self.config.voice_salut_ip,
             Endpoint::DiagBundle => self.config.diag_bundle,
@@ -390,6 +395,7 @@ impl Endpoint {
             Self::VoiceSalutSub => "voice-salut-sub",
             Self::VoiceUtterance => "voice-utterance",
             Self::VoiceResolve => "voice-resolve",
+            Self::VoiceChat => "voice-chat",
             Self::VoiceAliceIp => "voice-alice-ip",
             Self::VoiceSalutIp => "voice-salut-ip",
             Self::DiagBundle => "diag-bundle",
@@ -416,6 +422,7 @@ impl Endpoint {
             Self::VoiceSalutSub => "voice link by salut sub",
             Self::VoiceUtterance => "voice skill",
             Self::VoiceResolve => "/search/resolve",
+            Self::VoiceChat => "/voice/chat",
             Self::VoiceAliceIp => "/skills/alice",
             Self::VoiceSalutIp => "/skills/salut",
             Self::DiagBundle => "/diag/bundles",

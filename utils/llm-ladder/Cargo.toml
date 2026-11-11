@@ -1,0 +1,26 @@
+[package]
+name = "llm-ladder"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A hedged ladder of LLM providers with breakers, a deadline and spend budgets"
+
+[dependencies]
+async-nats = "0.49"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+futures = "0.3"
+hex = "0.4"
+redact = { version = "0.1.0", path = "../redact" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+tracing = "0.1"
+wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }

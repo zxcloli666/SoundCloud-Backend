@@ -82,6 +82,7 @@ redact = { version = "0.1.0", path = "../utils/redact" }
 telemetry = { version = "0.1.0", path = "../utils/telemetry" }
 wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["sqlx"] }
 repl-verify = { version = "0.1.0", path = "../utils/repl-verify" }
+llm-ladder = { version = "0.1.0", path = "../utils/llm-ladder" }
 sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.4" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"

@@ -89,7 +89,8 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::rooms::router())
         .merge(modules::remote::router())
         .merge(modules::oauth::router())
-        .merge(modules::skills::router());
+        .merge(modules::skills::router())
+        .merge(modules::voice_chat::router(&state.voice_chat));
 
     #[cfg(feature = "profiling")]
     let router = router.merge(crate::profiling::router());

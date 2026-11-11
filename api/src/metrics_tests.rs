@@ -278,3 +278,56 @@ async fn a_scrape_never_fails_because_statistics_are_unavailable(
     );
     Ok(())
 }
+
+#[test]
+fn an_estimated_charge_has_its_own_basis_and_the_token_kinds_stay_apart() {
+    use llm_ladder::{Basis, Failure, StepReport, StepResult, Usage};
+
+    init();
+    let report = |provider, basis| StepReport {
+        ladder: "metrics_test",
+        provider,
+        result: StepResult::Failed(Failure::Timeout),
+        first_output: None,
+        elapsed: Duration::from_millis(900),
+        usage: Usage {
+            input_tokens: 700,
+            output_tokens: 9,
+            ..Usage::default()
+        },
+        basis,
+        cost_micro_usd: 1_472,
+    };
+    record_llm_step(&report("guessed", Basis::Estimated));
+    record_llm_step(&report("counted", Basis::Reported));
+
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
+    let rendered = handle.render();
+    let line = |metric: &str, provider: &str, more: &str| {
+        rendered
+            .lines()
+            .find(|line| {
+                line.starts_with(metric)
+                    && line.contains("ladder=\"metrics_test\"")
+                    && line.contains(&format!("provider=\"{provider}\""))
+                    && line.contains(more)
+            })
+            .map(str::to_owned)
+    };
+    let spend = line(llm::SPEND, "guessed", "basis=\"estimated\"").expect("an estimated spend");
+    assert!(spend.ends_with(" 1472"), "{spend}");
+    assert!(line(llm::SPEND, "counted", "basis=\"reported\"").is_some());
+    for kind in ["input", "cache_read", "cache_write", "output"] {
+        let kind = format!("kind=\"{kind}\"");
+        assert!(line(llm::TOKENS, "guessed", &kind).is_some(), "{kind}");
+    }
+    let input = line(llm::TOKENS, "guessed", "kind=\"input\"").unwrap();
+    assert!(
+        input.contains("basis=\"estimated\"") && input.ends_with(" 700"),
+        "{input}"
+    );
+    let steps = line(llm::STEPS, "guessed", "result=\"failed_timeout\"").unwrap();
+    assert!(steps.ends_with(" 1"), "{steps}");
+}

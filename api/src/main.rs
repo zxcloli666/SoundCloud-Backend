@@ -330,6 +330,9 @@ async fn main() {
         "voice",
     ));
 
+    let voice_chat = crate::modules::voice_chat::VoiceChat::start(&config.llm, Some(&nats))
+        .unwrap_or_else(|error| panic!("LLM_CONFIG is refused: {error}"));
+
     let port = config.port;
     let diag = crate::modules::diag::DiagService::new(pg.clone(), &config.diag);
     let state = AppState {
@@ -372,6 +375,7 @@ async fn main() {
         remote,
         links,
         confirm,
+        voice_chat,
     };
 
     let app = router::build(state);

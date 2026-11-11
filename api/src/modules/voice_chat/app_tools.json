@@ -1,0 +1,484 @@
+[
+  {
+    "name": "pause",
+    "description": "Pause playback.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "resume",
+    "description": "Continue playback.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "next",
+    "description": "Skip to the next track.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "previous",
+    "description": "Go back to the previous track.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "seek",
+    "description": "Move within the current track: forward or backward by seconds, or to a position.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "forward",
+            "backward",
+            "to"
+          ]
+        },
+        "seconds": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "mode",
+        "seconds"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "volume",
+    "description": "Change the volume. set needs value 0-200 (100 is normal); up and down take an optional step.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "set",
+            "up",
+            "down",
+            "mute",
+            "unmute"
+          ]
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "like",
+    "description": "Like the current track, or remove the like with on=false.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "on": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "on"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "shuffle",
+    "description": "Turn shuffle on or off.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "on": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "on"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "repeat",
+    "description": "Set repeat: off, one (this track) or all (the queue).",
+    "args": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "one",
+            "all"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "speed",
+    "description": "Set the playback speed of the music, 0.5 to 2 (1 is normal).",
+    "args": {
+      "type": "object",
+      "properties": {
+        "rate": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "rate"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "play_likes",
+    "description": "Play the tracks the user liked.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "play_wave",
+    "description": "Play the personal endless wave of recommendations.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "play_similar",
+    "description": "Play tracks similar to the current one.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "undo",
+    "description": "Undo the last thing done by voice: playback, volume, like, shuffle, repeat, queue.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "play",
+    "description": "Find music by name (track, artist, album or playlist) and play the best match. Returns what started.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "track",
+            "artist",
+            "album",
+            "playlist"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "returns": true
+  },
+  {
+    "name": "queue_add",
+    "description": "Find music by name and add the best match to the queue. Returns what was added.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "track",
+            "artist",
+            "album",
+            "playlist"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "returns": true
+  },
+  {
+    "name": "search",
+    "description": "Search the catalog by name. Returns up to 5 matches with kind, name, artist and id for play_found.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "track",
+            "artist",
+            "album",
+            "playlist"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "returns": true
+  },
+  {
+    "name": "play_found",
+    "description": "Play a match by its kind and id. Ids come from search results or from context.candidates. queue=true adds it to the queue instead.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "track",
+            "artist",
+            "album",
+            "playlist"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "open_page",
+    "description": "Open a page of the app. search takes a query; settings takes a section; current_track, current_artist and current_album open pages of what is playing.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "string",
+          "enum": [
+            "home",
+            "search",
+            "library",
+            "likes",
+            "playlists",
+            "following",
+            "history",
+            "stats",
+            "dislikes",
+            "superlikes",
+            "discover",
+            "settings",
+            "chats",
+            "current_track",
+            "current_artist",
+            "current_album"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string",
+          "enum": [
+            "general",
+            "appearance",
+            "audio",
+            "voice",
+            "network",
+            "integrations",
+            "chats",
+            "storage",
+            "account"
+          ]
+        }
+      },
+      "required": [
+        "page"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "get_settings",
+    "description": "Read the current values of the settings that set_setting can change.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": true
+  },
+  {
+    "name": "set_setting",
+    "description": "Change one app setting. Switches take on or off. Other values: theme dark|white|system; performance light|medium|beauty; equalizer_preset flat|bassBoost|bassDestroyer|trebleBoost|vocal|rock|electronic|classical|loudness|vShape|nightMode; crossfade 0-12; stream_quality auto|sq|hq|uq; wave_mode similar|diverse; lyrics_highlight word|line; voice_speed 0.8-1.3.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "enum": [
+            "theme",
+            "performance",
+            "equalizer",
+            "equalizer_preset",
+            "normalize_volume",
+            "skip_silence",
+            "crossfade",
+            "stream_quality",
+            "autoplay",
+            "wave_mode",
+            "wave_hide_liked",
+            "wave_hide_listened",
+            "lyrics_highlight",
+            "lyrics_visualizer",
+            "floating_comments",
+            "spoken_replies",
+            "voice_speed"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "lyrics",
+    "description": "Open or close the lyrics panel of the current track.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "open": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "open"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "queue_list",
+    "description": "Read what plays next: up to 10 upcoming tracks with title and artist.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": true
+  },
+  {
+    "name": "queue_clear",
+    "description": "Remove every upcoming track from the queue. The current track keeps playing.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "add_to_playlist",
+    "description": "Open the playlist picker for the current track so the user chooses a playlist.",
+    "args": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "returns": false
+  },
+  {
+    "name": "remember",
+    "description": "Keep a short fact the user asked to remember, in one sentence. It comes back in notes. Fails with full when there is no room: one has to be forgotten first.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "note"
+      ]
+    },
+    "returns": false
+  },
+  {
+    "name": "forget",
+    "description": "Drop one remembered fact. Pass the note text as it appears in notes; a part of it works only when it fits a single note.",
+    "args": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "note"
+      ]
+    },
+    "returns": false
+  }
+]

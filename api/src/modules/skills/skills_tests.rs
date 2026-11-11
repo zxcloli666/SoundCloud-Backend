@@ -43,7 +43,7 @@ const SALUT_SAMPLE: &str = r#"{
   "payload": {
     "app_info": {"projectId": "p", "frontendType": "APK"},
     "intent": "run_app",
-    "projectName": "lolya",
+    "projectName": "loli",
     "device": {"platformType": "ANDROID", "surface": "SBOL"},
     "new_session": false,
     "character": {"id": "sber", "name": "Сбер", "gender": "male", "appeal": "official"},

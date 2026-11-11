@@ -298,7 +298,7 @@ fn salut_body(sub: &str, text: &str, asr: &str, message_id: u64) -> Value {
         "messageName": "MESSAGE_TO_SKILL",
         "payload": {
             "intent": "run_app",
-            "projectName": "lolya",
+            "projectName": "loli",
             "new_session": false,
             "message": {
                 "original_text": text,
@@ -2451,3 +2451,6 @@ async fn a_salut_turn_after_the_confirm_window_still_gets_the_approval(
     assert!(linked.contains("аккаунт связан"), "{linked}");
     Ok(())
 }
+
+#[path = "router_voice_chat_tests.rs"]
+mod chat;
