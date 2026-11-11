@@ -18,6 +18,8 @@ use crate::modules::voice_chat::VoiceChat;
 use crate::modules::voice_chat::testing::{CHAT_SECTION, Heard, hear, lane, nats_url, tools};
 use vendor::{COMPLETIONS, End, MESSAGES, Reply, Vendor};
 
+#[path = "router_voice_chat_cache_tests.rs"]
+mod cache;
 #[path = "router_voice_chat_test_vendor.rs"]
 mod vendor;
 
