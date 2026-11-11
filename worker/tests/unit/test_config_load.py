@@ -65,7 +65,7 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert s.local_llm_ref(settings) == LOCAL_LLM_REF
     assert local.file.endswith(".gguf") and len(local.sha256) == 64
     assert local.enabled is True
-    assert (local.context_tokens, local.eval_chunk_tokens, local.idle_unload_s) == (4096, 128, 600)
+    assert (local.context_tokens, local.eval_chunk_tokens, local.idle_unload_s) == (8192, 128, 600)
     assert local.state_cache_mib == 256
     assert (local.threads, local.nice, local.max_in_flight) == (2, 5, 2)
     without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
