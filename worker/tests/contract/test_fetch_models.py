@@ -102,27 +102,28 @@ def test_hub_file_is_kept_only_at_its_pinned_commit_and_hash(
 ) -> None:
     commit = "a" * 40
     good = hashlib.sha256(b"gguf").hexdigest()
+    stored = tmp_path / "store" / "12" / "chunks"
+    blob = tmp_path / "blobs" / good
+    link = tmp_path / "snapshots" / commit / "model.gguf"
     asked: list[tuple[str, str, str]] = []
 
     def cached(repo: str, filename: str, revision: str) -> str:
         asked.append((repo, filename, revision))
-        blob = tmp_path / "blobs" / good
-        blob.parent.mkdir(exist_ok=True)
-        blob.write_bytes(b"gguf")
-        link = tmp_path / "snapshots" / commit / filename
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.unlink(missing_ok=True)
-        link.symlink_to(blob)
+        for made in (stored, blob, link):
+            made.parent.mkdir(parents=True, exist_ok=True)
+            made.unlink(missing_ok=True)
+        stored.write_bytes(b"gguf")
+        blob.symlink_to(Path("..", "store", "12", "chunks"))
+        link.symlink_to(Path("..", "..", "blobs", good))
         return str(link)
 
     monkeypatch.setattr(fm, "hf_hub_download", cached)
     fm.fetch_file(fm.HubFile("org/model-GGUF", commit, "model.gguf", good))
     assert asked == [("org/model-GGUF", "model.gguf", commit)]
-    assert (tmp_path / "snapshots" / commit / "model.gguf").read_bytes() == b"gguf"
+    assert link.read_bytes() == b"gguf"
     with pytest.raises(fm.FetchError, match="sha256"):
         fm.fetch_file(fm.HubFile("org/model-GGUF", commit, "model.gguf", "0" * 64))
-    assert not (tmp_path / "snapshots" / commit / "model.gguf").is_symlink()
-    assert list((tmp_path / "blobs").iterdir()) == []
+    assert not any(left.is_symlink() or left.exists() for left in (stored, blob, link))
     with pytest.raises(fm.FetchError, match="pinned commit"):
         fm.fetch_file(fm.HubFile("org/model-GGUF", "main", "model.gguf", good))
 

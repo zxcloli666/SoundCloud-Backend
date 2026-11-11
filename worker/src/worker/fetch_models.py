@@ -258,10 +258,16 @@ def fetch_file(file: HubFile) -> None:
         raise FetchError(f"{file.describe()}: got {path}, not the pinned commit")
     if has_sha256(path, file.sha256):
         return
-    blob = path.resolve()
-    path.unlink()
-    blob.unlink(missing_ok=True)
+    remove_with_links(path)
     raise FetchError(f"{file.describe()}: sha256 != {file.sha256}")
+
+
+def remove_with_links(path: Path) -> None:
+    while path.is_symlink():
+        target = Path(os.path.normpath(path.parent / os.readlink(path)))
+        path.unlink()
+        path = target
+    path.unlink(missing_ok=True)
 
 
 def link_renamed_snapshot(canonical: Path, snapshot: HubSnapshot) -> None:
