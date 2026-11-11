@@ -3,6 +3,7 @@ use serde_json::Value;
 const ACTIONS: &str = "actions";
 const SAY: &str = "say";
 const REPLACEMENT: char = '\u{fffd}';
+const UNICODE_DIGITS: usize = 4;
 
 #[derive(Debug, PartialEq)]
 pub enum Piece {
@@ -40,7 +41,7 @@ enum Escape {
     #[default]
     None,
     Started,
-    Unicode(String),
+    Unicode(u16, usize),
 }
 
 #[derive(Default)]
@@ -161,28 +162,30 @@ impl Text {
                 self.close_pair(out);
                 out.push(symbol);
             }
-            Escape::Started if symbol == 'u' => self.escape = Escape::Unicode(String::new()),
+            Escape::Started if symbol == 'u' => self.escape = Escape::Unicode(0, 0),
             Escape::Started => {
                 self.close_pair(out);
                 out.push(unescaped(symbol));
             }
-            Escape::Unicode(mut digits) => {
-                digits.push(symbol);
-                match digits.len() {
-                    4 => self.unit(u16::from_str_radix(&digits, 16).ok(), out),
-                    _ => self.escape = Escape::Unicode(digits),
+            Escape::Unicode(unit, digits) => match symbol.to_digit(16) {
+                Some(digit) => {
+                    let unit = (unit << 4) | digit as u16;
+                    match digits + 1 {
+                        UNICODE_DIGITS => self.unit(unit, out),
+                        digits => self.escape = Escape::Unicode(unit, digits),
+                    }
                 }
-            }
+                None => {
+                    self.close_pair(out);
+                    out.push(REPLACEMENT);
+                    return self.read(symbol, out);
+                }
+            },
         }
         false
     }
 
-    fn unit(&mut self, unit: Option<u16>, out: &mut String) {
-        let Some(unit) = unit else {
-            self.close_pair(out);
-            out.push(REPLACEMENT);
-            return;
-        };
+    fn unit(&mut self, unit: u16, out: &mut String) {
         match (self.high.take(), unit) {
             (Some(high), 0xDC00..=0xDFFF) => {
                 let pair = [high, unit];
