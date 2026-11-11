@@ -154,9 +154,6 @@ impl Race {
             let held = self.crown(index);
             return self.deliver(held);
         }
-        if run.document.is_complete() {
-            self.drop_out(index, Failure::Invalid);
-        }
         None
     }
 
@@ -194,7 +191,7 @@ impl Race {
     fn wake_at(&self) -> Instant {
         self.running
             .iter()
-            .map(|run| run.expires)
+            .map(|run| run.wake_at(self.deadline))
             .chain(self.hedge_at)
             .fold(self.deadline, Instant::min)
     }
@@ -205,7 +202,9 @@ impl Race {
             self.blame_the_silent(now);
             return Some(Item::Failed(LadderError::Deadline));
         }
-        while let Some(index) = self.running.iter().position(|run| run.expires <= now) {
+        let deadline = self.deadline;
+        let due = |run: &Run| run.wake_at(deadline) <= now;
+        while let Some(index) = self.running.iter().position(due) {
             self.drop_out(index, Failure::Timeout);
         }
         if self.hedge_at.is_some_and(|at| at <= now) {
@@ -256,6 +255,10 @@ impl Race {
 
     fn drop_out(&mut self, index: usize, failure: Failure) {
         let run = self.running.remove(index);
+        let failure = match run.document.is_complete() {
+            true => Failure::Invalid,
+            false => failure,
+        };
         self.settle(run, StepResult::Failed(failure));
         self.start_next();
     }
