@@ -4,18 +4,20 @@ use schemars::{JsonSchema, Schema, generate::SchemaSettings};
 use serde_json::{Map, Value, json};
 
 use crate::pipeline::{
-    AI_MATCH_TRACK, AI_RESOLVE_ARTIST, AI_RPC_STREAM, AudioIndexRequest, AudioIndexResult,
-    COLLAB_VECTORS_OBJECT_TEMPLATE, CollabTrainRequest, CollabTrainResult, DEADLINE_HEADER,
-    DONE_EMBED_LYRICS, DONE_ENCODE, DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE,
-    DONE_TRANSCRIBE, EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW,
-    EncodeModel, EncodeRequest, EncodeResult, HEADERS, INDEX_AUDIO, INDEX_AUDIO_STREAM,
-    LyricsEmbeddingRequest, LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_MESSAGE_BYTES,
-    MatchTrackData, MatchTrackRequest, PipelineStreamSpec, REPLY_TO_HEADER,
-    RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData, ResolveArtistRequest, RpcError, TRAIN_COLLAB,
-    TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
-    TasteTrainRequest, TasteTrainResult, TranscriptionRequest, TranscriptionResult,
-    WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT,
-    WORKER_STREAMS, collab_vectors_suffix,
+    AI_COMPLETE, AI_MATCH_TRACK, AI_RESOLVE_ARTIST, AI_RPC_STREAM, AudioIndexRequest,
+    AudioIndexResult, COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest,
+    CollabTrainResult, CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS,
+    DONE_ENCODE, DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
+    EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest,
+    EncodeResult, HEADERS, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
+    LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_COMPLETE_MESSAGE_BYTES,
+    MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
+    MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MatchTrackData, MatchTrackRequest, PipelineStreamSpec,
+    REPLY_TO_HEADER, RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData, ResolveArtistRequest,
+    RpcError, TRAIN_COLLAB, TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO,
+    TRANSCRIBE_STREAM, TasteTrainRequest, TasteTrainResult, TranscriptionRequest,
+    TranscriptionResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES,
+    WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -357,12 +359,24 @@ pub const fn done_duplicate_window_seconds() -> u64 {
     widest.div_ceil(HOUR) * HOUR
 }
 
+pub const RPC_WINDOWS: [(&str, u64); 3] = [
+    ("resolve_artist", RESOLVE_ARTIST_WINDOW_SECONDS),
+    ("match_track", MATCH_TRACK_WINDOW_SECONDS),
+    ("complete", COMPLETE_WINDOW_SECONDS),
+];
+
+const _: () = assert!(widest_rpc_window_seconds() < AI_RPC_STREAM.max_age_seconds);
+
 const fn widest_rpc_window_seconds() -> u64 {
-    if RESOLVE_ARTIST_WINDOW_SECONDS > MATCH_TRACK_WINDOW_SECONDS {
-        RESOLVE_ARTIST_WINDOW_SECONDS
-    } else {
-        MATCH_TRACK_WINDOW_SECONDS
+    let mut widest = 0;
+    let mut index = 0;
+    while index < RPC_WINDOWS.len() {
+        if RPC_WINDOWS[index].1 > widest {
+            widest = RPC_WINDOWS[index].1;
+        }
+        index += 1;
     }
+    widest
 }
 
 pub fn render_worker_contract() -> String {
@@ -393,18 +407,31 @@ pub fn worker_contract() -> Value {
         "rpc": {
             "reply_header": REPLY_TO_HEADER,
             "deadline_header": DEADLINE_HEADER,
-            "windows_s": {
-                "resolve_artist": RESOLVE_ARTIST_WINDOW_SECONDS,
-                "match_track": MATCH_TRACK_WINDOW_SECONDS,
-            },
+            "windows_s": rpc_windows(),
         },
         "subjects": {
             "invalid": WORKER_INVALID_SUBJECT,
             "status": WORKER_STATUS_SUBJECT,
             "health": WORKER_HEALTH_SUBJECT,
         },
-        "limits": { "max_message_bytes": MAX_MESSAGE_BYTES },
+        "limits": {
+            "max_message_bytes": MAX_MESSAGE_BYTES,
+            "complete": {
+                "system_bytes": MAX_COMPLETE_SYSTEM_BYTES,
+                "messages": MAX_COMPLETE_MESSAGES,
+                "message_bytes": MAX_COMPLETE_MESSAGE_BYTES,
+                "schema_bytes": MAX_COMPLETE_SCHEMA_BYTES,
+                "max_tokens": MAX_COMPLETE_TOKENS,
+            },
+        },
     })
+}
+
+fn rpc_windows() -> Map<String, Value> {
+    RPC_WINDOWS
+        .iter()
+        .map(|(method, window_s)| ((*method).to_owned(), Value::from(*window_s)))
+        .collect()
 }
 
 fn headers() -> Map<String, Value> {
@@ -539,8 +566,10 @@ pub fn schemas() -> BTreeMap<String, Value> {
         done::<TasteTrainResult>(WorkerLane::Taste),
         request::<ResolveArtistRequest>(AI_RESOLVE_ARTIST),
         request::<MatchTrackRequest>(AI_MATCH_TRACK),
+        request::<CompleteRequest>(AI_COMPLETE),
         rpc_reply::<ResolveArtistData>(AI_RESOLVE_ARTIST),
         rpc_reply::<MatchTrackData>(AI_MATCH_TRACK),
+        rpc_reply::<CompleteData>(AI_COMPLETE),
     ])
 }
 
@@ -734,7 +763,7 @@ mod tests {
             let expected = (heartbeat, Some(window), Some(quarantine), bridge);
             assert_eq!(computed, expected, "{}", lane.as_str());
         }
-        assert_eq!(AI_LANE.deadline_s, 20);
+        assert_eq!(AI_LANE.deadline_s, 30);
         assert_eq!(AI_LANE.attempt_window_s(), None);
     }
 
@@ -837,13 +866,101 @@ mod tests {
             assert!(schemas.contains_key(spec.filter_subject));
             assert!(schemas.contains_key(spec.done_subject.unwrap_or_default()));
         }
-        for method in [AI_RESOLVE_ARTIST, AI_MATCH_TRACK] {
+        for method in [AI_RESOLVE_ARTIST, AI_MATCH_TRACK, AI_COMPLETE] {
             assert!(schemas.contains_key(method));
             assert!(schemas.contains_key(&rpc_reply_subject(method)));
         }
         for schema in schemas.values() {
             assert_eq!(schema["$schema"], JSON_SCHEMA_DIALECT);
         }
+    }
+
+    #[test]
+    fn every_rpc_method_has_a_window_under_its_subject_and_inside_the_lane() {
+        let exported = contract();
+        let windows = exported["rpc"]["windows_s"]
+            .as_object()
+            .expect("rpc windows by method");
+        let schemas = schemas();
+        let prefix = AI_LANE.filter_subject.trim_end_matches('>');
+
+        assert_eq!(
+            exported["rpc"]["windows_s"],
+            json!({ "resolve_artist": 20, "match_track": 10, "complete": 30 })
+        );
+        for (method, window_s) in windows {
+            assert!(
+                schemas.contains_key(&format!("{prefix}{method}")),
+                "{method}"
+            );
+            assert!(window_s.as_u64().unwrap_or(u64::MAX) <= AI_LANE.deadline_s);
+        }
+        assert_eq!(AI_COMPLETE, format!("{prefix}complete"));
+    }
+
+    #[test]
+    fn the_complete_request_is_bounded_by_the_exported_limits() {
+        let exported = contract();
+        let limits = &exported["limits"]["complete"];
+        let request = &schemas()[AI_COMPLETE];
+        let message = &request["$defs"]["CompleteMessage"]["properties"];
+        let utf8 = crate::pipeline::MAX_UTF8_BYTES_KEYWORD;
+
+        assert_eq!(
+            limits,
+            &json!({
+                "system_bytes": 48_000,
+                "messages": 64,
+                "message_bytes": 12_000,
+                "schema_bytes": 64_000,
+                "max_tokens": 1024
+            })
+        );
+        assert_eq!(
+            names(&request["required"]),
+            ["system", "messages", "schema", "max_tokens"]
+        );
+        assert_eq!(
+            request["properties"]["system"][utf8],
+            limits["system_bytes"]
+        );
+        assert_eq!(request["properties"]["messages"]["minItems"], 1);
+        assert_eq!(
+            request["properties"]["messages"]["maxItems"],
+            limits["messages"]
+        );
+        assert_eq!(message["content"][utf8], limits["message_bytes"]);
+        assert_eq!(message["content"]["minLength"], 1);
+        assert_eq!(
+            request["$defs"]["CompleteRole"]["enum"],
+            json!(["user", "assistant"])
+        );
+        assert_eq!(request["properties"]["schema"]["type"], "object");
+        assert_eq!(request["properties"]["max_tokens"]["minimum"], 1);
+        assert_eq!(
+            request["properties"]["max_tokens"]["maximum"],
+            limits["max_tokens"]
+        );
+    }
+
+    #[test]
+    fn a_complete_reply_carries_text_model_and_token_counts_or_an_error() {
+        let reply = &schemas()[&rpc_reply_subject(AI_COMPLETE)];
+        let data = &reply["$defs"]["CompleteData"];
+        let failed = &reply["oneOf"][1]["properties"]["error"];
+
+        assert_eq!(reply["title"], "ai.rpc.complete.reply");
+        assert_eq!(
+            names(&data["required"]),
+            ["text", "model", "input_tokens", "output_tokens"]
+        );
+        assert_eq!(data["properties"]["text"]["minLength"], 1);
+        assert_eq!(data["properties"]["input_tokens"]["minimum"], 0);
+        assert_eq!(failed["$ref"], "#/$defs/RpcError");
+        assert_eq!(
+            reply["$defs"]["RpcError"]["enum"],
+            json!(["expired", "invalid_request", "internal"])
+        );
     }
 
     #[test]
