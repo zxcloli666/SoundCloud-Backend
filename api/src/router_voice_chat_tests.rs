@@ -11,19 +11,28 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::super::router_search_tests::{soundcloud_hits, state_with};
-use super::{cap, session_for, tuned};
+use super::{session_for, tuned};
 use crate::bus::nats::NatsService;
 use crate::config::{AppConfig, LlmCfg};
 use crate::modules::voice_chat::VoiceChat;
-use crate::modules::voice_chat::testing::{CHAT_SECTION, Heard, hear, lane, nats_url, tools};
+use crate::modules::voice_chat::testing::{
+    CHAT_SECTION, Heard, Listening, hear, lane, nats_url, tools,
+};
 use vendor::{COMPLETIONS, End, MESSAGES, Reply, Vendor};
 
 #[path = "router_voice_chat_cache_tests.rs"]
 mod cache;
+#[path = "router_voice_chat_caps_tests.rs"]
+mod caps;
+#[path = "router_voice_chat_failure_tests.rs"]
+mod failures;
+#[path = "router_voice_chat_gate_tests.rs"]
+mod gate;
 #[path = "router_voice_chat_test_vendor.rs"]
 mod vendor;
 
-const GAP_MS: u64 = 150;
+const EVENT_WAIT: Duration = Duration::from_secs(10);
+const LAST_PIECE: usize = 4;
 const LOUDER: [&str; 4] = [
     "{\"actions\":[{\"name\":\"volume_set\",",
     "\"args\":[{\"name\":\"level\",\"value\":60}]}],",
@@ -121,6 +130,13 @@ async fn ask(app: &axum::Router, session: Uuid, body: &Value) -> anyhow::Result<
     hear(open(app, Some(session), body, &[]).await?).await
 }
 
+async fn next(events: &mut Listening) -> (String, Value) {
+    tokio::time::timeout(EVENT_WAIT, events.next())
+        .await
+        .expect("the event arrives")
+        .expect("the stream is still open")
+}
+
 async fn all_connections_idle(pool: &PgPool) -> bool {
     let limit = Instant::now() + Duration::from_secs(3);
     while pool.num_idle() as u32 != pool.size() {
@@ -140,7 +156,7 @@ async fn a_turn_streams_its_action_then_the_speech_piece_by_piece(
     let vendor = Vendor::open().await?;
     vendor.model(
         "paid-model",
-        Reply::Stream(vendor::message(&LOUDER, GAP_MS, 1_000, 100), End::Closes),
+        Reply::Gated(vendor::message(&LOUDER, 0, 1_000, 100), LAST_PIECE),
     );
     let app = starred(&pool, &one_step(&vendor, "paid-model")).await?;
     let session = session_for(&pool, &fresh_user()).await?;
@@ -152,37 +168,43 @@ async fn a_turn_streams_its_action_then_the_speech_piece_by_piece(
         &[("accept-encoding", "gzip, br")],
     )
     .await?;
-    let heard = hear(response).await?;
-
-    assert_eq!(heard.status, StatusCode::OK);
-    assert_eq!(heard.header("content-type"), Some("text/event-stream"));
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    assert_eq!(header("content-type"), Some("text/event-stream"));
     assert_eq!(
-        heard.header("content-encoding"),
+        header("content-encoding"),
         None,
         "an event stream is never compressed"
     );
-    assert_eq!(heard.header("content-length"), None);
+    assert_eq!(header("content-length"), None);
     assert_eq!(
-        heard.header("cache-control"),
+        header("cache-control"),
         Some("private, no-store, max-age=0")
     );
+    let mut events = Listening::to(response);
+    let early = [next(&mut events).await, next(&mut events).await];
     assert_eq!(
-        heard.named(),
+        early,
         [
             (
-                "action",
-                &json!({"name": "volume_set", "args": {"level": 60}})
+                "action".to_owned(),
+                json!({"name": "volume_set", "args": {"level": 60}})
             ),
-            ("say", &json!({"text": "Сделала "})),
-            ("say", &json!({"text": "погромче."})),
-            ("done", &json!({})),
+            ("say".to_owned(), json!({"text": "Сделала "})),
+        ],
+        "events leave as the provider speaks, while it still holds the last piece back"
+    );
+    vendor.release();
+    let rest = [next(&mut events).await, next(&mut events).await];
+    assert_eq!(
+        rest,
+        [
+            ("say".to_owned(), json!({"text": "погромче."})),
+            ("done".to_owned(), json!({})),
         ]
     );
-    let (first, last) = (heard.events[0].0, heard.events[3].0);
-    assert!(
-        last - first >= Duration::from_millis(2 * GAP_MS - 50),
-        "events leave as the provider speaks, not together at the end: {first:?} .. {last:?}"
-    );
+    assert_eq!(events.next().await, None);
 
     let calls = vendor.calls();
     assert_eq!(calls.len(), 1);
@@ -215,245 +237,6 @@ async fn a_turn_streams_its_action_then_the_speech_piece_by_piece(
         json!(["volume_set", "search_tracks"])
     );
     assert_eq!(asked.body["stream"], true);
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn the_star_answer_is_the_same_on_a_reserve_host(pool: PgPool) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
-    vendor.model(
-        "paid-model",
-        Reply::Stream(vendor::message(&LOUDER, 0, 1_000, 100), End::Closes),
-    );
-    let llm = one_step(&vendor, "paid-model");
-    let reserve = || tuned(|config| config.premium_reserve = true);
-    let plain_host = chat_app(&pool, tuned(|_| {}), false, &llm, None).await?;
-    let reserve_host = chat_app(&pool, reserve(), false, &llm, None).await?;
-    let session = session_for(&pool, &fresh_user()).await?;
-
-    let plain = ask(&plain_host, session, &turn()).await?;
-    let reserved = ask(&reserve_host, session, &turn()).await?;
-
-    assert_eq!(plain.status, StatusCode::FORBIDDEN);
-    assert_eq!(plain.body["code"], "star_required");
-    assert_eq!(plain.body["statusCode"], 403);
-    assert_eq!(
-        (reserved.status, &reserved.body),
-        (plain.status, &plain.body)
-    );
-    assert!(
-        vendor.calls().is_empty(),
-        "no provider is called for a listener without Star"
-    );
-
-    let starred_reserve = chat_app(&pool, reserve(), true, &llm, None).await?;
-    let heard = ask(&starred_reserve, session, &turn()).await?;
-    assert_eq!(heard.status, StatusCode::OK);
-    assert_eq!(heard.named().last().unwrap().0, "done");
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_chat_that_cannot_start_answers_503(pool: PgPool) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
-    let session = session_for(&pool, &fresh_user()).await?;
-
-    let not_configured = starred(&pool, "").await?;
-    let heard = ask(&not_configured, session, &turn()).await?;
-    assert_eq!(heard.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(heard.body["code"], "chat_unavailable");
-    assert_eq!(heard.header("retry-after"), Some("30"));
-
-    let keyless = one_step(&vendor, "paid-model")
-        .replace("env:CARGO_PKG_NAME", "env:VOICE_CHAT_TEST_UNSET_KEY");
-    let no_open_step = starred(&pool, &keyless).await?;
-    let heard = ask(&no_open_step, session, &turn()).await?;
-    assert_eq!(heard.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(heard.body["code"], "chat_unavailable");
-    assert!(vendor.calls().is_empty());
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn the_per_user_limit_answers_429_and_spares_other_users(pool: PgPool) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
-    vendor.model(
-        "paid-model",
-        Reply::Stream(vendor::message(&LOUDER, 0, 1_000, 100), End::Closes),
-    );
-    let limited = tuned(|config| config.admission.voice_chat = cap(2));
-    let app = chat_app(&pool, limited, true, &one_step(&vendor, "paid-model"), None).await?;
-    let chatty = session_for(&pool, &fresh_user()).await?;
-    let quiet = session_for(&pool, &fresh_user()).await?;
-
-    for _ in 0..2 {
-        assert_eq!(ask(&app, chatty, &turn()).await?.status, StatusCode::OK);
-    }
-    let refused = ask(&app, chatty, &turn()).await?;
-    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(refused.body["code"], "voice_chat_limited");
-    let wait: u64 = refused.header("retry-after").unwrap().parse()?;
-    assert!((1..=60).contains(&wait), "the limit is per minute: {wait}");
-    assert_eq!(ask(&app, quiet, &turn()).await?.status, StatusCode::OK);
-    assert_eq!(vendor.calls().len(), 3);
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_request_over_a_cap_or_without_a_session_reaches_no_provider(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
-    let app = starred(&pool, &one_step(&vendor, "paid-model")).await?;
-    let session = session_for(&pool, &fresh_user()).await?;
-
-    let mut long = turn();
-    long["text"] = json!("я".repeat(41));
-    let heard = ask(&app, session, &long).await?;
-    assert_eq!(heard.status, StatusCode::BAD_REQUEST);
-    assert_eq!(heard.body["code"], "voice_chat_invalid");
-    assert_eq!(heard.body["message"], "text is longer than 40 characters");
-
-    let mut odd_tool = turn();
-    odd_tool["tools"][0]["args"]["properties"]["level"] = json!({"type": "object"});
-    let heard = ask(&app, session, &odd_tool).await?;
-    assert_eq!(heard.status, StatusCode::BAD_REQUEST);
-    assert!(
-        heard.body["message"]
-            .as_str()
-            .unwrap()
-            .contains("tool volume_set")
-    );
-
-    let mut shapeless = turn();
-    shapeless["history"] = json!(["сделай погромче"]);
-    let heard = ask(&app, session, &shapeless).await?;
-    assert_eq!(heard.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(heard.body["code"], "voice_chat_invalid");
-    assert_eq!(
-        heard.body["message"],
-        "the body does not have the shape of a chat request"
-    );
-
-    let anonymous = hear(open(&app, None, &turn(), &[]).await?).await?;
-    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
-    assert!(vendor.calls().is_empty());
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_ladder_that_breaks_after_the_start_ends_the_stream_with_an_error(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
-    vendor.model("down-model", Reply::Status(529));
-    vendor.model(
-        "cut-model",
-        Reply::Stream(
-            vendor::message(&LOUDER[..3], 0, 1_000, 100)[..4].to_vec(),
-            End::Breaks,
-        ),
-    );
-    vendor.model(
-        "stalling-model",
-        Reply::Stream(
-            vendor::message(&LOUDER[..2], 0, 1_000, 100)[..3].to_vec(),
-            End::Stalls,
-        ),
-    );
-    let nothing = ["{\"actions\":[{\"name\":\"open_door\",\"args\":[]}],\"say\":\" \"}"];
-    vendor.model(
-        "mute-model",
-        Reply::Stream(vendor::message(&nothing, 0, 1_000, 100), End::Closes),
-    );
-    let session = session_for(&pool, &fresh_user()).await?;
-
-    let mute = starred(&pool, &one_step(&vendor, "mute-model")).await?;
-    let heard = ask(&mute, session, &turn()).await?;
-    assert_eq!(
-        heard.named(),
-        [
-            ("say", &json!({"text": " "})),
-            ("error", &json!({"code": "provider_failed"}))
-        ],
-        "an answer with nothing to do and nothing to say is a failure"
-    );
-
-    let down = starred(&pool, &one_step(&vendor, "down-model")).await?;
-    let heard = ask(&down, session, &turn()).await?;
-    assert_eq!(heard.status, StatusCode::OK);
-    assert_eq!(
-        heard.named(),
-        [("error", &json!({"code": "provider_failed"}))]
-    );
-
-    let cut = starred(&pool, &one_step(&vendor, "cut-model")).await?;
-    let heard = ask(&cut, session, &turn()).await?;
-    assert_eq!(
-        heard.named(),
-        [
-            (
-                "action",
-                &json!({"name": "volume_set", "args": {"level": 60}})
-            ),
-            ("say", &json!({"text": "Сделала "})),
-            ("error", &json!({"code": "provider_failed"})),
-        ]
-    );
-
-    let hurried =
-        one_step(&vendor, "stalling-model").replace("deadline_ms = 8000", "deadline_ms = 2000");
-    let stalling = starred(&pool, &hurried).await?;
-    let heard = ask(&stalling, session, &turn()).await?;
-    assert_eq!(
-        heard.named(),
-        [
-            (
-                "action",
-                &json!({"name": "volume_set", "args": {"level": 60}})
-            ),
-            ("error", &json!({"code": "deadline"})),
-        ]
-    );
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_client_that_leaves_cancels_the_provider_call_and_the_stream_holds_no_connection(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let vendor = Vendor::open().await?;
-    vendor.model(
-        "stalling-model",
-        Reply::Stream(
-            vendor::message(&LOUDER[..2], 0, 1_000, 100)[..3].to_vec(),
-            End::Stalls,
-        ),
-    );
-    let app = starred(&pool, &one_step(&vendor, "stalling-model")).await?;
-    let session = session_for(&pool, &fresh_user()).await?;
-
-    let response = open(&app, Some(session), &turn(), &[]).await?;
-    assert_eq!(response.status(), StatusCode::OK);
-    let mut frames = response.into_body().into_data_stream();
-    let first = frames.next().await.expect("the action arrives")?;
-    assert!(String::from_utf8_lossy(&first).starts_with("event: action\n"));
-    assert!(
-        all_connections_idle(&pool).await,
-        "an open chat stream keeps no database connection"
-    );
-    drop(frames);
-
-    assert!(
-        vendor.hung_up(1).await,
-        "the provider call is closed when the client leaves"
-    );
     Ok(())
 }
 

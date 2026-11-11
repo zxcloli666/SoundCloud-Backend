@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use futures::stream;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
 pub const MESSAGES: &str = "/v1/messages";
@@ -23,6 +24,7 @@ const FLUSH_BEFORE_BREAK: Duration = Duration::from_millis(200);
 #[derive(Clone)]
 pub enum Reply {
     Stream(Vec<(u64, String)>, End),
+    Gated(Vec<(u64, String)>, usize),
     Status(u16),
 }
 
@@ -31,6 +33,7 @@ pub enum End {
     Closes,
     Stalls,
     Breaks,
+    Gated(usize),
 }
 
 #[derive(Clone)]
@@ -44,11 +47,11 @@ pub struct Vendor {
     shared: Arc<Shared>,
 }
 
-#[derive(Default)]
 struct Shared {
     replies: Mutex<HashMap<String, Reply>>,
     calls: Mutex<Vec<Call>>,
     hung_up: AtomicUsize,
+    gate: Semaphore,
 }
 
 struct Line {
@@ -58,7 +61,12 @@ struct Line {
 
 impl Vendor {
     pub async fn open() -> anyhow::Result<Self> {
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            replies: Mutex::default(),
+            calls: Mutex::default(),
+            hung_up: AtomicUsize::new(0),
+            gate: Semaphore::new(0),
+        });
         let app = Router::new()
             .route(MESSAGES, post(answer))
             .route(COMPLETIONS, post(answer))
@@ -79,6 +87,10 @@ impl Vendor {
 
     pub fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.address)
+    }
+
+    pub fn release(&self) {
+        self.shared.gate.add_permits(1);
     }
 
     pub fn calls(&self) -> Vec<Call> {
@@ -171,6 +183,7 @@ async fn answer(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Str
     };
     match reply {
         Some(Reply::Stream(chunks, end)) => streamed(chunks, line, end),
+        Some(Reply::Gated(chunks, before)) => streamed(chunks, line, End::Gated(before)),
         Some(Reply::Status(status)) => {
             line.finish();
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -188,15 +201,21 @@ async fn answer(State(shared): State<Arc<Shared>>, headers: HeaderMap, body: Str
 }
 
 fn streamed(chunks: Vec<(u64, String)>, line: Line, end: End) -> Response {
-    let state = (chunks.into_iter(), Some(line));
+    let state = (chunks.into_iter().enumerate(), Some(line));
     let body = stream::unfold(state, move |(mut chunks, mut line)| async move {
-        if let Some((delay, chunk)) = chunks.next() {
+        if let Some((index, (delay, chunk))) = chunks.next() {
+            if let (End::Gated(before), Some(line)) = (end, &line)
+                && index == before
+                && let Ok(permit) = line.shared.gate.acquire().await
+            {
+                permit.forget();
+            }
             sleep(Duration::from_millis(delay)).await;
             return Some((Ok(Bytes::from(chunk)), (chunks, line)));
         }
         let line = line.take()?;
         match end {
-            End::Closes => {
+            End::Closes | End::Gated(_) => {
                 line.finish();
                 None
             }
