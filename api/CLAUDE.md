@@ -87,7 +87,7 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
 DTO — резолвер, кравл и wanted-резолвер живут в `jobs`), `admin` (read/CRUD + durable enqueue; тяжёлый maintenance — job `admin.*` в `jobs`), `lyrics` (cache/state read, local preview и durable lookup wake;
 LRCLIB/Musixmatch/Genius lookup и align decision живут в `jobs`), `recommendations` (`smart_wave`, arms, blender, cursors,
 clusters, bandits, trainer), `collab`/`centroids` (vectors), `cold_refresh` (TTL-based SC re-sync), `auth`/
-`oauth_apps` (SC token chains + proxy), `sync_queue` (write-back to SC), `resolve` (`/resolve` handler → `ScReadService`), read-path:
+`oauth_apps` (SC token chains + proxy), `sync_queue` (write-back to SC), `resolve` (`/resolve` handler → `ScReadService`), `voice_chat` (`POST /voice/chat`: a model answers a spoken phrase as an event stream through the provider ladder of `utils/llm-ladder`; config and wire contract: [docs/voice-chat.md](docs/voice-chat.md)), read-path:
 `search discover albums artists playlists users me likes dislikes superlikes history auras featured subscriptions`. Infra: `bus/` (
 nats), `cache/`, `db/`, `qdrant/`, `redis/`, `sc/` (`ScClient` transport + `ScReadService` public-read facade +
 `apiv2`/`mapping`/`lua_methods` — see [docs/sc-networking.md](docs/sc-networking.md)), `common/`, `config.rs`, `main.rs`.
