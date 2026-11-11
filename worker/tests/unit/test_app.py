@@ -257,8 +257,12 @@ def test_cpu_profile_runs_encode_in_its_own_engine_and_lanes_in_parallel_process
     assert sorted(name for name, plan in plans.items() if plan.reserved) == ["encode", "llm-local"]
     assert {name: plan.threads for name, plan in plans.items() if plan.threads} == {
         "encode": 4,
-        "llm-local": 4,
+        "llm-local": 2,
         "cpu-tools": 1,
+    }
+    assert [name for name, plan in plans.items() if plan.shares_budget] == ["llm-local"]
+    assert {name: dict(plan.env) for name, plan in plans.items() if plan.env} == {
+        "llm-local": {"OMP_WAIT_POLICY": "PASSIVE"}
     }
     assert {name: plan.idle_unload_s for name, plan in plans.items() if plan.idle_unload_s} == {
         "llm-local": 600.0

@@ -10,6 +10,7 @@ from worker.app import Blueprint
 from worker.contract import Contract
 from worker.fetch_models import FASTTEXT_HOME_ENV
 from worker.runtime import devices
+from worker.runtime.supervisor import BULK_NICE
 
 TRUSTED_LANES = {
     "audio": 16,
@@ -229,7 +230,8 @@ def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
     hosts = [plan for plan in blueprint.plans if s.LOCAL_LLM_SLOT in plan.slot_names]
     assert [plan.slot_names for plan in hosts] == [(s.LOCAL_LLM_SLOT,)]
     plan = hosts[0]
-    assert (plan.reserved, plan.nice, plan.threads) == (True, 0, 4)
+    assert (plan.reserved, plan.nice, plan.threads) == (True, local.nice, local.threads)
+    assert 0 < plan.nice < BULK_NICE and plan.shares_budget
     assert plan.idle_unload_s == local.idle_unload_s > 0
     spec = plan.slots[0]
     assert spec.device == s.LOCAL_LLM_DEVICE

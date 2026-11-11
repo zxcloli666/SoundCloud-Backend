@@ -33,6 +33,7 @@ LOCAL_LLM_SLOT = "llm-local"
 LOCAL_LLM_DEVICE = "llama-cpu"
 LOCAL_LLM_FILE_SUFFIX = ".gguf"
 LOCAL_LLM_MIN_CONTEXT_TOKENS = 1024
+MAX_NICE = 19
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 MIX_FALLBACK = "mix"
 
@@ -276,6 +277,8 @@ class LocalLlmSettings:
     context_tokens: int
     prompt_states: int
     idle_unload_s: int
+    threads: int
+    nice: int
 
 
 @dataclass(frozen=True)
@@ -675,6 +678,10 @@ def validate_local_llm(settings: Settings) -> list[str]:
         problems.append("llm.local.prompt_states must be >= 1")
     if local.idle_unload_s < 0:
         problems.append("llm.local.idle_unload_s must be >= 0")
+    if local.threads < 1:
+        problems.append("llm.local.threads must be >= 1")
+    if not 0 <= local.nice <= MAX_NICE:
+        problems.append(f"llm.local.nice must be within 0..{MAX_NICE}")
     return problems
 
 

@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import aiohttp
 import nats.errors
@@ -104,6 +105,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
 AI_LANE = "ai"
+LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
 ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
@@ -811,7 +813,16 @@ def local_llm_on_this_cpu(settings: Settings, json_log: JsonLog) -> Settings:
 def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     if settings_module.LOCAL_LLM_SLOT not in plan.slot_names:
         return plan
-    return replace(plan, reserved=True, idle_unload_s=float(settings.llm.local.idle_unload_s))
+    local = settings.llm.local
+    return replace(
+        plan,
+        reserved=True,
+        threads=local.threads,
+        nice=local.nice,
+        idle_unload_s=float(local.idle_unload_s),
+        shares_budget=True,
+        env=LOCAL_LLM_ENV,
+    )
 
 
 def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:

@@ -64,6 +64,8 @@ class Fake:
             return {}, {"threads": torch.get_num_threads(), "nice": os.nice(0)}
         if method == "granted_threads":
             return {}, {"threads": CALL_GUARD.threads}
+        if method == "environment":
+            return {}, {"wait_policy": os.environ.get("OMP_WAIT_POLICY", ""), "nice": os.nice(0)}
         if method == "boom":
             raise ValueError("model exploded")
         if method == "oom" and rows > int(str(args.get("fits", 1))):
