@@ -73,6 +73,7 @@ Header `x-session-id`. The user needs Star. JSON body, only `text` is required:
 }
 ```
 
+- `persona`: a `[voice_chat.personas.<id>]` id, an unknown one gets `default`. `language`: the language the app listens and speaks in, the reply is written in it; without it the reply follows the language of `text`.
 - Tool and argument names: `^[a-z][a-z0-9_]{0,31}$`, unique. Arguments are flat: `string`, `integer`, `number`, `boolean` or `enum` of strings; `description`, `minimum` and `maximum` are read, other keywords are ignored. At most 16 arguments per tool.
 - `context` and `results`: at most 8 KiB each as JSON, at most 16 results. A history item: at most 2000 characters. A note: at most 300. A description: at most 600.
 - `results` are what the tools of this turn answered: send the same `text` and `history` again with them.
