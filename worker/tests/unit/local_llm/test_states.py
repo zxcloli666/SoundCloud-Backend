@@ -29,6 +29,16 @@ def test_anchors_alone_stay_within_the_budget_oldest_first() -> None:
     assert states.held_bytes() == 20
 
 
+def test_an_anchor_that_others_continue_outlives_them() -> None:
+    states: PromptStates[bytes] = PromptStates(budget_bytes=30, min_tokens=CHUNK)
+    shared = tokens(1, 8)
+    states.keep(shared, bytes(10), anchor=True)
+    for tail in (1, 2, 3):
+        states.keep([*shared, tail, 7, 7, 7], bytes(10), anchor=True)
+
+    assert [prefix[8:9] for prefix in states._anchors] == [(), (2,), (3,)]
+
+
 def test_a_used_state_is_the_last_to_go() -> None:
     states: PromptStates[bytes] = PromptStates(budget_bytes=25, min_tokens=CHUNK)
     first, second = tokens(1, 8), tokens(2, 8)

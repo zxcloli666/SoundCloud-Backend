@@ -42,7 +42,12 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
     assert contract.rpc.reply_header == "X-Reply-To"
     assert contract.max_message_bytes == 900_000
     assert contract.complete_limits == c.CompleteLimits(
-        system_bytes=48_000, messages=64, message_bytes=12_000, schema_bytes=64_000, max_tokens=1024
+        system_bytes=48_000,
+        system_marks=4,
+        messages=64,
+        message_bytes=12_000,
+        schema_bytes=64_000,
+        max_tokens=1024,
     )
 
 

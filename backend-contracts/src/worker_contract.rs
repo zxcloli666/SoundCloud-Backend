@@ -12,12 +12,13 @@ use crate::pipeline::{
     EncodeResult, HEADERS, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
     LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_COMPLETE_MESSAGE_BYTES,
     MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
-    MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MatchTrackData, MatchTrackRequest, PipelineStreamSpec,
-    REPLY_TO_HEADER, RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData, ResolveArtistRequest,
-    RpcError, TRAIN_COLLAB, TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO,
-    TRANSCRIBE_STREAM, TasteTrainRequest, TasteTrainResult, TranscriptionRequest,
-    TranscriptionResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES,
-    WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
+    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MatchTrackData,
+    MatchTrackRequest, PipelineStreamSpec, REPLY_TO_HEADER, RESOLVE_ARTIST_WINDOW_SECONDS,
+    ResolveArtistData, ResolveArtistRequest, RpcError, TRAIN_COLLAB, TRAIN_COLLAB_STREAM,
+    TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest,
+    TasteTrainResult, TranscriptionRequest, TranscriptionResult, WORKER_HEALTH_SUBJECT,
+    WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS,
+    collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -418,6 +419,7 @@ pub fn worker_contract() -> Value {
             "max_message_bytes": MAX_MESSAGE_BYTES,
             "complete": {
                 "system_bytes": MAX_COMPLETE_SYSTEM_BYTES,
+                "system_marks": MAX_COMPLETE_SYSTEM_MARKS,
                 "messages": MAX_COMPLETE_MESSAGES,
                 "message_bytes": MAX_COMPLETE_MESSAGE_BYTES,
                 "schema_bytes": MAX_COMPLETE_SCHEMA_BYTES,
@@ -910,6 +912,7 @@ mod tests {
             limits,
             &json!({
                 "system_bytes": 48_000,
+                "system_marks": 4,
                 "messages": 64,
                 "message_bytes": 12_000,
                 "schema_bytes": 64_000,
@@ -924,6 +927,10 @@ mod tests {
             request["properties"]["system"][utf8],
             limits["system_bytes"]
         );
+        let marks = &request["properties"]["system_marks"];
+        assert_eq!(marks["maxItems"], limits["system_marks"]);
+        assert_eq!(marks["items"]["minimum"], 1);
+        assert_eq!(marks["items"]["maximum"], limits["system_bytes"]);
         assert_eq!(request["properties"]["messages"]["minItems"], 1);
         assert_eq!(
             request["properties"]["messages"]["maxItems"],

@@ -125,7 +125,7 @@ def fetch() -> None:
 
 def ask(slot: LocalLlmSlot) -> dict[str, object]:
     messages = [{"role": "user", "content": "Are you ok?"}]
-    return dict(slot.complete("Answer with one JSON object.", messages, SCHEMA, 32))
+    return dict(slot.complete("Answer with one JSON object.", (), messages, SCHEMA, 32))
 
 
 def failed(reason: str, **fields: object) -> int:

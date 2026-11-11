@@ -64,6 +64,9 @@ SHARED_PHRASES = (
     "skip this one too",
     "like this one too",
 )
+MARKED_HEAD = f"This conversation is about marked sections.\n{RULES}\nПерсонаж отвечает коротко.\n"
+MARKED_TAILS = ("Now playing: M83.", "Now playing: Kino. Volume 40.")
+TAIL_TOKENS = 64
 
 
 async def test_complete_is_served_by_the_local_model_over_nats(
@@ -294,6 +297,45 @@ async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_
     assert answered_by_the_other <= {"resolve_artist"}
     for worker in workers:
         assert_nothing_left(worker)
+
+
+async def test_a_new_tail_after_a_mark_of_the_system_is_all_that_its_first_call_reads(
+    live: Live, fixtures: object, tmp_path: Path
+) -> None:
+    window_s = float(live.contract.rpc.windows_s["complete"])
+    worker = await start_serve(
+        live,
+        fixtures,
+        tmp_path,
+        LANES,
+        WORKER__RUNTIME__DEVICE="cpu",
+        WORKER__LLM__LOCAL__THREADS=THREADS,
+        WORKER__LLM__LOCAL__STATE_CACHE_MIB=STATE_CACHE_MIB,
+    )
+    try:
+        await wait_for_status(worker, all_lanes_serving(LANES))
+        first, first_tries = await answered(live, marked_request(MARKED_TAILS[0]), window_s)
+        second = await ask(live, marked_request(MARKED_TAILS[1]), window_s)
+        left = await live.messages_left("AI_RPC")
+    finally:
+        code = await worker.terminate()
+
+    assert code == 0, worker.tail()
+    assert first["ok"] is True and second["ok"] is True, (first, second)
+    answers = [event for event in worker.events() if event.get("event") == "complete_answered"]
+    assert len(answers) == 2
+    assert (answers[0]["reused_tokens"] > 0) == (first_tries > 1)
+    assert 0 < answers[1]["input_tokens"] - answers[1]["reused_tokens"] < TAIL_TOKENS, answers
+    assert left == 0
+    assert_nothing_left(worker)
+
+
+def marked_request(tail: str) -> dict[str, object]:
+    return {
+        **request("what is playing?"),
+        "system": MARKED_HEAD + tail,
+        "system_marks": [len(MARKED_HEAD.encode("utf-8"))],
+    }
 
 
 async def test_a_lone_worker_with_the_local_model_off_refuses_complete_after_its_hand_overs(

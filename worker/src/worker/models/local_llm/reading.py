@@ -18,14 +18,13 @@ def read(
     model: Model, states: PromptStates[State], prompt: Prompt, pace: Pace, chunk_tokens: int
 ) -> int:
     tokens = prompt.tokens
-    stable = states.stable_prefix(tokens, prompt.shared)
+    marks = prompt.marks or (states.stable_prefix(tokens, prompt.shared) or prompt.shared,)
     reused = restore(model, states, tokens)
-    system = stable or prompt.shared
     try:
-        for mark, anchor in ((system, True), (prompt.turn, False)):
-            if model.read_tokens < mark:
-                evaluate(model, tokens, mark, pace, chunk_tokens)
-                states.keep(tokens[:mark], model.save(), anchor)
+        for stop, anchor in (*((mark, True) for mark in marks), (prompt.turn, False)):
+            if model.read_tokens < stop:
+                evaluate(model, tokens, stop, pace, chunk_tokens)
+                states.keep(tokens[:stop], model.save(), anchor)
         evaluate(model, tokens, len(tokens) - 1, pace, chunk_tokens)
     except CallExpired:
         if model.read_tokens > reused:

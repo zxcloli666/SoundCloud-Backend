@@ -447,7 +447,8 @@
       "message_bytes": 12000,
       "messages": 64,
       "schema_bytes": 64000,
-      "system_bytes": 48000
+      "system_bytes": 48000,
+      "system_marks": 4
     },
     "max_message_bytes": 900000
   },
@@ -590,6 +591,16 @@
         "system": {
           "type": "string",
           "x-max-utf8-bytes": 48000
+        },
+        "system_marks": {
+          "items": {
+            "format": "uint32",
+            "maximum": 48000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "type": "array"
         }
       },
       "required": [

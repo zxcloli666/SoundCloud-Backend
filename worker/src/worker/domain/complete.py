@@ -17,6 +17,8 @@ from worker.settings import LocalLlmSettings
 
 METHOD = "complete"
 RPC_MARGIN_S = 0.5
+CONTINUATION_MASK = 0xC0
+CONTINUATION_BYTE = 0x80
 ROLES: Mapping[str, ChatRole] = {"user": "user", "assistant": "assistant"}
 
 log = logging.getLogger(__name__)
@@ -92,7 +94,7 @@ class Completer:
     async def _ask(self, asked: Request, deadline: Deadline) -> Completion:
         try:
             return await self._engines.complete(
-                asked.system, asked.messages, asked.schema, asked.max_tokens, deadline
+                asked.system, asked.marks, asked.messages, asked.schema, asked.max_tokens, deadline
             )
         except EngineUnavailable as error:
             self._counters.inc("complete_unavailable_total", state=error.state)
@@ -119,6 +121,7 @@ class Completer:
 @dataclass(frozen=True)
 class Request:
     system: str
+    marks: Sequence[int]
     messages: Sequence[ChatMessage]
     schema: Mapping[str, object]
     max_tokens: int
@@ -126,15 +129,41 @@ class Request:
     @classmethod
     def parse(cls, request: Mapping[str, object], limits: CompleteLimits) -> Request:
         system = fields.required_text(request, "system")
-        if utf8_bytes(system, "system") > limits.system_bytes:
+        encoded = utf8(system, "system")
+        if len(encoded) > limits.system_bytes:
             raise invalid(f"system is longer than {limits.system_bytes} bytes")
+        marks = parse_marks(request, encoded, limits)
         schema = fields.required_mapping(request, "schema")
         if schema_bytes(schema) > limits.schema_bytes:
             raise invalid(f"schema is longer than {limits.schema_bytes} bytes")
         max_tokens = fields.required_int(request, "max_tokens")
         if not 1 <= max_tokens <= limits.max_tokens:
             raise invalid(f"max_tokens must be within 1..{limits.max_tokens}")
-        return cls(system, parse_messages(request, limits), schema, max_tokens)
+        return cls(system, marks, parse_messages(request, limits), schema, max_tokens)
+
+
+def parse_marks(
+    request: Mapping[str, object], system: bytes, limits: CompleteLimits
+) -> Sequence[int]:
+    if "system_marks" not in request:
+        return ()
+    raw_marks = fields.required_list(request, "system_marks")
+    if len(raw_marks) > limits.system_marks:
+        raise invalid(f"system_marks must hold at most {limits.system_marks} offsets")
+    marks: list[int] = []
+    for raw in raw_marks:
+        marks.append(parse_mark(raw, marks[-1] if marks else 0, system))
+    return marks
+
+
+def parse_mark(mark: object, before: int, system: bytes) -> int:
+    if isinstance(mark, bool) or not isinstance(mark, int):
+        raise invalid("a system mark must be an integer")
+    if not before < mark <= len(system):
+        raise invalid("system_marks must be ascending byte offsets inside system")
+    if mark < len(system) and system[mark] & CONTINUATION_MASK == CONTINUATION_BYTE:
+        raise invalid("a system mark must not split a character")
+    return mark
 
 
 def parse_messages(request: Mapping[str, object], limits: CompleteLimits) -> list[ChatMessage]:
@@ -151,14 +180,14 @@ def parse_message(raw: object, limits: CompleteLimits) -> ChatMessage:
     if role is None:
         raise invalid(f"a message role must be one of {sorted(ROLES)}")
     content = fields.required_text(raw, "content")
-    if not content or utf8_bytes(content, "a message content") > limits.message_bytes:
+    if not content or len(utf8(content, "a message content")) > limits.message_bytes:
         raise invalid(f"a message content must hold 1..{limits.message_bytes} bytes")
     return ChatMessage(role, content)
 
 
-def utf8_bytes(text: str, what: str) -> int:
+def utf8(text: str, what: str) -> bytes:
     try:
-        return len(text.encode("utf-8"))
+        return text.encode("utf-8")
     except UnicodeEncodeError as error:
         raise invalid(f"{what} is not valid UTF-8") from error
 

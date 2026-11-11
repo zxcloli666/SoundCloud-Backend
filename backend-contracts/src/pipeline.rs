@@ -24,6 +24,7 @@ pub const MAX_FINGERPRINT_CHARS: u32 = 64;
 pub const MAX_RESOLVE_DESCRIPTION_CHARS: u32 = 4000;
 pub const MAX_MATCH_CANDIDATES: u32 = 50;
 pub const MAX_COMPLETE_SYSTEM_BYTES: u32 = 48_000;
+pub const MAX_COMPLETE_SYSTEM_MARKS: u32 = 4;
 pub const MAX_COMPLETE_MESSAGES: u32 = 64;
 pub const MAX_COMPLETE_MESSAGE_BYTES: u32 = 12_000;
 pub const MAX_COMPLETE_SCHEMA_BYTES: u32 = 64_000;
@@ -482,6 +483,12 @@ pub struct CompleteMessage {
 pub struct CompleteRequest {
     #[schemars(extend("x-max-utf8-bytes" = MAX_COMPLETE_SYSTEM_BYTES))]
     pub system: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(
+        length(max = MAX_COMPLETE_SYSTEM_MARKS),
+        inner(range(min = 1, max = MAX_COMPLETE_SYSTEM_BYTES))
+    )]
+    pub system_marks: Vec<u32>,
     #[schemars(length(min = 1, max = MAX_COMPLETE_MESSAGES))]
     pub messages: Vec<CompleteMessage>,
     pub schema: serde_json::Map<String, serde_json::Value>,
@@ -1021,9 +1028,37 @@ mod tests {
         assert_eq!(request.messages.len(), 3);
         assert_eq!(request.messages[1].role, CompleteRole::Assistant);
         assert_eq!(request.schema["type"], "object");
+        assert!(request.system_marks.is_empty());
         assert_eq!(
             serde_json::to_value(request).expect("complete request serializes"),
             wire
+        );
+    }
+
+    #[test]
+    fn a_complete_request_carries_the_marks_of_its_system_text_only_when_it_has_them() {
+        let mut wire = serde_json::json!({
+            "system": "Rules.\nPersona.\nState.",
+            "system_marks": [7, 16],
+            "messages": [{ "role": "user", "content": "hi" }],
+            "schema": { "type": "object" },
+            "max_tokens": 64
+        });
+
+        let marked: CompleteRequest =
+            serde_json::from_value(wire.clone()).expect("marked request deserializes");
+        let sent = serde_json::to_value(&marked).expect("marked request serializes");
+        wire["system_marks"] = serde_json::json!([]);
+        let unmarked: CompleteRequest =
+            serde_json::from_value(wire).expect("request with no marks deserializes");
+
+        assert_eq!(marked.system_marks, [7, 16]);
+        assert_eq!(sent["system_marks"], serde_json::json!([7, 16]));
+        assert!(
+            serde_json::to_value(unmarked)
+                .expect("request with no marks serializes")
+                .get("system_marks")
+                .is_none()
         );
     }
 

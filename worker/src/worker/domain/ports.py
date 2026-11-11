@@ -192,6 +192,7 @@ class Engines(Protocol):
     async def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
         max_tokens: int,

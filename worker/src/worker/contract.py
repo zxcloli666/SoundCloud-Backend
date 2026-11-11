@@ -126,6 +126,7 @@ class RpcSpec:
 @dataclass(frozen=True)
 class CompleteLimits:
     system_bytes: int
+    system_marks: int
     messages: int
     message_bytes: int
     schema_bytes: int
@@ -300,6 +301,7 @@ def parse_complete_limits(limits: Mapping[str, Any]) -> CompleteLimits:
     try:
         return CompleteLimits(
             system_bytes=int(limits["system_bytes"]),
+            system_marks=int(limits["system_marks"]),
             messages=int(limits["messages"]),
             message_bytes=int(limits["message_bytes"]),
             schema_bytes=int(limits["schema_bytes"]),

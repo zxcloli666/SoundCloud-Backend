@@ -78,23 +78,25 @@ class LocalLlmSlot:
         while len(self._model.tokenize(system, special=False)) < chunk_tokens:
             system += WARMUP_SENTENCE
         forgotten: PromptStates[State] = PromptStates(0, chunk_tokens)
-        self._answer(system, WARMUP_MESSAGES, WARMUP_SCHEMA, WARMUP_TOKENS, forgotten)
+        self._answer(system, (), WARMUP_MESSAGES, WARMUP_SCHEMA, WARMUP_TOKENS, forgotten)
 
     def invoke(
         self, method: str, arrays: Arrays, args: Mapping[str, object]
     ) -> tuple[Arrays, Mapping[str, object]]:
         if method != LOCAL_LLM_METHOD:
             raise ValueError(f"{LOCAL_LLM_SLOT} has no method {method!r}")
-        system, messages = args.get("system"), args.get("messages")
+        system, marks = args.get("system"), args.get("system_marks")
+        messages = args.get("messages")
         schema, max_tokens = args.get("schema"), args.get("max_tokens")
         if not (
             isinstance(system, str)
+            and isinstance(marks, list)
             and isinstance(messages, list)
             and isinstance(schema, Mapping)
             and isinstance(max_tokens, int)
         ):
             raise TypeError(f"{LOCAL_LLM_METHOD} got arguments of the wrong types")
-        return {}, self.complete(system, messages, schema, max_tokens)
+        return {}, self.complete(system, marks, messages, schema, max_tokens)
 
     def unload(self) -> None:
         if self._model is not None:
@@ -106,15 +108,17 @@ class LocalLlmSlot:
     def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[Mapping[str, str]],
         schema: Mapping[str, object],
         max_tokens: int,
     ) -> Mapping[str, object]:
-        return self._answer(system, messages, schema, max_tokens, self._states)
+        return self._answer(system, system_marks, messages, schema, max_tokens, self._states)
 
     def _answer(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[Mapping[str, str]],
         schema: Mapping[str, object],
         max_tokens: int,
@@ -123,7 +127,7 @@ class LocalLlmSlot:
         if self._model is None or self._template is None or self._source is None:
             raise RuntimeError(f"{LOCAL_LLM_SLOT} is not loaded")
         model, chunk_tokens = self._model, self._source[1].chunk_tokens
-        prompt = Prompt.render(model, self._template, system, messages)
+        prompt = Prompt.render(model, self._template, system, messages, system_marks)
         if len(prompt.tokens) + max_tokens > model.context_tokens:
             raise BadInput(
                 f"a prompt of {len(prompt.tokens)} tokens and an answer of {max_tokens} tokens "

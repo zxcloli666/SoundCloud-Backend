@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 import jinja2
 import jinja2.sandbox
@@ -18,6 +19,7 @@ class Prompt:
     tokens: list[int]
     shared: int
     turn: int
+    marks: tuple[int, ...] = ()
 
     @classmethod
     def render(
@@ -26,6 +28,7 @@ class Prompt:
         template: jinja2.Template,
         system: str,
         messages: Sequence[Mapping[str, str]],
+        system_marks: Sequence[int] = (),
     ) -> Prompt:
         turns = [{"role": "system", "content": system}, *messages] if system else list(messages)
         marked = [
@@ -48,14 +51,28 @@ class Prompt:
             raise RuntimeError("the chat template does not place every message once and in order")
         tokens: list[int] = []
         ends: list[int] = []
+        cuts: list[int] = []
         for position, piece in enumerate(pieces):
             if position % 2 == 0:
                 tokens += model.tokenize(piece, special=True)
-            else:
-                tokens += plain_tokens(model, turns[int(piece)]["content"])
-                ends.append(len(tokens))
+                continue
+            content = turns[int(piece)]["content"]
+            for part in split_at(content, system_marks if system and not ends else ()):
+                tokens += plain_tokens(model, part)
+                cuts.append(len(tokens))
+            ends.append(cuts.pop())
         last = len(tokens) - 1
-        return cls(tokens, min(ends[0], last) if system else 0, min(ends[-1], last))
+        shared = min(ends[0], last) if system else 0
+        marks = tuple(cut for cut in cuts if cut <= shared)
+        return cls(tokens, shared, min(ends[-1], last), marks)
+
+
+def split_at(text: str, marks: Sequence[int]) -> list[str]:
+    if not marks:
+        return [text]
+    encoded = text.encode("utf-8")
+    edges = [0, *marks, len(encoded)]
+    return [encoded[start:stop].decode("utf-8") for start, stop in pairwise(edges)]
 
 
 def plain_tokens(model: Model, text: str) -> list[int]:

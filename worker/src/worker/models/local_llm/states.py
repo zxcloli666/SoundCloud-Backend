@@ -70,7 +70,14 @@ class PromptStates[S: Sized]:
 
     def _fit(self) -> None:
         while self.held_bytes() > self._budget_bytes:
-            self.drop(next(iter(self._turns or self._anchors)))
+            self.drop(next(iter(self._turns or self._last_anchors())))
+
+    def _last_anchors(self) -> list[Prefix]:
+        return [
+            prefix
+            for prefix in self._anchors
+            if not any(starts_with(longer, prefix) for longer in self._anchors)
+        ]
 
 
 def starts_with(tokens: Sequence[int], prefix: Prefix) -> bool:

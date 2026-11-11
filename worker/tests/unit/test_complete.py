@@ -55,6 +55,7 @@ async def test_the_answer_carries_the_text_the_model_and_the_token_counts(
             "complete",
             {
                 "system": sent["system"],
+                "system_marks": [],
                 "messages": [
                     ChatMessage("user", "сделай потише"),
                     ChatMessage("assistant", '{"say": "Готово", "actions": []}'),
@@ -94,6 +95,19 @@ LIMIT_CASES: Mapping[str, tuple[Mapping[str, object], bool]] = {
         {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "{}"}]},
         True,
     ),
+    "no marks listed": ({"system_marks": []}, True),
+    "marks at the ends of two sections": (
+        {"system": "Rules.\nPersona.\nState.", "system_marks": [7, 16]},
+        True,
+    ),
+    "the most marks": ({"system": "abcdefgh", "system_marks": [1, 2, 3, 4]}, True),
+    "too many marks": ({"system": "abcdefgh", "system_marks": [1, 2, 3, 4, 5]}, False),
+    "a mark at the start": ({"system_marks": [0]}, False),
+    "a mark past the byte limit": ({"system_marks": [48_001]}, False),
+    "marks that are not a list": ({"system_marks": 7}, False),
+    "marks given as null": ({"system_marks": None}, False),
+    "a fractional mark": ({"system_marks": [1.5]}, False),
+    "a boolean mark": ({"system_marks": [True]}, False),
     "a schema that is not an object": ({"schema": "object"}, False),
     "no schema": ({"schema": None}, False),
     "one answer token": ({"max_tokens": 1}, True),
@@ -122,6 +136,41 @@ async def test_the_request_is_checked_exactly_as_the_contract_schema_says(
         await subject.complete(asked, deadline(clock))
     assert refused.value.reason is Reason.INVALID_REQUEST
     assert engines.calls == []
+
+
+@pytest.mark.parametrize(
+    ("system", "marks"),
+    [("Rules.\nPersona.", [7, 15]), ("яя", [2]), ("я\nя", [2, 3, 5])],
+    ids=["the last mark at the end", "between two-byte letters", "around a line break"],
+)
+async def test_marks_between_characters_of_the_system_reach_the_model_as_sent(
+    contract: Contract, clock: FakeClock, system: str, marks: list[int]
+) -> None:
+    subject, engines, _ = completer(contract)
+
+    await subject.complete(request(system=system, system_marks=marks), deadline(clock))
+
+    [(_, asked)] = engines.calls
+    assert (asked["system"], asked["system_marks"]) == (system, marks)
+
+
+@pytest.mark.parametrize(
+    ("system", "marks"),
+    [("Rules.\nPersona.", [16]), ("abcdef", [4, 2]), ("abcdef", [3, 3]), ("я!", [1]), ("", [1])],
+    ids=["past the end", "descending", "repeated", "inside a letter", "in an empty system"],
+)
+async def test_marks_that_do_not_fit_the_system_text_are_refused(
+    contract: Contract, clock: FakeClock, system: str, marks: list[int]
+) -> None:
+    subject, engines, counters = completer(contract)
+    asked = request(system=system, system_marks=marks)
+
+    assert contract.validate(METHOD, asked) == []
+    with pytest.raises(PermanentFailure) as refused:
+        await subject.complete(asked, deadline(clock))
+    assert refused.value.reason is Reason.INVALID_REQUEST
+    assert engines.calls == []
+    assert counters.value("complete_rejected_total", why="invalid_request") == 1
 
 
 async def test_a_schema_over_the_exported_byte_limit_is_refused(
@@ -230,6 +279,7 @@ class HeldEngines(FakeEngines):
     async def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
         max_tokens: int,
@@ -237,7 +287,7 @@ class HeldEngines(FakeEngines):
     ) -> Completion:
         self.entered.release()
         await self.release.wait()
-        return await super().complete(system, messages, schema, max_tokens, deadline)
+        return await super().complete(system, system_marks, messages, schema, max_tokens, deadline)
 
 
 async def test_requests_beyond_the_queue_of_one_model_are_turned_away_at_once(

@@ -223,6 +223,7 @@ class FakeEngines:
     async def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
         max_tokens: int,
@@ -232,6 +233,7 @@ class FakeEngines:
         forced = self._record(
             "complete",
             system=system,
+            system_marks=list(system_marks),
             messages=list(messages),
             schema=dict(schema),
             max_tokens=max_tokens,

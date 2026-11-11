@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 
 import pytest
 
@@ -28,6 +29,10 @@ def prompt(system: Sequence[int], *turns: Sequence[int]) -> Prompt:
     for turn in turns:
         tokens += turn
     return Prompt(tokens, len(system), len(tokens) - 1)
+
+
+def marked(marks: Sequence[int], system: Sequence[int], *turns: Sequence[int]) -> Prompt:
+    return replace(prompt(system, *turns), marks=tuple(marks))
 
 
 def system(head: int, length: int = 16, tail: int = 0) -> list[int]:
@@ -67,6 +72,29 @@ def test_a_new_tail_of_a_known_system_keeps_only_the_common_part() -> None:
     anchors, _ = held.sizes()
     assert anchors == [16, 15]
     assert third == 15
+
+
+def test_a_read_keeps_a_state_at_every_mark_and_a_new_tail_goes_on_from_the_last_one() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    first = ask(marked([8, 12], system(1, tail=1), [50, 60]))
+    kept = held.sizes()
+    second = ask(marked([8, 12], system(1, tail=2), [50, 60]))
+
+    assert (first, second) == (0, 12)
+    assert kept == ([8, 12], [17])
+    assert held.sizes()[0] == [8, 12]
+
+
+def test_the_end_of_a_marked_system_is_kept_only_when_it_is_marked() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    ask(marked([8], system(1), [50, 60]))
+    without = ask(marked([8], system(1), [51, 60]))
+    ask(marked([8, 16], system(2), [50, 60]))
+    marked_end = ask(marked([8, 16], system(2), [51, 60]))
+
+    assert (without, marked_end) == (8, 16)
 
 
 def test_a_state_that_fails_to_load_gives_way_to_a_shallower_one_or_a_cold_read() -> None:
@@ -143,3 +171,18 @@ def test_a_read_cut_short_after_the_system_is_kept_only_until_the_unload() -> No
 
     assert kept == ([len(own)], [3 * CHUNK])
     assert held.sizes() == ([len(own)], [])
+
+
+def test_a_read_cut_short_after_a_mark_keeps_the_mark_and_what_it_read() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    own = system(1, length=40)
+    asked = marked([2 * CHUNK], own, [50, 60, 61])
+    expired(model, ask, asked, chunks=3)
+    kept = held.sizes()
+    resumed_at = ask(asked)
+    held.forget_turns()
+
+    assert kept == ([2 * CHUNK, 3 * CHUNK], [])
+    assert resumed_at == 3 * CHUNK
+    assert held.sizes() == ([2 * CHUNK], [])

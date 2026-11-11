@@ -191,13 +191,14 @@ class GatedEngines(FakeEngines):
     async def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
         max_tokens: int,
         deadline: Deadline,
     ) -> Completion:
         await self.gate.wait()
-        return await super().complete(system, messages, schema, max_tokens, deadline)
+        return await super().complete(system, system_marks, messages, schema, max_tokens, deadline)
 
 
 async def test_resolve_and_match_answer_while_complete_holds_the_local_model(
@@ -442,13 +443,14 @@ class TimedEngines(FakeEngines):
     async def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
         max_tokens: int,
         deadline: Deadline,
     ) -> Completion:
         self.remaining.append(deadline.remaining())
-        return await super().complete(system, messages, schema, max_tokens, deadline)
+        return await super().complete(system, system_marks, messages, schema, max_tokens, deadline)
 
 
 def serve_complete(rpc: Rpc, contract: Contract) -> TimedEngines:

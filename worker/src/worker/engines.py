@@ -408,6 +408,7 @@ class RuntimeEngines:
     async def complete(
         self,
         system: str,
+        system_marks: Sequence[int],
         messages: Sequence[ChatMessage],
         schema: Mapping[str, object],
         max_tokens: int,
@@ -419,6 +420,7 @@ class RuntimeEngines:
             {},
             {
                 "system": system,
+                "system_marks": list(system_marks),
                 "messages": [
                     {"role": message.role, "content": message.content} for message in messages
                 ],

@@ -297,10 +297,10 @@ async def test_engines_fake_is_deterministic_and_scriptable(tmp_path: Path) -> N
     )
     assert training.points_count == 300 and (tmp_path / "out").exists()
     asked = [ChatMessage("user", "who?")]
-    assert await engines.complete("s", asked, {}, 64, deadline) == engines.completion
+    assert await engines.complete("s", [1], asked, {}, 64, deadline) == engines.completion
     assert engines.calls[-1] == (
         "complete",
-        {"system": "s", "messages": asked, "schema": {}, "max_tokens": 64},
+        {"system": "s", "system_marks": [1], "messages": asked, "schema": {}, "max_tokens": 64},
     )
     engines.fail("separate", EngineUnavailable("sep", "broken"))
     with pytest.raises(EngineUnavailable):

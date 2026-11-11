@@ -110,11 +110,18 @@ def ask(
     messages: Sequence[Mapping[str, str]],
     schema: Mapping[str, object] = SCHEMA,
     max_tokens: int = 160,
+    marks: Sequence[int] = (),
 ) -> dict[str, object]:
     _, result = slot.invoke(
         "complete",
         {},
-        {"system": system, "messages": list(messages), "schema": schema, "max_tokens": max_tokens},
+        {
+            "system": system,
+            "system_marks": list(marks),
+            "messages": list(messages),
+            "schema": schema,
+            "max_tokens": max_tokens,
+        },
     )
     return dict(result)
 
@@ -337,6 +344,28 @@ def test_a_changing_tail_of_the_system_prompt_still_reuses_its_stable_part(slot:
     assert reused[2] > 0.8 * len(system) / 4
 
 
+def test_a_new_tail_after_a_mark_is_all_that_its_first_call_reads(slot: object) -> None:
+    from worker.models.local_llm.prompt import Prompt
+
+    shared = own_rules("marked sections") + "\nПерсонаж отвечает коротко.\n"
+    tails = ["Now playing: M83.", "Now playing: Kino. Volume 40."]
+    mark = len(shared.encode("utf-8"))
+    whole = shared + tails[1]
+    marks = [mark, len(whole.encode("utf-8"))]
+    asked = Prompt.render(slot._model, slot._template, whole, [user("skip this track")], marks)
+
+    first_tail = ask(slot, shared + tails[0], [user("what is playing?")], marks=[mark])
+    second_tail = ask(slot, whole, [user("what is playing?")], marks=[mark])
+    marked_end = ask(slot, whole, [user("pause the music")], marks=marks)
+    whole_kept = ask(slot, whole, [user("skip this track")], marks=marks)
+
+    assert asked.marks == (asked.marks[0], asked.shared)
+    assert first_tail["reused_tokens"] == 0
+    assert second_tail["reused_tokens"] == marked_end["reused_tokens"] == asked.marks[0]
+    assert whole_kept["reused_tokens"] == asked.shared
+    assert {"name": "next_track", "args": {}} in json.loads(str(whole_kept["text"]))["actions"]
+
+
 def test_the_next_turn_of_a_conversation_continues_from_the_previous_one(slot: object) -> None:
     system = own_rules("a conversation")
     opening = [user("set the volume to 20")]
@@ -474,6 +503,7 @@ async def test_the_engine_answers_expired_before_the_deadline_and_is_not_killed(
         with pytest.raises(TransientFailure) as late:
             await engines.complete(
                 long_system("an engine deadline", ENGINE_SYSTEM_SENTENCES),
+                (),
                 [ChatMessage("user", "pause the music")],
                 SCHEMA,
                 160,
@@ -482,6 +512,7 @@ async def test_the_engine_answers_expired_before_the_deadline_and_is_not_killed(
         spent = time.monotonic() - started
         answer = await engines.complete(
             own_rules("an engine deadline"),
+            (),
             [ChatMessage("user", "pause the music")],
             SCHEMA,
             160,
@@ -489,7 +520,7 @@ async def test_the_engine_answers_expired_before_the_deadline_and_is_not_killed(
         )
         with pytest.raises(PermanentFailure) as refused:
             await engines.complete(
-                RULES, [ChatMessage("user", "hi")], {"type": "wat"}, 16, Deadline.after(60.0)
+                RULES, (), [ChatMessage("user", "hi")], {"type": "wat"}, 16, Deadline.after(60.0)
             )
         after = supervisor.engines()
     finally:
