@@ -109,7 +109,7 @@ def largest_ok_done(contract: Contract, lane: str) -> dict[str, object]:
     return done
 
 
-@pytest.mark.parametrize("method", ["ai.rpc.resolve_artist", "ai.rpc.match_track"])
+@pytest.mark.parametrize("method", sorted(samples.RPC_REQUESTS))
 def test_rpc_request_samples_are_valid(contract: Contract, method: str) -> None:
     assert contract.validate(method, samples.RPC_REQUESTS[method]) == []
     assert method.startswith(contract.lane("ai").filter_subject.removesuffix(">"))
@@ -129,7 +129,8 @@ def test_rpc_replies_are_valid(contract: Contract, schema: str) -> None:
 
 def test_rpc_windows_bound_the_ai_lane(contract: Contract) -> None:
     ai = contract.lane("ai")
-    assert contract.rpc.windows_s == {"resolve_artist": 20, "match_track": 10}
-    assert ai.deadline_s <= max(contract.rpc.windows_s.values())
+    assert contract.rpc.windows_s == {"resolve_artist": 20, "match_track": 10, "complete": 30}
+    assert ai.deadline_s == max(contract.rpc.windows_s.values())
+    assert {f"ai.rpc.{method}" for method in contract.rpc.windows_s} == set(samples.RPC_REQUESTS)
     assert ai.done_subject is None
     assert ai.nak_base_s is None and ai.reopenable == frozenset()

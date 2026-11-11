@@ -60,6 +60,9 @@ class EnginePlan:
     reserved: bool = False
     threads: int = 0
     nice: int = 0
+    idle_unload_s: float = 0.0
+    shares_budget: bool = False
+    env: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def slot_names(self) -> tuple[str, ...]:
@@ -160,12 +163,14 @@ def reserved_threads(cpus: int) -> int:
 
 def budget_plans(plans: Iterable[EnginePlan], cpus: int) -> tuple[EnginePlan, ...]:
     return tuple(
-        replace(plan, threads=planned_threads(plan, cpus), nice=planned_nice(plan))
+        replace(plan, threads=planned_threads(plan, cpus), nice=plan.nice or planned_nice(plan))
         for plan in plans
     )
 
 
 def planned_threads(plan: EnginePlan, cpus: int) -> int:
+    if plan.threads:
+        return min(plan.threads, cpu_budget(cpus))
     if plan.inline:
         return 1
     if plan.reserved:
@@ -490,7 +495,15 @@ class Supervisor:
         }
         working.update(c.name for c in self._leased_threads if not self._fixed_share(c))
         working.add(plan.name)
-        return fair_share(self._policy.cpu_budget, len(working))
+        budget = max(1, self._policy.cpu_budget - self._budget_taken())
+        return fair_share(budget, len(working))
+
+    def _budget_taken(self) -> int:
+        return sum(
+            self._leased_threads.get(m.client, 0)
+            for m in self._engines
+            if m.plan.shares_budget and m.client is not None
+        )
 
     def _fixed_share(self, client: EngineClient) -> bool:
         if client in self._reserved_leases:
@@ -562,7 +575,12 @@ class Supervisor:
         return EngineClient(
             plan.name,
             plan.slots,
-            replace(self._launch, threads=self._spawn_threads(plan), nice=plan.nice),
+            replace(
+                self._launch,
+                threads=self._spawn_threads(plan),
+                nice=plan.nice,
+                env={**self._launch.env, **plan.env},
+            ),
             self._counters,
             self._clock,
             self._log,
@@ -690,8 +708,9 @@ class Supervisor:
             managed.recycling = True
             self._side_task(self._recycle(managed, client, gap), "recycle", managed.plan.name)
             return
-        if self._policy.idle_unload_s > 0:
-            await self._unload_idle(client, pong)
+        idle_unload_s = managed.plan.idle_unload_s or self._policy.idle_unload_s
+        if idle_unload_s > 0:
+            await self._unload_idle(client, pong, idle_unload_s)
 
     def _record_gaps(self, pong: Pong) -> int:
         worst = 0
@@ -759,11 +778,11 @@ class Supervisor:
         finally:
             self._retiring.discard(client)
 
-    async def _unload_idle(self, client: EngineClient, pong: Pong) -> None:
+    async def _unload_idle(self, client: EngineClient, pong: Pong, idle_unload_s: float) -> None:
         now = self._clock.now()
         for state in pong.slots:
             idle_for = now - client.last_call_at(state.slot)
-            if state.loaded and idle_for >= self._policy.idle_unload_s and self._is_idle(client):
+            if state.loaded and idle_for >= idle_unload_s and self._is_idle(client):
                 if not await self._unload(client, state.slot):
                     return
                 self._log.info(

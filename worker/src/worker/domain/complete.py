@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+import orjson
+
+from worker.contract import CompleteLimits
+from worker.domain.deadline import Deadline
+from worker.domain.metadata import fields
+from worker.domain.outcome import NotServedHere, PermanentFailure, Reason
+from worker.domain.ports import ChatMessage, ChatRole, Completion, Engines, EngineUnavailable
+from worker.domain.validate import validate
+from worker.observability.counters import Counters
+from worker.settings import LOCAL_LLM_METHOD, LocalLlmSettings
+
+RPC_MARGIN_S = 0.5
+CONTINUATION_MASK = 0xC0
+CONTINUATION_BYTE = 0x80
+ROLES: Mapping[str, ChatRole] = {"user": "user", "assistant": "assistant"}
+
+log = logging.getLogger(__name__)
+
+
+class Completer:
+    def __init__(
+        self,
+        engines: Engines,
+        limits: CompleteLimits,
+        local: LocalLlmSettings,
+        model: str,
+        counters: Counters,
+    ) -> None:
+        self._engines = engines
+        self._limits = limits
+        self._local = local
+        self._model = model
+        self._counters = counters
+        self._in_flight = 0
+        self._call_s = 0.0
+        self._free_at = 0.0
+
+    async def complete(
+        self, request: Mapping[str, object], deadline: Deadline
+    ) -> Mapping[str, object]:
+        if not self._local.enabled:
+            self._counters.inc("complete_unavailable_total", state="off")
+            raise NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+        deadline.minus(RPC_MARGIN_S).check(LOCAL_LLM_METHOD)
+        try:
+            asked = Request.parse(request, self._limits)
+            completion = await self._queued(asked, deadline)
+        except PermanentFailure as failure:
+            if failure.reason is Reason.INVALID_REQUEST:
+                self._counters.inc("complete_rejected_total", why="invalid_request")
+            raise
+        self._check(completion, asked.schema)
+        self._counters.inc("complete_answers_total")
+        self._counters.inc("complete_input_tokens_total", by=completion.input_tokens)
+        self._counters.inc("complete_reused_tokens_total", by=completion.reused_tokens)
+        self._counters.inc("complete_output_tokens_total", by=completion.output_tokens)
+        log.info(
+            "complete_answered",
+            extra={
+                "input_tokens": completion.input_tokens,
+                "reused_tokens": completion.reused_tokens,
+                "output_tokens": completion.output_tokens,
+            },
+        )
+        return {
+            "text": completion.text,
+            "model": self._model,
+            "input_tokens": completion.input_tokens,
+            "output_tokens": completion.output_tokens,
+        }
+
+    async def _queued(self, asked: Request, deadline: Deadline) -> Completion:
+        ahead = self._in_flight
+        if ahead >= self._local.max_in_flight or (
+            ahead and (ahead + 1) * self._call_s > deadline.remaining()
+        ):
+            self._counters.inc("complete_rejected_total", why="busy")
+            log.warning("complete_model_busy", extra={"in_flight": ahead, "call_s": self._call_s})
+            raise NotServedHere(Reason.DEADLINE_EXCEEDED, "the local model is busy")
+        self._in_flight += 1
+        asked_at = deadline.now()
+        try:
+            completion = await self._ask(asked, deadline)
+            self._call_s = deadline.now() - max(asked_at, self._free_at)
+            return completion
+        finally:
+            self._in_flight -= 1
+            self._free_at = deadline.now()
+
+    async def _ask(self, asked: Request, deadline: Deadline) -> Completion:
+        try:
+            return await self._engines.complete(
+                asked.system, asked.marks, asked.messages, asked.schema, asked.max_tokens, deadline
+            )
+        except EngineUnavailable as error:
+            self._counters.inc("complete_unavailable_total", state=error.state)
+            log.warning("complete_model_unavailable", extra={"state": error.state})
+            raise NotServedHere(Reason.INTERNAL_ERROR, str(error)) from error
+
+    def _check(self, completion: Completion, schema: Mapping[str, object]) -> None:
+        if not completion.finished:
+            self._counters.inc("complete_rejected_total", why="cut_at_max_tokens")
+            raise PermanentFailure(
+                Reason.MODEL_OUTPUT_INVALID,
+                f"the answer did not end within {completion.output_tokens} tokens",
+            )
+        answer = json_object(completion.text)
+        if answer is None:
+            self._counters.inc("complete_rejected_total", why="not_a_json_object")
+            raise PermanentFailure(Reason.MODEL_OUTPUT_INVALID, "the answer is not a JSON object")
+        problems = validate(answer, schema)
+        if problems:
+            self._counters.inc("complete_rejected_total", why="off_schema")
+            raise PermanentFailure(Reason.MODEL_OUTPUT_INVALID, "; ".join(problems[:3]))
+
+
+@dataclass(frozen=True)
+class Request:
+    system: str
+    marks: Sequence[int]
+    messages: Sequence[ChatMessage]
+    schema: Mapping[str, object]
+    max_tokens: int
+
+    @classmethod
+    def parse(cls, request: Mapping[str, object], limits: CompleteLimits) -> Request:
+        system = fields.required_text(request, "system")
+        encoded = utf8(system, "system")
+        if len(encoded) > limits.system_bytes:
+            raise invalid(f"system is longer than {limits.system_bytes} bytes")
+        marks = parse_marks(request, encoded, limits)
+        schema = fields.required_mapping(request, "schema")
+        if schema_bytes(schema) > limits.schema_bytes:
+            raise invalid(f"schema is longer than {limits.schema_bytes} bytes")
+        if schema.get("type", "object") != "object":
+            raise invalid("schema must describe a JSON object")
+        max_tokens = fields.required_int(request, "max_tokens")
+        if not 1 <= max_tokens <= limits.max_tokens:
+            raise invalid(f"max_tokens must be within 1..{limits.max_tokens}")
+        return cls(system, marks, parse_messages(request, limits), schema, max_tokens)
+
+
+def parse_marks(
+    request: Mapping[str, object], system: bytes, limits: CompleteLimits
+) -> Sequence[int]:
+    if "system_marks" not in request:
+        return ()
+    raw_marks = fields.required_list(request, "system_marks")
+    if len(raw_marks) > limits.system_marks:
+        raise invalid(f"system_marks must hold at most {limits.system_marks} offsets")
+    marks: list[int] = []
+    for raw in raw_marks:
+        marks.append(parse_mark(raw, marks[-1] if marks else 0, system))
+    return marks
+
+
+def parse_mark(mark: object, before: int, system: bytes) -> int:
+    if isinstance(mark, bool) or not isinstance(mark, int):
+        raise invalid("a system mark must be an integer")
+    if not before < mark <= len(system):
+        raise invalid("system_marks must be ascending byte offsets inside system")
+    if mark < len(system) and system[mark] & CONTINUATION_MASK == CONTINUATION_BYTE:
+        raise invalid("a system mark must not split a character")
+    return mark
+
+
+def parse_messages(request: Mapping[str, object], limits: CompleteLimits) -> list[ChatMessage]:
+    raw_messages = fields.required_list(request, "messages")
+    if not 1 <= len(raw_messages) <= limits.messages:
+        raise invalid(f"messages must hold 1..{limits.messages} items")
+    return [parse_message(raw, limits) for raw in raw_messages]
+
+
+def parse_message(raw: object, limits: CompleteLimits) -> ChatMessage:
+    if not isinstance(raw, Mapping):
+        raise invalid("a message must be an object")
+    role = ROLES.get(fields.required_text(raw, "role"))
+    if role is None:
+        raise invalid(f"a message role must be one of {sorted(ROLES)}")
+    content = fields.required_text(raw, "content")
+    if not content or len(utf8(content, "a message content")) > limits.message_bytes:
+        raise invalid(f"a message content must hold 1..{limits.message_bytes} bytes")
+    return ChatMessage(role, content)
+
+
+def utf8(text: str, what: str) -> bytes:
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise invalid(f"{what} is not valid UTF-8") from error
+
+
+def schema_bytes(schema: Mapping[str, object]) -> int:
+    try:
+        return len(orjson.dumps(schema))
+    except orjson.JSONEncodeError as error:
+        raise invalid(f"schema cannot be encoded: {error}") from error
+
+
+def json_object(text: str) -> dict[str, object] | None:
+    try:
+        answer = orjson.loads(text)
+    except orjson.JSONDecodeError:
+        return None
+    return answer if isinstance(answer, dict) else None
+
+
+def invalid(detail: str) -> PermanentFailure:
+    return PermanentFailure(Reason.INVALID_REQUEST, detail)

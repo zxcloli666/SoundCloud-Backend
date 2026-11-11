@@ -10,7 +10,7 @@ from worker.contract import Contract
 from worker.domain.deadline import Deadline
 from worker.domain.metadata.resolve import RESOLVE_SCHEMA, ArtistResolver
 from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
-from worker.llm.validate import validate
+from worker.domain.validate import validate
 from worker.observability.counters import Counters
 
 REPLY = "ai.rpc.resolve_artist.reply"

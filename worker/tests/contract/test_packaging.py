@@ -17,6 +17,8 @@ from worker.__main__ import COMMANDS
 DOCKERFILE = (WORKER_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
 UV_SYNC = (WORKER_ROOT / "docker" / "uv-sync.sh").read_text(encoding="utf-8")
 PYPROJECT = tomllib.loads((WORKER_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+LOCK = tomllib.loads((WORKER_ROOT / "uv.lock").read_text(encoding="utf-8"))
+LLAMA = "llama-cpp-python"
 DEV_COMPOSE = WORKER_ROOT.parent / "docker-compose-dev.yml"
 IMAGE_ROOT = Path("/app")
 WORKER_UID = "10001"
@@ -41,7 +43,28 @@ def test_every_flavor_is_a_locked_torch_build() -> None:
     assert default is not None
     assert default.group(1) in PYPROJECT["tool"]["uv"]["default-groups"]
     assert "--no-default-groups" in UV_SYNC and "--frozen" in UV_SYNC
-    assert "--extra llm-local" in UV_SYNC
+    assert "--extra" not in UV_SYNC
+
+
+def test_every_flavor_carries_the_local_llm_engine_from_hashed_wheels() -> None:
+    pins = [pin for pin in PYPROJECT["project"]["dependencies"] if pin.startswith(LLAMA + "==")]
+    assert len(pins) == 1
+    assert "optional-dependencies" not in PYPROJECT["project"]
+    sources = PYPROJECT["tool"]["uv"]["sources"][LLAMA]
+    version = pins[0].partition("==")[2]
+    assert sorted(source["marker"] for source in sources) == [
+        "sys_platform == 'linux' and platform_machine == 'aarch64'",
+        "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    ]
+    locked = [
+        wheel
+        for package in LOCK["package"]
+        if package["name"] == LLAMA and "url" in package["source"]
+        for wheel in package["wheels"]
+    ]
+    assert sorted(wheel["url"] for wheel in locked) == sorted(source["url"] for source in sources)
+    assert all(f"/v{version}/" in wheel["url"] for wheel in locked)
+    assert all(wheel["hash"].startswith("sha256:") for wheel in locked)
 
 
 def test_image_contract_is_the_backend_export() -> None:

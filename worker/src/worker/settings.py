@@ -29,9 +29,13 @@ SYNC_STRATEGIES = ("anchored", "global_ctc")
 RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
 PROVIDER_KINDS = ("anthropic", "openai_compatible")
-LOCAL_PROVIDER = "local"
 LOCAL_LLM_SLOT = "llm-local"
-QUANTIZE_MODES = ("nf4",)
+LOCAL_LLM_METHOD = "complete"
+LOCAL_LLM_DEVICE = "llama-cpu"
+LOCAL_LLM_FILE_SUFFIX = ".gguf"
+LOCAL_LLM_MIN_CONTEXT_TOKENS = 1024
+MAX_NICE = 19
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 MIX_FALLBACK = "mix"
 
 LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -42,7 +46,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "encode": ("text", "mulan"),
         "collab": ("train-collab",),
         "taste": ("train-taste",),
-        "ai": (),
+        "ai": (LOCAL_LLM_SLOT,),
     }
 )
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})
@@ -269,7 +273,15 @@ class BreakerSettings:
 @dataclass(frozen=True)
 class LocalLlmSettings:
     enabled: bool
-    quantize: str
+    file: str
+    sha256: str
+    context_tokens: int
+    eval_chunk_tokens: int
+    state_cache_mib: int
+    idle_unload_s: int
+    threads: int
+    nice: int
+    max_in_flight: int
 
 
 @dataclass(frozen=True)
@@ -633,11 +645,8 @@ def validate_taste(settings: Settings) -> list[str]:
 def validate_llm(settings: Settings) -> list[str]:
     llm = settings.llm
     problems = []
-    if LOCAL_PROVIDER in llm.providers:
-        problems.append(f"llm.providers.{LOCAL_PROVIDER} is reserved for [llm.local]")
-    known = set(llm.providers) | ({LOCAL_PROVIDER} if llm.local.enabled else set())
     for role, name in (("primary", llm.primary), ("fallback", llm.fallback)):
-        if name and name not in known:
+        if name and name not in llm.providers:
             problems.append(f"llm.{role} refers to unknown provider {name!r}")
     if llm.primary and llm.primary == llm.fallback:
         problems.append("llm.primary and llm.fallback must differ")
@@ -652,8 +661,34 @@ def validate_llm(settings: Settings) -> list[str]:
             problems.append(f"llm.providers.{name} has an api_key but no endpoint or model")
     if llm.breaker.failures < 1 or llm.breaker.window_s <= 0 or llm.breaker.open_s <= 0:
         problems.append("llm.breaker values out of range")
-    if llm.local.quantize not in QUANTIZE_MODES:
-        problems.append(f"llm.local.quantize must be one of {QUANTIZE_MODES}")
+    return problems + validate_local_llm(settings)
+
+
+def validate_local_llm(settings: Settings) -> list[str]:
+    local = settings.llm.local
+    problems = []
+    slot = settings.slots.get(LOCAL_LLM_SLOT)
+    serves = local.enabled and "ai" in settings.lanes.enabled
+    if serves and slot is not None and not (slot.model and slot.revision):
+        problems.append(f"lane ai needs slots.{LOCAL_LLM_SLOT}.model and revision")
+    if not local.file.endswith(LOCAL_LLM_FILE_SUFFIX):
+        problems.append(f"llm.local.file must be a {LOCAL_LLM_FILE_SUFFIX} file of the model repo")
+    if not SHA256_HEX.fullmatch(local.sha256):
+        problems.append("llm.local.sha256 must be 64 lowercase hex characters")
+    if local.context_tokens < LOCAL_LLM_MIN_CONTEXT_TOKENS:
+        problems.append(f"llm.local.context_tokens must be >= {LOCAL_LLM_MIN_CONTEXT_TOKENS}")
+    if not 1 <= local.eval_chunk_tokens <= local.context_tokens:
+        problems.append("llm.local.eval_chunk_tokens must be within 1..llm.local.context_tokens")
+    if local.state_cache_mib < 1:
+        problems.append("llm.local.state_cache_mib must be >= 1")
+    if local.idle_unload_s < 0:
+        problems.append("llm.local.idle_unload_s must be >= 0")
+    if local.threads < 1:
+        problems.append("llm.local.threads must be >= 1")
+    if local.max_in_flight < 1:
+        problems.append("llm.local.max_in_flight must be >= 1")
+    if not 0 <= local.nice <= MAX_NICE:
+        problems.append(f"llm.local.nice must be within 0..{MAX_NICE}")
     return problems
 
 
@@ -705,8 +740,6 @@ def llm_gaps(llm: LlmSection) -> list[str]:
 
 
 def provider_enabled(llm: LlmSection, name: str) -> bool:
-    if name == LOCAL_PROVIDER:
-        return llm.local.enabled
     provider = llm.providers.get(name)
     return provider is not None and provider.enabled
 
@@ -731,6 +764,18 @@ def model_ref(settings: Settings, slot: str) -> str:
     return f"{spec.model}@{spec.revision[:8]}" if spec.revision else spec.model
 
 
+def local_llm_ref(settings: Settings) -> str:
+    slot = settings.slots[LOCAL_LLM_SLOT]
+    return f"{slot.model}/{settings.llm.local.file}@{slot.revision[:8]}"
+
+
+def lane_slots(settings: Settings, lane: str) -> tuple[str, ...]:
+    slots = LANE_SLOTS.get(lane, ())
+    if settings.llm.local.enabled:
+        return slots
+    return tuple(slot for slot in slots if slot != LOCAL_LLM_SLOT)
+
+
 def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) -> tuple[str, ...]:
     wanted: list[str] = []
     for lane in settings.lanes.enabled if lanes is None else lanes:
@@ -742,10 +787,3 @@ def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) ->
         if fallback not in (None, MIX_FALLBACK) and fallback not in wanted:
             wanted.append(fallback)
     return tuple(wanted)
-
-
-def lane_slots(settings: Settings, lane: str) -> tuple[str, ...]:
-    slots = LANE_SLOTS.get(lane, ())
-    if lane == "ai" and settings.llm.local.enabled:
-        return (*slots, LOCAL_LLM_SLOT)
-    return slots

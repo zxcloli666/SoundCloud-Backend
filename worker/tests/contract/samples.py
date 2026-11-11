@@ -81,6 +81,21 @@ RPC_REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
                 {"id": 4294967295, "artist": "SZA", "title": "Saturn"},
             ],
         },
+        "ai.rpc.complete": {
+            "system": "You are the voice of a music player. Answer with one JSON object.",
+            "messages": [
+                {"role": "user", "content": "сделай потише"},
+                {"role": "assistant", "content": '{"say": "Готово", "actions": []}'},
+                {"role": "user", "content": "and what is playing now?"},
+            ],
+            "schema": {
+                "type": "object",
+                "properties": {"say": {"type": "string"}, "actions": {"type": "array"}},
+                "required": ["say", "actions"],
+                "additionalProperties": False,
+            },
+            "max_tokens": 512,
+        },
     }
 )
 
@@ -115,6 +130,17 @@ RPC_REPLIES: Mapping[str, tuple[Mapping[str, object], ...]] = MappingProxyType(
         "ai.rpc.match_track.reply": (
             {"ok": True, "data": {"match_id": 1, "confidence": 0.88, "source": "deterministic"}},
             {"ok": True, "data": {"match_id": None, "confidence": 0.41, "source": "llm"}},
+        ),
+        "ai.rpc.complete.reply": (
+            {
+                "ok": True,
+                "data": {
+                    "text": '{"say": "Kendrick Lamar, Luther", "actions": []}',
+                    "model": "org/model-GGUF/model-Q4_K_M.gguf@0123abcd",
+                    "input_tokens": 1500,
+                    "output_tokens": 80,
+                },
+            },
         ),
     }
 )

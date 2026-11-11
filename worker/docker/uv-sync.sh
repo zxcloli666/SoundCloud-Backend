@@ -2,8 +2,7 @@
 set -eu
 
 case "${FLAVOR:-}" in
-  cpu) set -- --group cpu "$@" ;;
-  cu126 | cu130) set -- --group "$FLAVOR" --extra llm-local "$@" ;;
+  cpu | cu126 | cu130) set -- --group "$FLAVOR" "$@" ;;
   *)
     echo "FLAVOR must be cpu, cu126 or cu130, got '${FLAVOR:-}'" >&2
     exit 64

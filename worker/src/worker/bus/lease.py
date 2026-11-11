@@ -193,6 +193,21 @@ class Lease:
         log.info("task_nacked", extra={**self.log_fields(), "delay_s": delay_s})
         self.settle(Settled.NACKED)
 
+    async def hand_on(self) -> bool:
+        self._require_open()
+        connected = self._connection.is_connected
+        if self.is_last_delivery or self.is_stale or self._connection.suspicious or not connected:
+            return False
+        self.settle(Settled.NACKED)
+        try:
+            await self._msg.nak()
+        except nats.errors.Error as error:
+            self._counters.inc("nak_failures_total", lane=self.lane.name)
+            log.warning("nak_failed", extra={**self.log_fields(), "error": str(error)})
+            return True
+        self._counters.inc("naks_total", lane=self.lane.name)
+        return True
+
     def settle(self, settled: Settled) -> None:
         if not self.settled.done():
             self.settled.set_result(settled)

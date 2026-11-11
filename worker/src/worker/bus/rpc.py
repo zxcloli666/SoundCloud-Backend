@@ -16,7 +16,7 @@ from worker.bus.lease import Lease, Leases, Settled
 from worker.bus.outbox import encode
 from worker.contract import Contract, LaneSpec
 from worker.domain.deadline import Clock, Deadline
-from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
+from worker.domain.outcome import NotServedHere, PermanentFailure, Reason, TransientFailure
 from worker.observability.counters import Counters
 
 log = logging.getLogger("worker.bus.rpc")
@@ -74,7 +74,10 @@ class RpcHandler:
                 self._counters.inc("rpc_no_reply_to_total")
                 log.warning("rpc_no_reply_to", extra={**lease.log_fields(), "method": method})
             else:
-                await self._reply(lease, method, reply_to, await self._answer(msg, method, abort))
+                reply = await self._answer(lease, msg, method, abort)
+                if reply is None:
+                    return
+                await self._reply(lease, method, reply_to, reply)
             await lease.ack()
             lease.settle(Settled.PUBLISHED)
         finally:
@@ -85,14 +88,16 @@ class RpcHandler:
                 log.error("lease_left_unsettled", extra=lease.log_fields())
                 lease.settle(Settled.DROPPED)
 
-    async def _answer(self, msg: Msg, method: str, abort: asyncio.Event) -> dict[str, object]:
+    async def _answer(
+        self, lease: Lease, msg: Msg, method: str, abort: asyncio.Event
+    ) -> dict[str, object] | None:
         deadline = self._deadline(msg, method)
         if deadline.remaining() - REPLY_MARGIN_S <= 0:
             self._counters.inc("rpc_expired_total")
             return error_reply(ERROR_EXPIRED)
         try:
             request = json.loads(msg.data)
-        except ValueError:
+        except (ValueError, RecursionError):
             return error_reply(ERROR_INVALID)
         if not isinstance(request, dict):
             return error_reply(ERROR_INVALID)
@@ -111,13 +116,12 @@ class RpcHandler:
             self._counters.inc("rpc_internal_total", method=method)
             log.warning("rpc_permanent_failure", extra={"method": method, "error": str(failure)})
             return error_reply(ERROR_INTERNAL)
+        except NotServedHere as failure:
+            if await self._handed_on(lease, method, deadline, failure):
+                return None
+            return self._failed(method, failure)
         except TransientFailure as failure:
-            if failure.reason is Reason.DEADLINE_EXCEEDED:
-                self._counters.inc("rpc_expired_total")
-                return error_reply(ERROR_EXPIRED)
-            self._counters.inc("rpc_internal_total", method=method)
-            log.warning("rpc_transient_failure", extra={"method": method, "error": str(failure)})
-            return error_reply(ERROR_INTERNAL)
+            return self._failed(method, failure)
         except Exception as error:
             self._counters.inc("rpc_internal_total", method=method)
             log.error("rpc_crashed", extra={"method": method}, exc_info=error)
@@ -147,6 +151,28 @@ class RpcHandler:
         work.cancel()
         await asyncio.gather(work, return_exceptions=True)
         raise Aborted
+
+    async def _handed_on(
+        self, lease: Lease, method: str, deadline: Deadline, failure: NotServedHere
+    ) -> bool:
+        if deadline.remaining() <= PROCESS_MARGIN_S + REPLY_MARGIN_S:
+            return False
+        if not await lease.hand_on():
+            return False
+        self._counters.inc("rpc_handed_on_total", method=method)
+        log.info(
+            "rpc_handed_on",
+            extra={**lease.log_fields(), "method": method, "why": str(failure)},
+        )
+        return True
+
+    def _failed(self, method: str, failure: TransientFailure) -> dict[str, object]:
+        if failure.reason is Reason.DEADLINE_EXCEEDED:
+            self._counters.inc("rpc_expired_total")
+            return error_reply(ERROR_EXPIRED)
+        self._counters.inc("rpc_internal_total", method=method)
+        log.warning("rpc_transient_failure", extra={"method": method, "error": str(failure)})
+        return error_reply(ERROR_INTERNAL)
 
     async def _reply(
         self, lease: Lease, method: str, reply_to: str, reply: Mapping[str, object]
@@ -193,18 +219,21 @@ class RpcHandler:
             return fallback, encode(fallback)
 
     def _deadline(self, msg: Msg, method: str) -> Deadline:
-        header = (msg.headers or {}).get(self._contract.rpc.deadline_header)
-        if header is not None:
-            try:
-                return Deadline.from_epoch_ms(int(header), self._wall, self._clock.now)
-            except ValueError:
-                self._counters.inc("rpc_bad_deadline_total")
-                log.warning("rpc_bad_deadline", extra={"method": method, "header": header})
         window_s = self._contract.rpc.windows_s.get(method, self.lane.deadline_s)
         delivered_at = msg.metadata.timestamp.timestamp()
-        return Deadline.from_epoch_ms(
+        window = Deadline.from_epoch_ms(
             int((delivered_at + window_s) * 1000), self._wall, self._clock.now
         )
+        header = (msg.headers or {}).get(self._contract.rpc.deadline_header)
+        if header is None:
+            return window
+        try:
+            asked = Deadline.from_epoch_ms(int(header), self._wall, self._clock.now)
+        except (ValueError, OverflowError):
+            self._counters.inc("rpc_bad_deadline_total")
+            log.warning("rpc_bad_deadline", extra={"method": method, "header": header})
+            return window
+        return asked if asked.at <= window.at else window
 
 
 def error_reply(error: str) -> dict[str, object]:

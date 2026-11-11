@@ -24,7 +24,7 @@
       "correlation": [],
       "correlation_prefix": "ai",
       "correlation_separator": ":",
-      "deadline_s": 20,
+      "deadline_s": 30,
       "done_msg_id_template": null,
       "done_subject": null,
       "durable": "ai-workers",
@@ -442,6 +442,14 @@
     }
   },
   "limits": {
+    "complete": {
+      "max_tokens": 1024,
+      "message_bytes": 12000,
+      "messages": 64,
+      "schema_bytes": 64000,
+      "system_bytes": 48000,
+      "system_marks": 4
+    },
     "max_message_bytes": 900000
   },
   "object_stores": {
@@ -527,11 +535,158 @@
     "deadline_header": "X-Deadline",
     "reply_header": "X-Reply-To",
     "windows_s": {
+      "complete": 30,
       "match_track": 10,
       "resolve_artist": 20
     }
   },
   "schemas": {
+    "ai.rpc.complete": {
+      "$defs": {
+        "CompleteMessage": {
+          "properties": {
+            "content": {
+              "minLength": 1,
+              "type": "string",
+              "x-max-utf8-bytes": 12000
+            },
+            "role": {
+              "$ref": "#/$defs/CompleteRole"
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "type": "object"
+        },
+        "CompleteRole": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "max_tokens": {
+          "format": "uint32",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/CompleteMessage"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "schema": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "system": {
+          "type": "string",
+          "x-max-utf8-bytes": 48000
+        },
+        "system_marks": {
+          "items": {
+            "format": "uint32",
+            "maximum": 48000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "type": "array"
+        }
+      },
+      "required": [
+        "system",
+        "messages",
+        "schema",
+        "max_tokens"
+      ],
+      "title": "ai.rpc.complete",
+      "type": "object"
+    },
+    "ai.rpc.complete.reply": {
+      "$defs": {
+        "CompleteData": {
+          "properties": {
+            "input_tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "model": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "output_tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "model",
+            "input_tokens",
+            "output_tokens"
+          ],
+          "type": "object"
+        },
+        "RpcError": {
+          "enum": [
+            "expired",
+            "invalid_request",
+            "internal"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/CompleteData"
+            },
+            "ok": {
+              "const": true
+            }
+          },
+          "required": [
+            "ok",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/RpcError"
+            },
+            "ok": {
+              "const": false
+            }
+          },
+          "required": [
+            "ok",
+            "error"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ai.rpc.complete.reply"
+    },
     "ai.rpc.match_track": {
       "$defs": {
         "MatchCandidate": {

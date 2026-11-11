@@ -11,12 +11,10 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from tests.fakes.engines import FakeEngines
 from worker.domain.deadline import Deadline
 from worker.domain.metadata.resolve import RESOLVE_SCHEMA
 from worker.llm import anthropic, openai_compatible
 from worker.llm.anthropic import AnthropicProvider
-from worker.llm.local import LocalProvider
 from worker.llm.openai_compatible import OpenAiCompatibleProvider
 from worker.llm.provider import ProviderError
 from worker.settings import ProviderSettings
@@ -180,21 +178,3 @@ def test_request_schemas_follow_structured_output_rules() -> None:
     assert body["max_tokens"] == 1024
     assert "minimum" not in orjson.dumps(RESOLVE_SCHEMA).decode()
     assert '"additionalProperties":false' in orjson.dumps(RESOLVE_SCHEMA).decode()
-
-
-async def test_local_provider_parses_the_generated_text() -> None:
-    engines = FakeEngines()
-    engines.generated = '{"name": "SZA"}'
-
-    reply = await LocalProvider("local", engines).complete("who?", SCHEMA, deadline())
-
-    assert reply == {"name": "SZA"}
-    assert engines.calls[0][1]["max_new_tokens"] == 1024
-
-
-async def test_local_provider_rejects_non_json_text() -> None:
-    engines = FakeEngines()
-    engines.generated = "I think it is SZA"
-
-    with pytest.raises(ProviderError, match="not JSON"):
-        await LocalProvider("local", engines).complete("who?", SCHEMA, deadline())

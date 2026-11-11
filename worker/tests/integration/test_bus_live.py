@@ -7,8 +7,10 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -18,14 +20,18 @@ from nats.aio.client import Client
 from nats.js import JetStreamContext
 from nats.js.manager import JetStreamManager
 
+from tests.contract import samples
+from tests.fakes.engines import FakeEngines
 from tests.integration.provision import consumer_config, provision_like_jobs, reset
 from worker.bus.connection import Connection
 from worker.bus.consumers import EX_CONFIG, ConsumerWatch, LaneState
 from worker.bus.inflight import Inflight
-from worker.bus.lane_runner import LaneRunner, QueueHandler
+from worker.bus.lane_runner import IDLE_POLL_S, LaneRunner, QueueHandler
 from worker.bus.lease import Leases
 from worker.bus.outbox import Outbox
+from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler
 from worker.contract import Contract, LaneSpec
+from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline, MonotonicClock
 from worker.domain.outcome import Outcome, Producer
 from worker.observability.counters import Counters
@@ -37,6 +43,41 @@ WORKER_ROOT = Path(__file__).resolve().parents[2]
 AUDIO_TASK = {"sc_track_id": "42", "s3_url": "https://s3/x", "upload_generation": 1, "attempt": 1}
 LYRICS_TASK = {"sc_track_id": "42", "request_id": "lyr:42:1", "text": "la la", "language": None}
 LIVE_SYNC_VERSION = "s4.live0001.live0002.live0003"
+IDLE_GAPS_S = (
+    0.0,
+    0.0,
+    0.05,
+    0.3,
+    1.0,
+    2.5,
+    0.0,
+    4.9,
+    5.1,
+    0.0,
+    0.2,
+    6.0,
+    0.0,
+    0.0,
+    3.0,
+    0.0,
+    7.5,
+    0.1,
+    5.5,
+    0.0,
+    0.0,
+)
+PICKUP_LIMIT_S = 0.5
+COLLAB_TASKS = 3
+PULLS_WATCHED_S = 3.0
+PULLS_ALLOWED = 2 * int(PULLS_WATCHED_S / IDLE_POLL_S)
+COMPLETE = "ai.rpc.complete"
+LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
+LOCAL_ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
+LOCAL_CALLS = 6
+CALL_WINDOW_S = 20.0
+REPLY_WAIT_S = 10.0
+HAND_OVERS = 4
+NO_TIME_S = PROCESS_MARGIN_S + REPLY_MARGIN_S
 DRIFT_SCRIPT = """
 import asyncio, sys
 from pathlib import Path
@@ -87,9 +128,11 @@ class HoldingProcessor:
         self.release = asyncio.Event()
         self.release.set()
         self.calls = 0
+        self.picked: dict[str, float] = {}
 
     async def process(self, request: Mapping[str, object], deadline: Deadline) -> Outcome:
         self.calls += 1
+        self.picked[str(request.get("request_id"))] = time.monotonic()
         self.started.set()
         await self.release.wait()
         return Outcome.ok(mert=[0.0] * 1024, clap=[0.0] * 512, fingerprint=None)
@@ -145,6 +188,39 @@ class Worker:
         await self.connection.close()
 
 
+@dataclass
+class Answer:
+    body: dict[str, object]
+    deliveries: int
+    seconds: float
+
+
+@dataclass
+class Pulls:
+    allowed: int
+    asked: int = 0
+    over: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def count(self, msg: object) -> None:
+        self.asked += 1
+        if self.asked > self.allowed:
+            self.over.set()
+
+
+async def pulls_asked(live: Live, lane: LaneSpec) -> int:
+    pulls = Pulls(PULLS_ALLOWED)
+    requests = await live.admin.subscribe(
+        f"$JS.API.CONSUMER.MSG.NEXT.{lane.stream}.{lane.durable}", cb=pulls.count
+    )
+    try:
+        await asyncio.wait_for(pulls.over.wait(), PULLS_WATCHED_S)
+    except TimeoutError:
+        return pulls.asked
+    finally:
+        await requests.unsubscribe()
+    return pulls.asked
+
+
 async def wait_for(condition: Callable[[], Awaitable[bool]], timeout_s: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -168,7 +244,11 @@ async def live(contract: Contract, settings: Settings) -> AsyncIterator[Live]:
 
 
 async def build_worker(
-    live: Live, lane_name: str, url: str | None = None, capacity: int = 2
+    live: Live,
+    lane_name: str,
+    url: str | None = None,
+    capacity: int = 2,
+    local_model: bool | None = None,
 ) -> Worker:
     _, section = nats_section(url or live.url, live.settings)
     lane = live.contract.lane(lane_name)
@@ -184,11 +264,40 @@ async def build_worker(
     processor = HoldingProcessor()
     sync_version = LIVE_SYNC_VERSION if lane_name == "transcribe" else None
     producer = Producer("live-worker", "live", {"mert": "m@1", "clap": "c@1"}, sync_version)
-    handler = QueueHandler(
+    handler: RpcHandler | QueueHandler = QueueHandler(
         lane, processor, leases, Inflight(), outbox, watch, live.contract, producer, counters, clock
     )
+    if local_model is not None:
+        methods = {"complete": completer(live, local_model, counters).complete}
+        handler = RpcHandler(
+            lane, methods, leases, connection, live.contract, counters, clock, "live-worker", "live"
+        )
     runner = LaneRunner(lane, watch, handler, js, connection, outbox, capacity, counters, clock)
     return Worker(connection, counters, watch, runner, outbox, processor)
+
+
+def completer(live: Live, enabled: bool, counters: Counters) -> Completer:
+    engines = FakeEngines()
+    engines.completion = dataclasses.replace(engines.completion, text=LOCAL_ANSWER)
+    local = dataclasses.replace(live.settings.llm.local, enabled=enabled)
+    return Completer(engines, live.contract.complete_limits, local, LOCAL_MODEL, counters)
+
+
+async def call_complete(live: Live, window_s: float) -> Answer:
+    inbox = f"_INBOX.live.{uuid.uuid4().hex}"
+    replies = await live.admin.subscribe(inbox, max_msgs=1)
+    headers = {
+        "Nats-Msg-Id": f"rpc:complete:{uuid.uuid4().hex}",
+        live.contract.rpc.reply_header: inbox,
+        live.contract.rpc.deadline_header: str(int((time.time() + window_s) * 1000)),
+    }
+    body = json.dumps(samples.RPC_REQUESTS[COMPLETE]).encode()
+    started = time.monotonic()
+    await live.js.publish(COMPLETE, body, headers=headers)
+    reply = await replies.next_msg(REPLY_WAIT_S)
+    seconds = time.monotonic() - started
+    deliveries = int((reply.headers or {})[live.contract.headers.deliveries])
+    return Answer(json.loads(reply.data), deliveries, seconds)
 
 
 async def test_ok_task_is_published_once_and_acked(live: Live) -> None:
@@ -211,6 +320,138 @@ async def test_ok_task_is_published_once_and_acked(live: Live) -> None:
         assert worker.counters.value("done_total", lane="audio", status="ok") == 1
     finally:
         await worker.close()
+
+
+async def test_a_task_after_an_idle_spell_is_picked_up_at_once(live: Live) -> None:
+    lane = live.contract.lane("lyrics")
+    worker = await build_worker(live, "lyrics", capacity=16)
+    delays = []
+    try:
+        assert await worker.watch.verify_at_start() is LaneState.SERVING
+        worker.start()
+        for index, gap in enumerate(IDLE_GAPS_S):
+            await asyncio.sleep(gap)
+            request_id = f"lyr:{index}:1"
+            task = {**LYRICS_TASK, "sc_track_id": str(index), "request_id": request_id}
+            sent = time.monotonic()
+            await live.publish_task(lane, task, request_id)
+            await wait_for(partial(_picked, worker, request_id))
+            delays.append(round(worker.processor.picked[request_id] - sent, 3))
+    finally:
+        await worker.close()
+    assert max(delays) < PICKUP_LIMIT_S, list(zip(IDLE_GAPS_S, delays, strict=True))
+
+
+async def test_idle_workers_of_a_lane_at_max_ack_pending_keep_one_pull_open_each(
+    live: Live,
+) -> None:
+    lane = live.contract.lane("collab")
+    holder = await build_worker(live, "collab", capacity=COLLAB_TASKS + 1)
+    idle = await build_worker(live, "collab", capacity=COLLAB_TASKS + 1)
+    try:
+        assert await holder.watch.verify_at_start() is LaneState.SERVING
+        holder.processor.release.clear()
+        holder.start()
+        for index in range(COLLAB_TASKS):
+            await live.publish_task(lane, {"object": f"sessions/{index}"}, f"collab:{index}")
+        await asyncio.wait_for(holder.processor.started.wait(), 10)
+        assert await idle.watch.verify_at_start() is LaneState.SERVING
+        idle.start()
+        asked = await pulls_asked(live, lane)
+        held = await live.jsm.consumer_info(lane.stream, lane.durable)
+        holder.processor.release.set()
+        await wait_for(partial(_called, COLLAB_TASKS, holder, idle))
+    finally:
+        await holder.close()
+        await idle.close()
+    assert (held.num_ack_pending, held.num_pending) == (1, COLLAB_TASKS - 1)
+    assert asked <= PULLS_ALLOWED
+    assert idle.processor.calls >= 1
+
+
+async def test_a_worker_whose_pull_the_server_refuses_asks_again_after_a_pause(live: Live) -> None:
+    lane = live.contract.lane("lyrics")
+    await live.jsm.delete_consumer(lane.stream, lane.durable)
+    await live.jsm.add_consumer(lane.stream, consumer_config(lane, max_waiting=1))
+    waiting = await build_worker(live, "lyrics", capacity=16)
+    refused = await build_worker(live, "lyrics", capacity=16)
+    try:
+        assert await waiting.watch.verify_at_start() is LaneState.SERVING
+        assert await refused.watch.verify_at_start() is LaneState.SERVING
+        waiting.start()
+        refused.start()
+        asked = await pulls_asked(live, lane)
+        failures = [
+            worker.counters.value("fetch_failures_total", lane="lyrics")
+            for worker in (waiting, refused)
+        ]
+    finally:
+        await waiting.close()
+        await refused.close()
+    assert asked <= PULLS_ALLOWED
+    assert sum(failures) >= 1
+
+
+async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_the_other(
+    live: Live,
+) -> None:
+    without = await build_worker(live, "ai", capacity=16, local_model=False)
+    having = await build_worker(live, "ai", capacity=16, local_model=True)
+    try:
+        for worker in (without, having):
+            assert await worker.watch.verify_at_start() is LaneState.SERVING
+            worker.start()
+        await wait_for(partial(_waiting, live, "ai", 2))
+        answers = [await call_complete(live, CALL_WINDOW_S) for _ in range(LOCAL_CALLS)]
+        await wait_for(partial(_left, live, "AI_RPC", 0))
+    finally:
+        await without.close()
+        await having.close()
+    handed_on = without.counters.value("rpc_handed_on_total", method="complete")
+    assert [answer.body["ok"] for answer in answers] == [True] * LOCAL_CALLS, answers
+    assert handed_on >= 1
+    assert sum(answer.deliveries - 1 for answer in answers) == handed_on
+    assert max(answer.seconds for answer in answers) < PICKUP_LIMIT_S, answers
+    assert without.counters.total("rpc_replies_total") == 0
+
+
+async def test_a_call_no_worker_can_serve_is_answered_once_after_four_hand_overs(
+    live: Live,
+) -> None:
+    workers = [await build_worker(live, "ai", capacity=16, local_model=False) for _ in range(2)]
+    try:
+        for worker in workers:
+            assert await worker.watch.verify_at_start() is LaneState.SERVING
+            worker.start()
+        await wait_for(partial(_waiting, live, "ai", 2))
+        unserved = await call_complete(live, CALL_WINDOW_S)
+        hurried = await call_complete(live, NO_TIME_S)
+        await wait_for(partial(_left, live, "AI_RPC", 0))
+    finally:
+        for worker in workers:
+            await worker.close()
+    handed_on = [
+        worker.counters.value("rpc_handed_on_total", method="complete") for worker in workers
+    ]
+    assert unserved.body == {"ok": False, "error": "internal"}
+    assert (unserved.deliveries, sum(handed_on)) == (HAND_OVERS + 1, HAND_OVERS)
+    assert unserved.seconds < PICKUP_LIMIT_S
+    assert hurried.body == {"ok": False, "error": "internal"}
+    assert hurried.deliveries == 1
+    assert hurried.seconds < PICKUP_LIMIT_S
+
+
+async def _waiting(live: Live, lane_name: str, pulls: int) -> bool:
+    lane = live.contract.lane(lane_name)
+    return (await live.jsm.consumer_info(lane.stream, lane.durable)).num_waiting == pulls
+
+
+async def _called(count: int, *workers: Worker) -> bool:
+    return sum(worker.processor.calls for worker in workers) >= count
+
+
+async def _picked(worker: Worker, request_id: str) -> bool:
+    return request_id in worker.processor.picked
 
 
 async def _done(live: Live, count: int) -> bool:

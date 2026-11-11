@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from huggingface_hub import try_to_load_from_cache
 
 from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
@@ -40,6 +41,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             "needs a live NATS (NATS_TEST_URL)",
         ),
         "models": (not cuda_available(), "needs CUDA and cached weights"),
+        "local_llm": (not local_llm_cached(), "needs the local model weights (fetch-models)"),
         "eval": ("EVAL_DATA_DIR" not in os.environ, "needs the eval manifest (EVAL_DATA_DIR)"),
     }
     for item in items:
@@ -50,6 +52,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 def cuda_available() -> bool:
     return Path("/dev/nvidia0").exists() and "WORKER_TEST_NO_GPU" not in os.environ
+
+
+def local_llm_cached() -> bool:
+    settings = settings_module.load(CONFIG_DIR, BASE_ENV)
+    slot = settings.slots[settings_module.LOCAL_LLM_SLOT]
+    cached = try_to_load_from_cache(slot.model, settings.llm.local.file, revision=slot.revision)
+    return isinstance(cached, str)
 
 
 @pytest.fixture(scope="session")

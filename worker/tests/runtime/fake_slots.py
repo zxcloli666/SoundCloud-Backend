@@ -15,6 +15,7 @@ class Fake:
     def __init__(self) -> None:
         self.spec: SlotSpec | None = None
         self.loaded = False
+        self.loads = 0
 
     def load(self, spec: SlotSpec) -> None:
         self.spec = spec
@@ -25,6 +26,7 @@ class Fake:
             os.unlink(marker)
             raise RuntimeError("weights missing once")
         pause(spec.options.get("load_delay_s"))
+        self.loads += 1
         exit_delay = spec.options.get("exit_delay_s")
         if exit_delay:
             atexit.register(pause, exit_delay)
@@ -62,6 +64,12 @@ class Fake:
             import torch
 
             return {}, {"threads": torch.get_num_threads(), "nice": os.nice(0)}
+        if method == "granted_threads":
+            return {}, {"threads": CALL_GUARD.threads}
+        if method == "loads":
+            return {}, {"loads": self.loads, "instance": id(self)}
+        if method == "environment":
+            return {}, {"wait_policy": os.environ.get("OMP_WAIT_POLICY", ""), "nice": os.nice(0)}
         if method == "boom":
             raise ValueError("model exploded")
         if method == "oom" and rows > int(str(args.get("fits", 1))):

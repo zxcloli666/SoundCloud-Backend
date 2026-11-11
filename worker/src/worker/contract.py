@@ -124,6 +124,16 @@ class RpcSpec:
 
 
 @dataclass(frozen=True)
+class CompleteLimits:
+    system_bytes: int
+    system_marks: int
+    messages: int
+    message_bytes: int
+    schema_bytes: int
+    max_tokens: int
+
+
+@dataclass(frozen=True)
 class Contract:
     version: int
     streams: Mapping[str, StreamSpec]
@@ -138,6 +148,7 @@ class Contract:
     rpc: RpcSpec
     subjects: Mapping[str, str]
     max_message_bytes: int
+    complete_limits: CompleteLimits
 
     def lane(self, name: str) -> LaneSpec:
         try:
@@ -189,6 +200,7 @@ def parse(raw: Mapping[str, Any]) -> Contract:
         ContractValidator.check_schema(schema)
     compiled = {name: ContractValidator(schema) for name, schema in schemas.items()}
     rpc = table(raw, "rpc")
+    limits = table(raw, "limits")
     return Contract(
         version=CONTRACT_VERSION,
         streams=MappingProxyType(streams),
@@ -215,7 +227,8 @@ def parse(raw: Mapping[str, Any]) -> Contract:
             windows_s=MappingProxyType(dict(rpc["windows_s"])),
         ),
         subjects=MappingProxyType(dict(table(raw, "subjects"))),
-        max_message_bytes=int(table(raw, "limits")["max_message_bytes"]),
+        max_message_bytes=int(limits["max_message_bytes"]),
+        complete_limits=parse_complete_limits(table(limits, "complete")),
     )
 
 
@@ -282,6 +295,20 @@ def parse_headers(names: Mapping[str, Any]) -> HeaderNames:
         )
     except KeyError as error:
         raise ContractError(f"headers: no role {error}") from error
+
+
+def parse_complete_limits(limits: Mapping[str, Any]) -> CompleteLimits:
+    try:
+        return CompleteLimits(
+            system_bytes=int(limits["system_bytes"]),
+            system_marks=int(limits["system_marks"]),
+            messages=int(limits["messages"]),
+            message_bytes=int(limits["message_bytes"]),
+            schema_bytes=int(limits["schema_bytes"]),
+            max_tokens=int(limits["max_tokens"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ContractError(f"limits.complete: {error!r}") from error
 
 
 def table(raw: Mapping[str, Any], key: str) -> Mapping[str, Any]:
