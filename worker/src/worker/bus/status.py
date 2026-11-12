@@ -52,7 +52,7 @@ class StatusReporter:
     def snapshot(self) -> dict[str, object]:
         worker = self._settings.worker
         snapshot = self._counters.snapshot()
-        counters = bucket_of(snapshot["counters"], "llm_calls_total")
+        counted = snapshot["counters"]
         latency = bucket_of(snapshot["latency_ms"], "llm_latency_ms")
         return {
             "worker_id": worker.id,
@@ -81,8 +81,12 @@ class StatusReporter:
                     engine: self._counters.value("align_engine_total", engine=engine)
                     for engine in ALIGN_ENGINES
                 },
-                "llm_calls": nested(counters, "provider", "outcome"),
+                "llm_calls": nested(bucket_of(counted, "llm_calls_total"), "provider", "outcome"),
                 "llm_latency_ms_p95": p95_by(latency, "provider"),
+                "complete_answers": self._counters.total("complete_answers_total"),
+                "complete_rejected": totals_by(counted, "complete_rejected_total", "why"),
+                "complete_unavailable": totals_by(counted, "complete_unavailable_total", "state"),
+                "rpc_handed_on": totals_by(counted, "rpc_handed_on_total", "method"),
             },
             "gpu": self._gpu(),
         }
@@ -136,6 +140,12 @@ def p95_by(bucket: Mapping[str, object], label: str) -> dict[str, object]:
         quantiles = value if isinstance(value, Mapping) else {}
         result[parse_labels(key).get(label, "")] = quantiles.get("p95", 0.0)
     return result
+
+
+def totals_by(section: Mapping[str, object], name: str, label: str) -> dict[str, object]:
+    return {
+        parse_labels(key).get(label, ""): total for key, total in bucket_of(section, name).items()
+    }
 
 
 def parse_labels(key: str) -> dict[str, str]:

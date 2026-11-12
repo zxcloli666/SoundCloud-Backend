@@ -28,6 +28,7 @@ const RESTART_WINDOW: Duration = Duration::from_secs(60 * 60);
 const FRESH_WORKER_UPTIME_S: f64 = 30.0;
 const MAX_NODES: usize = 256;
 const MAX_SLOTS_PER_NODE: usize = 16;
+const MAX_LABELS_PER_COUNTER: usize = 16;
 const NODE_FORGOTTEN_AFTER: Duration = RESTART_WINDOW;
 const PUBLIC_TRUST: &str = "public";
 const PUBLIC_NODE_PREFIX: &str = "public.";
@@ -67,6 +68,7 @@ struct Node {
     trusted: bool,
     lanes: BTreeMap<&'static str, LaneView>,
     slots: BTreeMap<String, SlotView>,
+    counters: CounterReport,
 }
 
 #[derive(Default)]
@@ -74,6 +76,7 @@ struct LaneView {
     state: String,
     last_serving: Option<Instant>,
     done: BTreeMap<&'static str, u64>,
+    pull_unanswered: u64,
 }
 
 #[derive(Default)]
@@ -92,6 +95,8 @@ struct StatusReport {
     lanes: BTreeMap<String, LaneReport>,
     #[serde(default)]
     slots: BTreeMap<String, SlotReport>,
+    #[serde(default)]
+    counters: CounterReport,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +105,8 @@ struct LaneReport {
     state: String,
     #[serde(default)]
     done: BTreeMap<String, u64>,
+    #[serde(default)]
+    pull_unanswered: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +115,18 @@ struct SlotReport {
     restarts: u64,
     #[serde(default)]
     reserved_gap_mib: f64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CounterReport {
+    #[serde(default)]
+    complete_answers: u64,
+    #[serde(default)]
+    complete_rejected: BTreeMap<String, u64>,
+    #[serde(default)]
+    complete_unavailable: BTreeMap<String, u64>,
+    #[serde(default)]
+    rpc_handed_on: BTreeMap<String, u64>,
 }
 
 impl WorkerStatusBoard {
@@ -139,6 +158,7 @@ impl WorkerStatusBoard {
             trusted: true,
             lanes: BTreeMap::new(),
             slots: BTreeMap::new(),
+            counters: CounterReport::default(),
         });
         let counts_from_zero = !known && report.uptime_s <= FRESH_WORKER_UPTIME_S;
         entry.seen = now;
@@ -146,6 +166,7 @@ impl WorkerStatusBoard {
             !node.starts_with(PUBLIC_NODE_PREFIX) && report.trust.as_deref() != Some(PUBLIC_TRUST);
         absorb_lanes(entry, &report.lanes, known, counts_from_zero, now);
         absorb_slots(entry, &report.slots, now);
+        entry.counters = report.counters.bounded();
         forget_silent(&mut board.nodes, now);
         evict_oldest(&mut board.nodes);
         Ok(())
@@ -201,11 +222,13 @@ impl WorkerStatusBoard {
                 for (status, total) in &view.done {
                     series.done(name, lane, status, *total);
                 }
+                series.pull_unanswered(name, lane, view.pull_unanswered);
             }
             for (slot, view) in &node.slots {
                 let restarts = view.restarts.back().map_or(0, |(_, count)| *count);
                 series.slot(name, slot, restarts, view.reserved_gap_mib);
             }
+            node.counters.export(name, &mut series);
         }
         series
     }
@@ -409,6 +432,34 @@ impl SlotView {
     }
 }
 
+impl CounterReport {
+    fn bounded(self) -> Self {
+        Self {
+            complete_answers: self.complete_answers,
+            complete_rejected: first_labels(self.complete_rejected),
+            complete_unavailable: first_labels(self.complete_unavailable),
+            rpc_handed_on: first_labels(self.rpc_handed_on),
+        }
+    }
+
+    fn export(&self, node: &str, series: &mut NodeSeries) {
+        series.complete_answers(node, self.complete_answers);
+        for (why, total) in &self.complete_rejected {
+            series.complete_rejected(node, why, *total);
+        }
+        for (state, total) in &self.complete_unavailable {
+            series.complete_unavailable(node, state, *total);
+        }
+        for (method, total) in &self.rpc_handed_on {
+            series.rpc_handed_on(node, method, *total);
+        }
+    }
+}
+
+fn first_labels(totals: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
+    totals.into_iter().take(MAX_LABELS_PER_COUNTER).collect()
+}
+
 fn absorb_lanes(
     node: &mut Node,
     reports: &BTreeMap<String, LaneReport>,
@@ -427,6 +478,7 @@ fn absorb_lanes(
         };
         let view = node.lanes.entry(lane.as_str()).or_default();
         view.state.clone_from(&report.state);
+        view.pull_unanswered = report.pull_unanswered;
         if report.state == SERVING {
             view.last_serving = Some(now);
         }
@@ -785,6 +837,117 @@ mod tests {
             .map(|node| node.slots.len())
             .context("the node is on the board")?;
         assert_eq!(slots, MAX_SLOTS_PER_NODE);
+        Ok(())
+    }
+
+    fn counted(uptime_s: f64, answers: u64, busy: u64, unanswered: u64) -> Vec<u8> {
+        json!({
+            "trust": "trusted",
+            "uptime_s": uptime_s,
+            "lanes": { "ai": { "state": "serving", "done": {}, "pull_unanswered": unanswered } },
+            "counters": {
+                "lease_lost": 0,
+                "align_engine": { "mms": 0 },
+                "complete_answers": answers,
+                "complete_rejected": { "busy": busy },
+                "complete_unavailable": { "off": 1 },
+                "rpc_handed_on": { "complete": 2 },
+            },
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn the_complete_counters_of_a_status_move_the_node_series_and_a_restart_resets_them()
+    -> anyhow::Result<()> {
+        let board = WorkerStatusBoard::new();
+        let start = Instant::now();
+        let later = start + Duration::from_secs(15);
+        let restarted = later + Duration::from_secs(15);
+
+        board.record_status("gpu-main", &counted(600.0, 3, 1, 0), start)?;
+        let first = board.node_series(start).render();
+        board.record_status("gpu-main", &counted(615.0, 5, 4, 2), later)?;
+        let second = board.node_series(later).render();
+        board.record_status("gpu-main", &counted(5.0, 1, 0, 0), restarted)?;
+        let third = board.node_series(restarted).render();
+
+        assert!(first.contains("jobs_worker_complete_answers_total{node=\"gpu-main\"} 3"));
+        assert!(second.contains("# TYPE jobs_worker_complete_answers_total counter"));
+        assert!(second.contains("jobs_worker_complete_answers_total{node=\"gpu-main\"} 5"));
+        assert!(
+            second
+                .contains("jobs_worker_complete_rejected_total{node=\"gpu-main\",why=\"busy\"} 4")
+        );
+        assert!(
+            second.contains(
+                "jobs_worker_complete_unavailable_total{node=\"gpu-main\",state=\"off\"} 1"
+            )
+        );
+        assert!(
+            second.contains(
+                "jobs_worker_rpc_handed_on_total{node=\"gpu-main\",method=\"complete\"} 2"
+            )
+        );
+        assert!(
+            second.contains("jobs_worker_pull_unanswered_total{node=\"gpu-main\",lane=\"ai\"} 2")
+        );
+        assert!(third.contains("jobs_worker_complete_answers_total{node=\"gpu-main\"} 1"));
+        assert!(
+            third.contains("jobs_worker_pull_unanswered_total{node=\"gpu-main\",lane=\"ai\"} 0")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_status_of_an_older_worker_without_the_complete_counters_is_accepted() -> anyhow::Result<()>
+    {
+        let board = WorkerStatusBoard::new();
+        let start = Instant::now();
+        let older = json!({
+            "trust": "trusted",
+            "uptime_s": 600.0,
+            "lanes": serving("ai"),
+            "counters": { "lease_lost": 1, "rpc_expired": 2, "llm_calls": {} },
+        })
+        .to_string()
+        .into_bytes();
+
+        board.record_status("gpu-main", &older, start)?;
+
+        let series = board.node_series(start).render();
+        assert!(series.contains("jobs_worker_complete_answers_total{node=\"gpu-main\"} 0"));
+        assert!(
+            series.contains("jobs_worker_pull_unanswered_total{node=\"gpu-main\",lane=\"ai\"} 0")
+        );
+        assert!(!series.contains("jobs_worker_complete_rejected_total"));
+        assert!(!series.contains("jobs_worker_rpc_handed_on_total"));
+        Ok(())
+    }
+
+    #[test]
+    fn counter_labels_chosen_by_a_worker_are_escaped_and_bounded() -> anyhow::Result<()> {
+        let board = WorkerStatusBoard::new();
+        let start = Instant::now();
+        let many: serde_json::Map<String, serde_json::Value> = (0..100)
+            .map(|index| (format!("w{index:03}"), json!(1)))
+            .chain([("a\"b".to_owned(), json!(1))])
+            .collect();
+        let report = json!({ "trust": "public", "counters": { "complete_rejected": many } })
+            .to_string()
+            .into_bytes();
+
+        board.record_status("public.node-7", &report, start)?;
+
+        let series = board.node_series(start).render();
+        let rejected = series
+            .lines()
+            .filter(|line| line.starts_with("jobs_worker_complete_rejected_total{"))
+            .count();
+        assert_eq!(rejected, MAX_LABELS_PER_COUNTER);
+        assert!(series.contains("why=\"a\\\"b\""));
+        assert!(!series.contains("why=\"a\"b\""));
         Ok(())
     }
 

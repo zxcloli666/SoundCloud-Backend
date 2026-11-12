@@ -62,16 +62,44 @@ def test_alternating_system_texts_stay_reusable_within_the_budget() -> None:
     assert reused[2:] == [16, 16, 16, 16]
 
 
-def test_a_new_tail_of_a_known_system_keeps_only_the_common_part() -> None:
+def test_a_new_tail_of_a_known_system_keeps_the_common_part_and_its_own_end() -> None:
     model, held = FakeModel(), states()
     ask = reader(model, held)
     ask(prompt(system(1, tail=1), [50, 60]))
     ask(prompt(system(1, tail=2), [50, 60]))
     third = ask(prompt(system(1, tail=3), [50, 60]))
+    again = ask(prompt(system(1, tail=3), [51, 60]))
 
     anchors, _ = held.sizes()
-    assert anchors == [16, 15]
-    assert third == 15
+    assert anchors == [16, 16, 15, 16]
+    assert (third, again) == (15, 16)
+
+
+def test_a_tail_that_changes_on_every_call_gives_up_its_oldest_ends_first() -> None:
+    budget_tokens = 80
+    model, held = FakeModel(bytes_per_token=BYTES_PER_TOKEN), states(budget_tokens)
+    ask = reader(model, held)
+    reused = []
+    for tail in range(6):
+        reused.append(ask(prompt(system(1, tail=tail), [50, 60, 61])))
+        assert held.held_bytes() <= budget_tokens * BYTES_PER_TOKEN
+
+    assert reused == [0, 0, 15, 15, 15, 15]
+    assert sorted(prefix[-1] for prefix in held._anchors) == [113, 204, 205]
+
+
+def test_a_longer_system_with_a_known_beginning_keeps_its_end_after_a_cut_read() -> None:
+    model, held = FakeModel(), states()
+    ask = reader(model, held)
+    short = system(1)
+    longer = [*short, *range(300, 340)]
+    ask(prompt(short, [50, 60, 61]))
+    expired(model, ask, prompt(longer, [50, 60, 61]), chunks=2)
+    resumed = ask(prompt(longer, [50, 60, 61]))
+    other = ask(prompt(longer, [51, 60, 61]))
+
+    assert resumed == len(short) + 2 * CHUNK
+    assert other == len(longer)
 
 
 def test_a_read_keeps_a_state_at_every_mark_and_a_new_tail_goes_on_from_the_last_one() -> None:
