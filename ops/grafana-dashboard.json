@@ -621,7 +621,7 @@
       ]
     },
     {
-      "id": 22,
+      "id": 35,
       "type": "row",
       "title": "Replication",
       "gridPos": {
@@ -632,7 +632,7 @@
       }
     },
     {
-      "id": 23,
+      "id": 36,
       "type": "timeseries",
       "title": "Core apply: received but not applied",
       "description": "Bytes the apply worker of each api stream holds. Flat zero when idle; a steady climb means apply does not keep up.",
