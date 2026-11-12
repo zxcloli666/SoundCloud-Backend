@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use llm_ladder::{StepReport, StepResult};
+use llm_ladder::{Settings, StepReport, StepResult};
 use metrics_exporter_prometheus::{BuildError, Matcher, PrometheusBuilder};
 
 use super::HANDLE;
@@ -10,6 +10,7 @@ pub(super) const STEP_DURATION: &str = "api_llm_step_duration_seconds";
 pub(super) const FIRST_OUTPUT: &str = "api_llm_first_output_seconds";
 pub(super) const TOKENS: &str = "api_llm_tokens_total";
 pub(super) const SPEND: &str = "api_llm_spend_micro_usd_total";
+pub(super) const BUDGET: &str = "api_llm_budget_usd";
 pub(super) const CHAT_TURNS: &str = "api_voice_chat_turns_total";
 pub(super) const CHAT_DURATION: &str = "api_voice_chat_turn_duration_seconds";
 pub(super) const CHAT_FIRST_EVENT: &str = "api_voice_chat_first_event_seconds";
@@ -24,6 +25,25 @@ pub(super) fn buckets(builder: PrometheusBuilder) -> Result<PrometheusBuilder, B
     TIMED.iter().try_fold(builder, |builder, name| {
         builder.set_buckets_for_metric(Matcher::Full((*name).to_owned()), ANSWER_BUCKETS)
     })
+}
+
+pub fn record_llm_budgets(settings: &Settings) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    for (ladder, ladder_settings) in &settings.ladders {
+        let caps = ladder_settings.budget;
+        for (period, usd) in [
+            ("day", caps.day_usd),
+            ("month", caps.month_usd),
+            ("user_day", caps.user_day_usd),
+            ("user_month", caps.user_month_usd),
+        ] {
+            if let Some(usd) = usd {
+                metrics::gauge!(BUDGET, "ladder" => ladder.clone(), "period" => period).set(usd);
+            }
+        }
+    }
 }
 
 pub fn record_llm_step(report: &StepReport<'_>) {

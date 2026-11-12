@@ -153,6 +153,8 @@ Errors before the stream are JSON, `{"statusCode": 403, "code": "star_required",
 
 A steady `failed_request` rate on one provider means it refuses every request with HTTP 400, 413 or 422, for example an account out of credit: the breaker does not count it, so every turn loses one call to that step until the account or the config is fixed.
 
+`api_llm_budget_usd` (labels `ladder`, `period`: `day`, `month`, `user_day`, `user_month`) is each budget cap of the ladder config, set at start; a cap the config leaves out has no series. The alerts `ApiLlmDaySpendHigh` (24 hours of spend over 80% of `day`) and `ApiLlmMonthPaceHigh` (7 days of spend at a pace over `month`) compare `api_llm_spend_micro_usd_total` with it; `ApiLlmRequestsRefused` fires on a steady `failed_request` share.
+
 `api_llm_tokens_total` and `api_llm_spend_micro_usd_total` have the label `basis`: `reported` by the provider or `estimated` by the api.
 
 `api_llm_tokens_total` has the label `kind`: `input` (full price), `cache_read`, `cache_write`, `output`. The prompt size is `input + cache_read + cache_write`. A working prefix cache shows `cache_read` far above `cache_write`; `cache_write` near the prompt size on every call means the shared sections change between calls.

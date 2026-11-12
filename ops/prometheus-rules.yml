@@ -209,6 +209,38 @@ groups:
           summary: "Login proof of work is raised on {{ $labels.host }} for {{ $labels.path }}"
           description: "Sealed auth asks clients to solve a puzzle because starts exceed the free lane. Effort is {{ $value }}. Check for a login flood in auth_x_total."
 
+      - alert: ApiLlmDaySpendHigh
+        expr: sum by (ladder) (increase(api_llm_spend_micro_usd_total{job="api"}[24h])) / 1e6 > 0.8 * max by (ladder) (api_llm_budget_usd{job="api",period="day"})
+        for: 15m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "LLM ladder {{ $labels.ladder }} spent over 80% of its day budget in 24 hours"
+          description: "Spend is summed over all api hosts, like the shared budget in NATS KV llm_spend. The budget counts the UTC day and this alert the last 24 hours, so it can fire a little early. Once the day budget is spent the ladder skips its priced steps for everyone until 00:00 UTC: only its free steps answer, and a ladder without free steps answers nothing. The budget is day_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
+
+      - alert: ApiLlmMonthPaceHigh
+        expr: sum by (ladder) (increase(api_llm_spend_micro_usd_total{job="api"}[7d])) / 1e6 * 30 / 7 > max by (ladder) (api_llm_budget_usd{job="api",period="month"})
+        for: 1h
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "LLM ladder {{ $labels.ladder }} spends faster than its month budget allows"
+          description: "At the pace of the last 7 days the ladder would spend more than month_usd in 30 days. Once the month budget is spent the priced steps are skipped for everyone until the month ends: only the free steps answer, and a ladder without free steps answers nothing. With less than 7 days of history the pace is underestimated, never overestimated. The budget is month_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
+
+      - alert: ApiLlmRequestsRefused
+        expr: |
+          sum by (ladder, provider) (increase(api_llm_steps_total{job="api",result="failed_request"}[30m])) >= 3
+            and sum by (ladder, provider) (rate(api_llm_steps_total{job="api",result="failed_request"}[30m])) / sum by (ladder, provider) (rate(api_llm_steps_total{job="api",result!~"skipped_.*"}[30m])) > 0.05
+        for: 30m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Provider {{ $labels.provider }} refuses the requests of ladder {{ $labels.ladder }}"
+          description: "failed_request means the request itself was refused: HTTP 400, 413 or 422, an invalid or too large request, or a request over the worker limits. Retrying the same request cannot help and the breaker does not count it. A share over 5% of the steps that ran, at least 3 in 30 minutes, held for 30 minutes, means this provider refuses every such request, for example an account out of credit or a request shape it does not take: every turn loses one call to that step until the account or the config is fixed. Read the step error in the api log."
+
   - name: scd-jobs
     interval: 30s
     rules:

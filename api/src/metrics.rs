@@ -6,7 +6,7 @@ use sqlx::PgPool;
 
 mod llm;
 
-pub use llm::{record_llm_step, record_voice_chat};
+pub use llm::{record_llm_budgets, record_llm_step, record_voice_chat};
 
 const REQUEST_DURATION: &str = "api_http_request_duration_seconds";
 const REQUESTS_TOTAL: &str = "api_http_requests_total";
