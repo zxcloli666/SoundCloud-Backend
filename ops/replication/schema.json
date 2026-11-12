@@ -2253,6 +2253,27 @@
     {"cols": ["sc_comment_id"], "expr": false, "keys": ["sc_comment_id"], "name": "track_comments_sc_comment_id_key", "primary": false, "where": null}
    ]
   },
+  "track_search": {
+   "columns": [
+    {"default": null, "generated": false, "name": "duration_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "metadata_artist", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "play_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "title_normalized", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "uploader_sc_user_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "uploader_username", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "variant", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "track_search_pkey", "primary": true, "where": null}
+   ]
+  },
   "track_work_aliases": {
    "columns": [
     {"default": null, "generated": false, "name": "alias_key", "notnull": true, "type": "text"},

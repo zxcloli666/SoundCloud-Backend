@@ -911,6 +911,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_track_search(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.track_search t WHERE t.id = (k ->> 'id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_search t WHERE t.id = (k ->> 'id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_track_work_aliases(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1291,6 +1306,8 @@ BEGIN
             PERFORM public.scd_purge_track_artists(k);
         WHEN 'track_comments' THEN
             PERFORM public.scd_purge_track_comments(k);
+        WHEN 'track_search' THEN
+            PERFORM public.scd_purge_track_search(k);
         WHEN 'track_work_aliases' THEN
             PERFORM public.scd_purge_track_work_aliases(k);
         WHEN 'tracks' THEN

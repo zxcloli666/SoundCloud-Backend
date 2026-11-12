@@ -82,6 +82,7 @@ tables:
   taste_model_versions: {class: C}
   track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}}}
   track_comments: {class: C, reassert: always, note: "sc_comment_id filled by core"}
+  track_search: {class: C, note: "narrow copy of the searchable tracks rows (public, not deleted, not superseded) for the full-text search, filled on core from tracks"}
   tracks:
     class: C
     id: {ns: tracks, from: [urn]}
