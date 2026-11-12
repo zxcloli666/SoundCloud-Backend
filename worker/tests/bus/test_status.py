@@ -56,6 +56,7 @@ async def test_snapshot_has_the_documented_shape(harness: Harness, settings: Set
     assert counters["llm_latency_ms_p95"] == {"anthropic": 120.0}
     assert counters["complete_answers"] == 0
     assert counters["complete_rejected"] == counters["rpc_handed_on"] == {}
+    assert counters["rpc_expired_by_method"] == {}
     assert snapshot["lanes"]["audio"]["pull_unanswered"] == 0
     assert snapshot["gpu"]["name"] == "RTX 3060"
     json.dumps(snapshot)
@@ -69,6 +70,8 @@ async def test_snapshot_carries_the_complete_and_hand_over_counters(
     harness.counters.inc("complete_rejected_total", why="off_schema", by=2)
     harness.counters.inc("complete_unavailable_total", state="off")
     harness.counters.inc("rpc_handed_on_total", method="complete", by=4)
+    harness.counters.inc("rpc_expired_total", method="complete", by=2)
+    harness.counters.inc("rpc_expired_total", method="match_track")
     harness.counters.inc("pull_unanswered_total", lane="audio")
 
     snapshot = reporter(harness, settings).snapshot()
@@ -78,6 +81,8 @@ async def test_snapshot_carries_the_complete_and_hand_over_counters(
     assert counters["complete_rejected"] == {"busy": 1, "off_schema": 2}
     assert counters["complete_unavailable"] == {"off": 1}
     assert counters["rpc_handed_on"] == {"complete": 4}
+    assert counters["rpc_expired"] == 3
+    assert counters["rpc_expired_by_method"] == {"complete": 2, "match_track": 1}
     assert snapshot["lanes"]["audio"]["pull_unanswered"] == 1
 
 

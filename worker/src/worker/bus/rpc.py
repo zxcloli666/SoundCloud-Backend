@@ -93,7 +93,7 @@ class RpcHandler:
     ) -> dict[str, object] | None:
         deadline = self._deadline(msg, method)
         if deadline.remaining() - REPLY_MARGIN_S <= 0:
-            self._counters.inc("rpc_expired_total")
+            self._counters.inc("rpc_expired_total", method=method)
             return error_reply(ERROR_EXPIRED)
         try:
             request = json.loads(msg.data)
@@ -108,7 +108,7 @@ class RpcHandler:
         try:
             data = dict(await self._call(call, request, deadline.minus(PROCESS_MARGIN_S), abort))
         except Aborted:
-            self._counters.inc("rpc_expired_total")
+            self._counters.inc("rpc_expired_total", method=method)
             return error_reply(ERROR_EXPIRED)
         except PermanentFailure as failure:
             if failure.reason is Reason.INVALID_REQUEST:
@@ -168,7 +168,7 @@ class RpcHandler:
 
     def _failed(self, method: str, failure: TransientFailure) -> dict[str, object]:
         if failure.reason is Reason.DEADLINE_EXCEEDED:
-            self._counters.inc("rpc_expired_total")
+            self._counters.inc("rpc_expired_total", method=method)
             return error_reply(ERROR_EXPIRED)
         self._counters.inc("rpc_internal_total", method=method)
         log.warning("rpc_transient_failure", extra={"method": method, "error": str(failure)})

@@ -87,6 +87,7 @@ class StatusReporter:
                 "complete_rejected": totals_by(counted, "complete_rejected_total", "why"),
                 "complete_unavailable": totals_by(counted, "complete_unavailable_total", "state"),
                 "rpc_handed_on": totals_by(counted, "rpc_handed_on_total", "method"),
+                "rpc_expired_by_method": totals_by(counted, "rpc_expired_total", "method"),
             },
             "gpu": self._gpu(),
         }
