@@ -149,6 +149,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
             "complete_rejected": { "busy": 1 },
             "complete_unavailable": { "off": 1 },
             "rpc_handed_on": { "complete": 1 },
+            "rpc_expired_by_method": { "complete": 1 },
         },
     });
     workers.record_status("watched", status.to_string().as_bytes(), now)?;
