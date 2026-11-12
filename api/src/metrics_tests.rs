@@ -243,6 +243,17 @@ async fn every_metric_an_alert_watches_is_actually_exported(
     });
     set_relay_breaker_open("relay_lua", false);
     record_session_miss("in_flight");
+    record_llm_step(&llm_ladder::StepReport {
+        ladder: "metrics_watch",
+        provider: "watched",
+        result: llm_ladder::StepResult::Won,
+        first_output: Some(Duration::from_millis(1)),
+        elapsed: Duration::from_millis(1),
+        usage: llm_ladder::Usage::default(),
+        basis: llm_ladder::Basis::Reported,
+        cost_micro_usd: 1,
+    });
+    record_llm_budgets(&budgeted("metrics_watch"));
     sample_pool_wait(&pool).await;
 
     let Some(body) = render(&pool).await else {
@@ -332,12 +343,10 @@ fn an_estimated_charge_has_its_own_basis_and_the_token_kinds_stay_apart() {
     assert!(steps.ends_with(" 1"), "{steps}");
 }
 
-#[test]
-fn each_ladder_cap_is_a_budget_gauge_and_an_unset_cap_is_left_out() {
+fn budgeted(ladder: &str) -> llm_ladder::Settings {
     use llm_ladder::{BreakerSettings, CapSettings, LadderSettings, Settings};
 
-    init();
-    let ladder = LadderSettings {
+    let settings = LadderSettings {
         steps: Vec::new(),
         hedge_after_ms: 0,
         deadline_ms: 0,
@@ -353,11 +362,16 @@ fn each_ladder_cap_is_a_budget_gauge_and_an_unset_cap_is_left_out() {
             user_day_usd: Some(0.1),
         },
     };
-    let settings = Settings {
-        ladders: [("metrics_budget".to_owned(), ladder)].into(),
+    Settings {
+        ladders: [(ladder.to_owned(), settings)].into(),
         ..Settings::default()
-    };
-    record_llm_budgets(&settings);
+    }
+}
+
+#[test]
+fn each_ladder_cap_is_a_budget_gauge_and_an_unset_cap_is_left_out() {
+    init();
+    record_llm_budgets(&budgeted("metrics_budget"));
 
     let Some(handle) = HANDLE.get() else {
         return;
