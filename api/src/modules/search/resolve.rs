@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
 use super::catalog::{Request, SearchService};
-use super::failure::search_timeout;
+use super::failure::{self, Shed, search_timeout};
 use super::terms::{self, Shape, quote};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 pub const MAX_VARIANTS: usize = 8;
 const MAX_TOKENS: usize = 6;
@@ -111,6 +111,14 @@ pub fn past_deadline(found: Vec<Resolved>) -> AppResult<Vec<Resolved>> {
     }
 }
 
+pub fn keep_on_timeout(found: Vec<Resolved>, error: AppError) -> AppResult<Vec<Resolved>> {
+    let error = failure::map(error);
+    match Shed::of(&error) {
+        Some(Shed::Timeout) => past_deadline(found),
+        _ => Err(error),
+    }
+}
+
 pub fn clean_kinds(kinds: &[Kind]) -> Vec<Kind> {
     if kinds.is_empty() {
         return ALL_KINDS.to_vec();
@@ -156,7 +164,8 @@ impl SearchService {
                     let left = soft.saturating_duration_since(Instant::now());
                     let variant = self.resolve_variant(&mut tx, index, q, &kinds, per_kind);
                     match tokio::time::timeout(left, variant).await {
-                        Ok(rows) => found.extend(rows?),
+                        Ok(Ok(rows)) => found.extend(rows),
+                        Ok(Err(error)) => return keep_on_timeout(found, error),
                         Err(_) => return past_deadline(found),
                     }
                 }
