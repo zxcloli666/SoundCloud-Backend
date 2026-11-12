@@ -44,9 +44,7 @@ async fn chat(
         .map_err(unreadable)?;
     let turn = body.into_turn(chat.limits()).map_err(invalid)?;
     let request = chat.request(&turn, user).map_err(invalid)?;
-    chat.answer(request, turn.tools)
-        .await
-        .map_err(|_| unavailable())
+    chat.answer(request, turn).await.map_err(|_| unavailable())
 }
 
 fn unreadable(rejection: JsonRejection) -> AppError {

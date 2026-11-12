@@ -67,7 +67,7 @@ A priced call that ends without its final usage (a loser, a client that left, a 
 
 The system text has three sections, the most shared first:
 
-1. the same for every user of one app version: setting, `instructions`, reply format, tool list in the order the app sent it, the rule about data;
+1. the same for every user of one app version: setting, `instructions`, reply format, the rule about silence when the request has `quiet`, tool list in the order the app sent it, the rule about data;
 2. per character: persona prompt, language;
 3. per turn: notes, app state.
 
@@ -75,8 +75,8 @@ A provider that caches by prefix reuses sections 1 and 2. With `prefix_cache` se
 `openai_compatible` and `worker` get the same text joined in the same order.
 A `worker` call also carries `system_marks`: the byte offsets in that text where sections 1 and 2 end, at most the first four shared sections. The worker keeps a model state at each mark and reads only the text after the last mark it already has, so a turn of a known character reads section 3 and the talk, and a new character reads from the end of section 1. A turn with no notes and no app state ends on a mark, so the next question to the same text reads nothing of it again.
 
-A provider with `plain = true` gets the turn without tools: section 1 has the reply format with `say` only and no tool list, earlier replies are shown as `{"say": ...}`, the schema has `say` alone. Sections 2 and 3 are the same as for the other providers. Its answer is accepted only when it speaks and names no action, and an action that comes after the speech is dropped, so text inside the data cannot make a weak model act. A `worker` also holds the model to the schema, so a plain local model cannot produce an action at all. A turn that already has no tools has no plain form: every provider gets it whole.
-A change to `instructions`, a persona prompt or the app's tool list starts a new cache entry, so keep per-user and per-turn text out of them. The last tool round is offered fewer tools and has an entry of its own.
+A provider with `plain = true` gets the turn without tools: section 1 has the reply format with `say` only and no tool list, earlier replies are shown as `{"say": ...}`, the schema has `say` alone. Sections 2 and 3 are the same as for the other providers. Its answer is accepted only when it speaks and names no action, and an action that comes after the speech is dropped, so text inside the data cannot make a weak model act. A `worker` also holds the model to the schema, so a plain local model cannot produce an action at all. It never gets the rule about silence and its silence is not accepted. A turn that has no tools and no `quiet` has no plain form: every provider gets it whole.
+A change to `instructions`, a persona prompt or the app's tool list starts a new cache entry, so keep per-user and per-turn text out of them. The last tool round is offered fewer tools and has an entry of its own, and so do the requests with `quiet`.
 
 ## Request
 
@@ -98,7 +98,8 @@ Header `x-session-id`. The user needs Star. The Star check and the per-user limi
       "returns": false
     }
   ],
-  "results": [ { "name": "search_tracks", "args": { "query": "night" }, "result": { "tracks": [ ] } } ]
+  "results": [ { "name": "search_tracks", "args": { "query": "night" }, "result": { "tracks": [ ] } } ],
+  "quiet": true
 }
 ```
 
@@ -108,6 +109,7 @@ Header `x-session-id`. The user needs Star. The Star check and the per-user limi
 - `history` and `notes`: only the newest `max_history` items and `max_notes` notes are kept; a longer history item is cut to 2000 characters, a note to 300. A wrong shape is still refused.
 - The body may be as large as the caps allow: 4 bytes per counted character or byte plus 4 KiB, at most 256 KiB. A larger one gets 413.
 - `results` are what the tools of this turn answered: send the same `text` and `history` again with them.
+- `quiet`: the phrase came from a microphone and may not be meant for the assistant, so the model may stay silent (event `quiet`). Send it only for a phrase heard by a microphone, never for a typed one. It is ignored on a request with `results`.
 
 ## Untrusted text
 
@@ -127,10 +129,11 @@ cargo test --bin api -- --ignored --nocapture modules::voice_chat::live_tests
 | --- | --- | --- |
 | `action` | `{"name": "volume_set", "args": {"level": 60}}` | once per action, as soon as it is complete. `args` is always an object with the declared types; an optional argument the model did not give is absent. Actions that fit no offered tool are left out |
 | `say` | `{"text": "piece"}` | pieces of the spoken text, in order |
+| `quiet` | `{}` | only for a request with `quiet`, right before `done`: the model took the phrase for words to someone else and answers nothing. No `action` and no `say` came before it. Close the turn without speaking |
 | `done` | `{}` | the turn is complete |
 | `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or no step gave an action that fits a tool or any speech |
 
-A step's answer reaches the client from its first action that fits a tool or its first spoken word. An answer with neither falls through to the next step; the step gets up to 1 s to send its usage first.
+A step's answer reaches the client from its first action that fits a tool or its first spoken word. An answer with neither falls through to the next step; the step gets up to 1 s to send its usage first. On a request with `quiet` a whole answer with no action at all and no word is the silence and is accepted as it is.
 
 Closing the connection cancels the provider calls.
 
@@ -147,7 +150,7 @@ Errors before the stream are JSON, `{"statusCode": 403, "code": "star_required",
 
 ## Metrics
 
-`api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`; steps and durations add `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`.
+`api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`; steps and durations add `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`. The turns have the label `outcome`: `done`, `quiet`, `cancelled` or the error code.
 
 `result`: `won`, `lost`, `cancelled`, `failed_status`, `failed_transport`, `failed_timeout` (these three feed the breaker), `failed_request`, `failed_refused`, `failed_length`, `failed_invalid`, `skipped_breaker`, `skipped_budget`.
 
