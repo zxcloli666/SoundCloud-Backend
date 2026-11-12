@@ -56,12 +56,13 @@ impl Resolved {
         (self.tier, -self.rank()) < (other.tier, -other.rank())
     }
 
-    fn settles(&self) -> bool {
+    fn settles(&self, known: bool) -> bool {
         let exact = match self.kind {
             Kind::Artist => EXACT_ARTIST,
             _ => EXACT_TITLE,
         };
-        self.variant == 0 && self.tier == 0 && self.score >= exact && self.popularity >= WELL_KNOWN
+        let trusted = known || self.popularity >= WELL_KNOWN;
+        self.variant == 0 && self.tier == 0 && self.score >= exact && trusted
     }
 }
 
@@ -69,6 +70,7 @@ struct Asked {
     variant: usize,
     q: String,
     spelled_too: bool,
+    known: bool,
 }
 
 enum Answer {
@@ -162,6 +164,12 @@ pub fn clean_kinds(kinds: &[Kind]) -> Vec<Kind> {
         .collect()
 }
 
+pub fn first_kept(variants: &[String], queries: &[String]) -> bool {
+    let first = variants.first().map(std::slice::from_ref);
+    let first = first.map(clean_variants).unwrap_or_default();
+    !first.is_empty() && first.first() == queries.first()
+}
+
 pub fn clean_variants(variants: &[String]) -> Vec<String> {
     let mut queries: Vec<String> = Vec::new();
     for raw in variants.iter().take(MAX_VARIANTS * 2) {
@@ -184,8 +192,10 @@ impl SearchService {
         variants: &[String],
         kinds: &[Kind],
         per_kind: i64,
+        known: bool,
     ) -> AppResult<BTreeMap<Kind, Vec<Resolved>>> {
         let queries = clean_variants(variants);
+        let known = known && first_kept(variants, &queries);
         let kinds = clean_kinds(kinds);
         let per_kind = per_kind.clamp(1, MAX_PER_KIND);
         let soft = Instant::now() + SOFT_BUDGET;
@@ -201,6 +211,7 @@ impl SearchService {
                         variant,
                         q,
                         spelled_too: false,
+                        known: known && variant == 0,
                     })
                     .collect();
                 let mut seen: HashSet<String> = queries.iter().cloned().collect();
@@ -212,7 +223,7 @@ impl SearchService {
                     found.extend(lanes.iter_mut().flat_map(|lane| lane.found.drain(..)));
                     match answer {
                         Ok(Ok(Answer::Found)) => {
-                            if found[at..].iter().any(Resolved::settles) {
+                            if found[at..].iter().any(|hit| hit.settles(ask.known)) {
                                 asked
                                     .retain(|next| next.spelled_too && next.variant == ask.variant);
                             }
@@ -232,6 +243,7 @@ impl SearchService {
                                     variant,
                                     q: spelled,
                                     spelled_too: false,
+                                    known: false,
                                 });
                             }
                         }
@@ -248,7 +260,7 @@ impl SearchService {
 
     async fn resolve_variant(
         &self,
-        lanes: &mut [Lane<'_>],
+        lanes: &mut [Lane],
         ask: &Asked,
         kinds: &[Kind],
         per_kind: i64,

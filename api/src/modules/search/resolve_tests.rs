@@ -1,7 +1,11 @@
+use std::time::Duration;
+
+use futures::future::try_join_all;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
 use super::catalog_tests::{seed, service, song};
-use super::lanes::SPARE_LANES;
+use super::lanes::IDLE_KEPT;
 use super::resolve::{Kind, Resolved, keep_on_timeout};
 use crate::error::AppError;
 
@@ -101,7 +105,14 @@ async fn artists_of(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved
 
 async fn found_of(pool: &PgPool, kinds: &[Kind], said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
     let variants: Vec<String> = said.iter().map(|text| (*text).to_owned()).collect();
-    let found = service(pool)?.resolve(&variants, kinds, 5).await?;
+    let found = service(pool)?.resolve(&variants, kinds, 5, false).await?;
+    Ok(found.into_values().flatten().collect())
+}
+
+async fn artists_of_a_known_name(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
+    let variants: Vec<String> = said.iter().map(|text| (*text).to_owned()).collect();
+    let kinds = [Kind::Artist];
+    let found = service(pool)?.resolve(&variants, &kinds, 5, true).await?;
     Ok(found.into_values().flatten().collect())
 }
 
@@ -184,6 +195,49 @@ async fn a_whole_name_found_exactly_but_not_well_known_keeps_the_lookup_going(
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_found_exactly_ends_the_lookup_whatever_its_popularity(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    let found = artists_of_a_known_name(&pool, &["queen", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_not_found_exactly_keeps_the_lookup_going(pool: PgPool) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    let found = artists_of_a_known_name(&pool, &["kween", "queen", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [FORM, WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_cleaned_away_makes_no_later_variant_known(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    let found = artists_of_a_known_name(&pool, &["q", "queen", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [FORM, WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_spelling_derived_from_a_known_name_still_has_to_be_well_known(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_said_in_cyrillic(&pool).await?;
+    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    let found = artists_of_a_known_name(&pool, &["психосиз", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert!(ids.contains(&SPELLED) && ids.contains(&FORM), "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_later_form_found_exactly_does_not_end_the_lookup(pool: PgPool) -> anyhow::Result<()> {
     seed_a_name_and_its_other_form(&pool, 0.86).await?;
     let found = artists_of(&pool, &["kween", "queen", "queens"]).await?;
@@ -233,6 +287,19 @@ async fn a_name_that_ends_the_lookup_ends_it_for_every_kind_asked(
     Ok(())
 }
 
+async fn a_pool_with_idle(pool: &PgPool, idle: usize) -> anyhow::Result<PgPool> {
+    let own = PgPoolOptions::new()
+        .max_connections(8)
+        .idle_timeout(None)
+        .connect_with((*pool.connect_options()).clone())
+        .await?;
+    drop(try_join_all((0..idle).map(|_| own.acquire())).await?);
+    while own.num_idle() < idle {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    Ok(own)
+}
+
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_kind_that_cannot_answer_in_time_does_not_hold_back_the_other_kinds(
     pool: PgPool,
@@ -242,34 +309,56 @@ async fn a_kind_that_cannot_answer_in_time_does_not_hold_back_the_other_kinds(
     sqlx::query("LOCK TABLE tracks IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *locked)
         .await?;
-    let search = service(&pool)?;
+    let own = a_pool_with_idle(&pool, IDLE_KEPT + 2).await?;
     let kinds = [Kind::Track, Kind::Artist];
-    let found = search.resolve(&["queen".to_owned()], &kinds, 5).await?;
+    let found = service(&own)?
+        .resolve(&["queen".to_owned()], &kinds, 5, false)
+        .await;
+    own.close().await;
+    let found = found?;
     let ids: Vec<&str> = found
         .values()
         .flatten()
         .map(|hit| hit.id.as_str())
         .collect();
     assert_eq!(ids, [WHOLE], "{found:?}");
-    assert_eq!(search.spare_lanes.available_permits(), SPARE_LANES);
     Ok(())
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn with_no_spare_lane_every_kind_is_still_asked(pool: PgPool) -> anyhow::Result<()> {
+async fn with_no_connection_to_spare_every_kind_is_still_asked(pool: PgPool) -> anyhow::Result<()> {
     seed_a_name_and_its_other_form(&pool, 0.5).await?;
     seed(&pool, &[song(2, "Queen", "Other Band", 100)]).await?;
-    let search = service(&pool)?;
-    let taken = search.spare_lanes.acquire_many(SPARE_LANES as u32).await?;
+    let own = a_pool_with_idle(&pool, IDLE_KEPT).await?;
+    let search = service(&own)?;
+    let lanes = search.lanes(4).await.map(|lanes| lanes.len());
     let kinds = [Kind::Artist, Kind::Track];
-    let found = search.resolve(&["queen".to_owned()], &kinds, 5).await?;
-    drop(taken);
+    let found = search
+        .resolve(&["queen".to_owned()], &kinds, 5, false)
+        .await;
+    own.close().await;
+    assert_eq!(lanes?, 1);
+    let found = found?;
     assert_eq!(found[&Kind::Artist][0].id, WHOLE, "{found:?}");
     assert_eq!(
         found[&Kind::Track][0].id,
         "soundcloud:tracks:2",
         "{found:?}"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn the_lanes_of_a_lookup_leave_idle_connections_to_the_rest(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let own = a_pool_with_idle(&pool, IDLE_KEPT + 2).await?;
+    let lanes = service(&own)?.lanes(4).await;
+    let idle = own.num_idle();
+    let lanes = lanes.map(|lanes| lanes.len());
+    own.close().await;
+    assert_eq!(lanes?, 2);
+    assert_eq!(idle, IDLE_KEPT);
     Ok(())
 }
 
