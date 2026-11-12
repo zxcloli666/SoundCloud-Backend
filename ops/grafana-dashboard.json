@@ -621,7 +621,7 @@
       ]
     },
     {
-      "id": 22,
+      "id": 35,
       "type": "row",
       "title": "Replication",
       "gridPos": {
@@ -632,7 +632,7 @@
       }
     },
     {
-      "id": 23,
+      "id": 36,
       "type": "timeseries",
       "title": "Core apply: received but not applied",
       "description": "Bytes the apply worker of each api stream holds. Flat zero when idle; a steady climb means apply does not keep up.",
@@ -935,6 +935,79 @@
           "refId": "A",
           "expr": "sum by (provider, kind) (increase(api_llm_tokens_total{job=\"api\"}[1h]))",
           "legendFormat": "{{provider}} {{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Local model: complete calls per worker",
+      "description": "Calls per minute the local model on each worker answered, refused (why: busy, invalid_request, cut_at_max_tokens, not_a_json_object, off_schema) or could not take (state: off, or the state of an engine that is not ready). The worker counts from its own start, so a restart drops the series to zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 126
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node) (rate(jobs_worker_complete_answers_total[15m])) * 60",
+          "legendFormat": "answered {{node}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (node, why) (rate(jobs_worker_complete_rejected_total[15m])) * 60",
+          "legendFormat": "refused {{node}} {{why}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (node, state) (rate(jobs_worker_complete_unavailable_total[15m])) * 60",
+          "legendFormat": "unavailable {{node}} {{state}}"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Local model: hand-overs and unanswered pulls",
+      "description": "Calls per minute a worker without a ready model passed on to the next one, and pulls per minute the NATS server left without a reply, per lane.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 126
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (node, method) (rate(jobs_worker_rpc_handed_on_total[15m])) * 60",
+          "legendFormat": "handed on {{node}} {{method}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (node, lane) (rate(jobs_worker_pull_unanswered_total[15m])) * 60",
+          "legendFormat": "unanswered pull {{node}} {{lane}}"
         }
       ]
     }

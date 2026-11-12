@@ -138,6 +138,21 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
     let Some(body) = render_fresh(&pool, &[metered("main_fast", &pool)]).await else {
         return Ok(());
     };
+    let workers = super::WorkerStatusBoard::new();
+    let now = std::time::Instant::now();
+    let status = serde_json::json!({
+        "trust": "trusted",
+        "uptime_s": 60.0,
+        "lanes": { "ai": { "state": "serving", "done": {}, "pull_unanswered": 1 } },
+        "counters": {
+            "complete_answers": 1,
+            "complete_rejected": { "busy": 1 },
+            "complete_unavailable": { "off": 1 },
+            "rpc_handed_on": { "complete": 1 },
+        },
+    });
+    workers.record_status("watched", status.to_string().as_bytes(), now)?;
+    let body = crate::metrics::with_node_series(body, workers.node_series(now));
 
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ops");
     let mut artifacts = String::new();
