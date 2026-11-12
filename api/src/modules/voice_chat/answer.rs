@@ -92,6 +92,10 @@ impl Answer {
         pieces
     }
 
+    pub fn is_closed(&self) -> bool {
+        matches!(self.at, At::Closed)
+    }
+
     fn read(
         &mut self,
         symbol: char,

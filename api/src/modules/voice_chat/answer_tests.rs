@@ -218,3 +218,13 @@ fn any_slicing_of_a_broken_escape_reads_the_same_and_keeps_what_follows() {
         }
     }
 }
+
+#[test]
+fn an_answer_is_closed_by_the_brace_that_ends_its_object() {
+    let mut answer = Answer::default();
+    assert!(!answer.is_closed());
+    answer.push("{\"actions\":[],\"say\":\"\"");
+    assert!(!answer.is_closed());
+    answer.push(" }");
+    assert!(answer.is_closed());
+}

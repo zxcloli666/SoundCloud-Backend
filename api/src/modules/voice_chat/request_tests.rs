@@ -295,3 +295,23 @@ fn a_body_shaped_like_the_app_sends_it_is_accepted() {
     let pause = turn.tools.fit(json!({"name": "pause", "args": []}));
     assert_eq!(json!(pause), json!({"name": "pause", "args": {}}));
 }
+
+#[test]
+fn silence_is_allowed_only_when_the_app_asks_and_no_tool_of_the_turn_has_run() {
+    assert!(
+        read(json!({"text": "kids, dinner", "quiet": true}))
+            .unwrap()
+            .quiet
+    );
+    assert!(!read(json!({"text": "kids, dinner"})).unwrap().quiet);
+    assert!(
+        !read(json!({"text": "kids, dinner", "quiet": false}))
+            .unwrap()
+            .quiet
+    );
+    let found =
+        json!({"name": "search_tracks", "args": {"query": "night"}, "result": {"tracks": []}});
+    let after_a_tool =
+        read(json!({"text": "find night", "tools": tools(), "results": [found], "quiet": true}));
+    assert!(!after_a_tool.unwrap().quiet);
+}

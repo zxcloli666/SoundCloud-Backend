@@ -82,9 +82,9 @@ impl Live {
         })
     }
 
-    pub async fn answer(&self, request: Request, tools: Tools) -> Result<Response, LadderError> {
+    pub async fn answer(&self, request: Request, turn: Turn) -> Result<Response, LadderError> {
         let started = Instant::now();
-        let offered = Offered::new(tools);
+        let offered = Offered::new(turn.tools, turn.quiet);
         let answer = self
             .ladder
             .stream(request, reply::commit(offered.clone()))
@@ -93,7 +93,7 @@ impl Live {
     }
 
     fn plain(&self, turn: &Turn) -> Option<Plain> {
-        (!turn.tools.is_empty()).then(|| Plain {
+        (!turn.tools.is_empty() || turn.quiet).then(|| Plain {
             system: prompt::plain_system(&self.limits, turn),
             messages: prompt::plain_messages(turn),
             schema: Tools::default().answer_schema(),

@@ -10,10 +10,21 @@ const UNKNOWN: &str = "{\"actions\":[{\"name\":\"erase_library\",\"args\":[]}],\
 const SPOKEN: &str = "{\"say\":\"Привет.\"}";
 const SPOKEN_WITH_NO_ACTIONS: &str = "{\"actions\":[],\"say\":\"Привет.\"}";
 const SILENT: &str = "{\"actions\":[],\"say\":\" \"}";
+const NOTHING: &str = "{\"actions\":[],\"say\":\"\"}";
+const NOTHING_SO_FAR: &str = "{\"actions\":[],\"say\":\"\"";
+const NO_WORD: &str = "{\"say\":\"\"}";
 
 fn offered() -> Arc<Offered> {
+    Offered::new(tool_set(), false)
+}
+
+fn overhearing() -> Arc<Offered> {
+    Offered::new(tool_set(), true)
+}
+
+fn tool_set() -> Tools {
     let specs: Vec<ToolSpec> = serde_json::from_value(tools()).expect("a tool list");
-    Offered::new(Tools::read(specs, 8).expect("a tool set"))
+    Tools::read(specs, 8).expect("a tool set")
 }
 
 fn louder() -> Value {
@@ -50,4 +61,21 @@ fn no_action_fits_after_a_plain_answer_was_accepted() {
     assert!(offered.fit(louder()).is_none());
     assert!(offered.accepts(Form::Full, SPOKEN));
     assert!(offered.fit(louder()).is_some());
+}
+
+#[test]
+fn a_whole_answer_that_does_and_says_nothing_is_accepted_only_where_silence_is_allowed() {
+    let overhearing = overhearing();
+    assert!(overhearing.accepts(Form::Full, NOTHING));
+    assert!(overhearing.accepts(Form::Full, SILENT));
+    assert!(overhearing.accepts(Form::Full, NO_WORD));
+    assert!(!overhearing.accepts(Form::Full, NOTHING_SO_FAR));
+    assert!(!overhearing.accepts(Form::Full, UNKNOWN));
+    assert!(!overhearing.accepts(Form::Full, "I will stay silent."));
+    assert!(!overhearing.accepts(Form::Plain, NOTHING));
+    assert!(!overhearing.accepts(Form::Plain, NO_WORD));
+    assert!(overhearing.accepts(Form::Full, LOUDER));
+    assert!(overhearing.accepts(Form::Full, SPOKEN));
+    assert!(!offered().accepts(Form::Full, NOTHING));
+    assert!(!offered().accepts(Form::Full, NO_WORD));
 }

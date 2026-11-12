@@ -18,6 +18,7 @@ const KEEPALIVE: Duration = Duration::from_secs(15);
 
 pub struct Offered {
     tools: Tools,
+    quiet: bool,
     answered_plainly: AtomicBool,
 }
 
@@ -31,6 +32,7 @@ pub fn respond(answer: AnswerStream, offered: Arc<Offered>, started: Instant) ->
         parser: Answer::default(),
         offered,
         ready: VecDeque::new(),
+        spoke: false,
         tally: Tally {
             started,
             first_event: None,
@@ -56,16 +58,19 @@ pub fn respond(answer: AnswerStream, offered: Arc<Offered>, started: Instant) ->
 }
 
 impl Offered {
-    pub fn new(tools: Tools) -> Arc<Self> {
+    pub fn new(tools: Tools, quiet: bool) -> Arc<Self> {
         Arc::new(Self {
             tools,
+            quiet,
             answered_plainly: AtomicBool::new(false),
         })
     }
 
     fn accepts(&self, form: Form, held: &str) -> bool {
-        let pieces = Answer::default().push(held);
+        let mut answer = Answer::default();
+        let pieces = answer.push(held);
         let accepted = match form {
+            Form::Full if self.quiet && answer.is_closed() && pieces.iter().all(blank) => true,
             Form::Full => pieces.into_iter().any(|piece| match piece {
                 Piece::Say(text) => !text.trim().is_empty(),
                 Piece::Action(raw) => self.tools.fit(raw).is_some(),
@@ -87,6 +92,10 @@ impl Offered {
     }
 }
 
+fn blank(piece: &Piece) -> bool {
+    matches!(piece, Piece::Say(text) if text.trim().is_empty())
+}
+
 fn only_speaks(pieces: Vec<Piece>) -> bool {
     let mut speaks = false;
     for piece in pieces {
@@ -103,6 +112,7 @@ struct Reply {
     parser: Answer,
     offered: Arc<Offered>,
     ready: VecDeque<Event>,
+    spoke: bool,
     tally: Tally,
 }
 
@@ -118,7 +128,7 @@ impl Reply {
     async fn pull(&mut self) {
         match self.answer.next().await {
             Some(Ok(llm_ladder::Event::Delta(delta))) => self.take(&delta),
-            Some(Ok(llm_ladder::Event::Done(_))) => self.close("done", "done", json!({})),
+            Some(Ok(llm_ladder::Event::Done(_))) => self.finish(),
             Some(Err(LadderError::Deadline)) => self.fail("deadline"),
             Some(Err(_)) | None => self.fail("provider_failed"),
         }
@@ -127,7 +137,11 @@ impl Reply {
     fn take(&mut self, delta: &str) {
         for piece in self.parser.push(delta) {
             match piece {
-                Piece::Say(text) => self.send("say", json!({"text": text})),
+                Piece::Say(text) if !self.spoke && text.trim().is_empty() => {}
+                Piece::Say(text) => {
+                    self.spoke = true;
+                    self.send("say", json!({"text": text}));
+                }
                 Piece::Action(raw) => match self.offered.fit(raw) {
                     Some(action) => {
                         self.tally.actions += 1;
@@ -137,6 +151,18 @@ impl Reply {
                 },
             }
         }
+    }
+
+    fn finish(&mut self) {
+        let silent = self.offered.quiet && !self.spoke && self.tally.actions == 0;
+        if silent {
+            self.send("quiet", json!({}));
+        }
+        let outcome = match silent {
+            true => "quiet",
+            false => "done",
+        };
+        self.close(outcome, "done", json!({}));
     }
 
     fn fail(&mut self, code: &'static str) {

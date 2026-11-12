@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -160,11 +160,21 @@ impl SearchService {
             .guarded(|| async {
                 let mut tx = self.begin().await?;
                 let mut found = Vec::new();
-                for (index, q) in queries.iter().enumerate() {
+                let mut asked: VecDeque<(usize, String)> =
+                    queries.iter().cloned().enumerate().collect();
+                let mut seen: HashSet<String> = queries.iter().cloned().collect();
+                while let Some((index, q)) = asked.pop_front() {
                     let left = soft.saturating_duration_since(Instant::now());
-                    let variant = self.resolve_variant(&mut tx, index, q, &kinds, per_kind);
+                    let variant = self.resolve_variant(&mut tx, index, &q, &kinds, per_kind);
                     match tokio::time::timeout(left, variant).await {
-                        Ok(Ok(rows)) => found.extend(rows),
+                        Ok(Ok((rows, spelled))) => {
+                            found.extend(rows);
+                            if let Some(spelled) = spelled
+                                && seen.insert(spelled.clone())
+                            {
+                                asked.push_front((index, spelled));
+                            }
+                        }
                         Ok(Err(error)) => return keep_on_timeout(found, error),
                         Err(_) => return past_deadline(found),
                     }
@@ -183,9 +193,9 @@ impl SearchService {
         q: &str,
         kinds: &[Kind],
         per_kind: i64,
-    ) -> AppResult<Vec<Resolved>> {
+    ) -> AppResult<(Vec<Resolved>, Option<String>)> {
         let Some(strict_terms) = terms::resolve(&self.terms, tx, q, Shape::Tracks).await? else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         };
         let entity_terms = terms::resolve(&self.terms, tx, q, Shape::Entities).await?;
         let stem = stem_for(tx, q).await?;
@@ -261,7 +271,7 @@ impl SearchService {
                 tier: row.tier,
             }));
         }
-        Ok(out)
+        Ok((out, strict_terms.spelled))
     }
 }
 

@@ -97,10 +97,7 @@ async fn ask(chat: &VoiceChat, mut body: Value) -> Heard {
     let body: ChatBody = serde_json::from_value(body).expect("a chat body");
     let turn = body.into_turn(live.limits()).expect("a valid turn");
     let request = live.request(&turn, USER).expect("a prompt within the cap");
-    let response = live
-        .answer(request, turn.tools)
-        .await
-        .expect("an open step");
+    let response = live.answer(request, turn).await.expect("an open step");
     let heard = hear(response).await.expect("a stream");
     let (first, last) = (heard.events.first(), heard.events.last());
     println!(

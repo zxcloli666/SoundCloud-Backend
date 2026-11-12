@@ -6,6 +6,8 @@ use crate::error::AppError;
 
 const KNOWN: &str = "00000000-0000-0000-0000-0000000000b1";
 const LISTENED: &str = "00000000-0000-0000-0000-0000000000b2";
+const SPELLED: &str = "00000000-0000-0000-0000-0000000000b3";
+const NEAR: &str = "00000000-0000-0000-0000-0000000000b4";
 
 async fn seed_equal_matches(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
@@ -19,6 +21,27 @@ async fn seed_equal_matches(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
     super::lexicon_refresh::refresh(pool).await
+}
+
+async fn seed_a_name_said_in_cyrillic(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary,
+                              monthly_listeners, popularity_score)
+         VALUES ($1::uuid, 'Psychosis', 'psychosis', 'test', 40, 900, 0.4),
+                ($2::uuid, 'Психоз', 'психоз', 'test', 60, 2000, 0.6)",
+    )
+    .bind(SPELLED)
+    .bind(NEAR)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO search_terms (word, ndoc, latin)
+         SELECT word, ndoc, search_latin(word)
+         FROM (VALUES ('psychosis', 2107), ('психоз', 262)) AS v (word, ndoc)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn artists(pool: &PgPool, said: &str) -> anyhow::Result<Vec<Resolved>> {
@@ -46,6 +69,18 @@ async fn of_two_equal_matches_the_one_with_the_bigger_catalog_leads(
     let found = artists(&pool, "kino").await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
     assert_eq!(ids, [KNOWN, LISTENED]);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_name_said_in_cyrillic_finds_the_artist_spelled_in_latin(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_said_in_cyrillic(&pool).await?;
+    let found = artists(&pool, "психосиз").await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [SPELLED, NEAR], "{found:?}");
+    assert_eq!(found[0].variant, 0);
     Ok(())
 }
 
