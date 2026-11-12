@@ -1,8 +1,6 @@
 use chrono::Utc;
 use sqlx::{Postgres, Transaction};
 
-const INTERNAL_PLAY_WEIGHT: i64 = 10_000;
-
 #[derive(Clone, Copy)]
 pub(super) struct Shards {
     pub(super) count: i64,
@@ -106,18 +104,10 @@ impl Stage {
                 .execute(&mut **transaction)
                 .await?;
             }
-            Self::ArtistPopularity => {
-                sqlx::query_file!(
-                    "queries/discover/refresh_artist_popularity.sql",
-                    INTERNAL_PLAY_WEIGHT
-                )
-                .execute(&mut **transaction)
-                .await?;
-            }
-            Self::ArtistTags => {
-                sqlx::query_file!("queries/discover/refresh_artist_tags.sql")
-                    .execute(&mut **transaction)
-                    .await?;
+            Self::ArtistPopularity | Self::ArtistTags => {
+                return Err(sqlx::Error::Protocol(
+                    "a paced stage runs outside a single transaction".to_owned(),
+                ));
             }
             Self::TagCounts => {
                 sqlx::query_file!("queries/discover/refresh_tag_counts.sql")
