@@ -38,6 +38,23 @@ heartbeat, и отдаёт задачу обработчику сразу, ка�
 ни задачи, ни статуса, считается потерянным (`pull_unanswered_total`): лейн забирает уже пришедшее,
 бросает старый inbox и подписывается на новый, чтобы опоздавший ответ не закрыл следующий запрос.
 
+## Статус
+
+Раз в 15 с воркер шлёт `worker.status.<worker_id>`. jobs отдаёт из него в Prometheus счётчики по
+узлу (`node` равен `worker_id`):
+
+| Метрика jobs | Поле статуса | Счётчик воркера |
+|---|---|---|
+| `jobs_worker_complete_answers_total{node}` | `counters.complete_answers` | `complete_answers_total` |
+| `jobs_worker_complete_rejected_total{node,why}` | `counters.complete_rejected` | `complete_rejected_total{why}` |
+| `jobs_worker_complete_unavailable_total{node,state}` | `counters.complete_unavailable` | `complete_unavailable_total{state}` |
+| `jobs_worker_rpc_handed_on_total{node,method}` | `counters.rpc_handed_on` | `rpc_handed_on_total{method}` |
+| `jobs_worker_pull_unanswered_total{node,lane}` | `lanes.<lane>.pull_unanswered` | `pull_unanswered_total{lane}` |
+
+Значение — итог воркера с его старта, как у `jobs_worker_done_total`: перезапуск воркера — сброс
+счётчика, `rate` и `increase` его учитывают. Статус без этих полей принимается, итоги в нём нулевые.
+Больше 16 значений `why`, `state` или `method` с одного узла jobs не отдаёт.
+
 ## Конфигурация
 
 Три слоя, каждый следующий перекрывает предыдущий:

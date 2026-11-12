@@ -46,6 +46,11 @@ const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
 const WORKER_DONE: &str = "jobs_worker_done_total";
 const WORKER_SLOT_RESTARTS: &str = "jobs_worker_slot_restarts_total";
 const WORKER_SLOT_RESERVED_GAP: &str = "jobs_worker_slot_reserved_gap_mib";
+const WORKER_PULL_UNANSWERED: &str = "jobs_worker_pull_unanswered_total";
+const WORKER_COMPLETE_ANSWERS: &str = "jobs_worker_complete_answers_total";
+const WORKER_COMPLETE_REJECTED: &str = "jobs_worker_complete_rejected_total";
+const WORKER_COMPLETE_UNAVAILABLE: &str = "jobs_worker_complete_unavailable_total";
+const WORKER_RPC_HANDED_ON: &str = "jobs_worker_rpc_handed_on_total";
 const WORKER_LANE_STATUS_AGE: &str = "jobs_worker_lane_status_age_seconds";
 const WORKER_LANE_REQUIRED: &str = "jobs_worker_lane_required";
 const WORKER_LANE_SERVING_NODES: &str = "jobs_worker_lane_serving_nodes";
@@ -505,6 +510,11 @@ pub struct NodeSeries {
     done: String,
     slot_restarts: String,
     slot_reserved_gap: String,
+    pull_unanswered: String,
+    complete_answers: String,
+    complete_rejected: String,
+    complete_unavailable: String,
+    rpc_handed_on: String,
 }
 
 impl NodeSeries {
@@ -549,6 +559,49 @@ impl NodeSeries {
         ));
     }
 
+    pub fn pull_unanswered(&mut self, node: &str, lane: WorkerLane, total: u64) {
+        self.pull_unanswered.push_str(&node_total(
+            WORKER_PULL_UNANSWERED,
+            node,
+            ("lane", lane.as_str()),
+            total,
+        ));
+    }
+
+    pub fn complete_answers(&mut self, node: &str, total: u64) {
+        self.complete_answers.push_str(&format!(
+            "{WORKER_COMPLETE_ANSWERS}{{node=\"{}\"}} {total}\n",
+            label(node)
+        ));
+    }
+
+    pub fn complete_rejected(&mut self, node: &str, why: &str, total: u64) {
+        self.complete_rejected.push_str(&node_total(
+            WORKER_COMPLETE_REJECTED,
+            node,
+            ("why", why),
+            total,
+        ));
+    }
+
+    pub fn complete_unavailable(&mut self, node: &str, state: &str, total: u64) {
+        self.complete_unavailable.push_str(&node_total(
+            WORKER_COMPLETE_UNAVAILABLE,
+            node,
+            ("state", state),
+            total,
+        ));
+    }
+
+    pub fn rpc_handed_on(&mut self, node: &str, method: &str, total: u64) {
+        self.rpc_handed_on.push_str(&node_total(
+            WORKER_RPC_HANDED_ON,
+            node,
+            ("method", method),
+            total,
+        ));
+    }
+
     pub fn render(self) -> String {
         [
             (WORKER_STATUS_AGE, "gauge", self.status_age),
@@ -556,6 +609,15 @@ impl NodeSeries {
             (WORKER_DONE, "counter", self.done),
             (WORKER_SLOT_RESTARTS, "counter", self.slot_restarts),
             (WORKER_SLOT_RESERVED_GAP, "gauge", self.slot_reserved_gap),
+            (WORKER_PULL_UNANSWERED, "counter", self.pull_unanswered),
+            (WORKER_COMPLETE_ANSWERS, "counter", self.complete_answers),
+            (WORKER_COMPLETE_REJECTED, "counter", self.complete_rejected),
+            (
+                WORKER_COMPLETE_UNAVAILABLE,
+                "counter",
+                self.complete_unavailable,
+            ),
+            (WORKER_RPC_HANDED_ON, "counter", self.rpc_handed_on),
         ]
         .into_iter()
         .filter(|(_, _, samples)| !samples.is_empty())
@@ -570,6 +632,14 @@ pub fn with_node_series(mut body: String, nodes: NodeSeries) -> String {
     }
     body.push_str(&nodes.render());
     body
+}
+
+fn node_total(name: &str, node: &str, (key, value): (&str, &str), total: u64) -> String {
+    format!(
+        "{name}{{node=\"{}\",{key}=\"{}\"}} {total}\n",
+        label(node),
+        label(value)
+    )
 }
 
 fn label(value: &str) -> String {

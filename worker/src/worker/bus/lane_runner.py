@@ -163,6 +163,7 @@ class LaneRunner:
                 for status in Status
             },
             "naks": self._counters.value("naks_total", lane=self.lane.name),
+            "pull_unanswered": self._counters.value("pull_unanswered_total", lane=self.lane.name),
             "last_error": self.watch.last_error,
             **self.throughput(),
         }
