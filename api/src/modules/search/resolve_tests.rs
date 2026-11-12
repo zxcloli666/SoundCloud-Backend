@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use super::catalog_tests::service;
+use super::catalog_tests::{seed, service, song};
 use super::resolve::{Kind, Resolved, keep_on_timeout};
 use crate::error::AppError;
 
@@ -95,11 +95,13 @@ async fn artists(pool: &PgPool, said: &str) -> anyhow::Result<Vec<Resolved>> {
 }
 
 async fn artists_of(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
+    found_of(pool, &[Kind::Artist], said).await
+}
+
+async fn found_of(pool: &PgPool, kinds: &[Kind], said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
     let variants: Vec<String> = said.iter().map(|text| (*text).to_owned()).collect();
-    let found = service(pool)?
-        .resolve(&variants, &[Kind::Artist], 5)
-        .await?;
-    Ok(found.get(&Kind::Artist).cloned().unwrap_or_default())
+    let found = service(pool)?.resolve(&variants, kinds, 5).await?;
+    Ok(found.into_values().flatten().collect())
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -162,7 +164,7 @@ async fn a_name_without_a_latin_spelling_is_looked_up_by_its_parts_too(
 async fn a_whole_name_found_exactly_and_well_known_ends_the_lookup(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    seed_a_name_and_its_other_form(&pool, 0.86).await?;
+    seed_a_name_and_its_other_form(&pool, 0.8).await?;
     let found = artists_of(&pool, &["queen", "queens"]).await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
     assert_eq!(ids, [WHOLE], "{found:?}");
@@ -170,13 +172,13 @@ async fn a_whole_name_found_exactly_and_well_known_ends_the_lookup(
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn a_whole_name_found_exactly_but_little_known_keeps_the_lookup_going(
+async fn a_whole_name_found_exactly_but_not_well_known_keeps_the_lookup_going(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    seed_a_name_and_its_other_form(&pool, 0.79).await?;
     let found = artists_of(&pool, &["queen", "queens"]).await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
-    assert_eq!(ids, [FORM, WHOLE], "{found:?}");
+    assert_eq!(ids, [WHOLE, FORM], "{found:?}");
     Ok(())
 }
 
@@ -186,6 +188,47 @@ async fn a_later_form_found_exactly_does_not_end_the_lookup(pool: PgPool) -> any
     let found = artists_of(&pool, &["kween", "queen", "queens"]).await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
     assert_eq!(ids, [WHOLE, FORM], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_latin_spelling_the_request_lists_later_is_asked_first_and_ends_the_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_of_two_words(&pool).await?;
+    words(&pool, "('playboi', 17698), ('carti', 21025)").await?;
+    let found = artists_of(&pool, &["плейбой карти", "плейбой", "Playboi Carti"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [LATIN, CYRILLIC], "{found:?}");
+    assert_eq!(found[0].variant, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_title_said_with_its_artist_found_exactly_and_well_known_ends_the_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let songs = [
+        song(1, "Nightcall", "Kavinsky", 5_000_000),
+        song(2, "Roadgame", "Other Band", 100),
+    ];
+    seed(&pool, &songs).await?;
+    let found = found_of(&pool, &[Kind::Track], &["nightcall kavinsky", "roadgame"]).await?;
+    assert_eq!(found[0].id, "soundcloud:tracks:1", "{found:?}");
+    assert!(found.iter().all(|track| track.variant == 0), "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_name_that_ends_the_lookup_ends_it_for_every_kind_asked(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.86).await?;
+    seed(&pool, &[song(2, "Roadgame", "Other Band", 100)]).await?;
+    let kinds = [Kind::Artist, Kind::Track];
+    let found = found_of(&pool, &kinds, &["queen", "roadgame"]).await?;
+    let ids: Vec<&str> = found.iter().map(|hit| hit.id.as_str()).collect();
+    assert_eq!(ids, [WHOLE], "{found:?}");
     Ok(())
 }
 

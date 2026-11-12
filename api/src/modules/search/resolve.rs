@@ -208,11 +208,15 @@ impl SearchService {
                         }
                         Ok(Ok(Answer::Spelled(spelled))) => {
                             let variant = ask.variant;
+                            let later = asked
+                                .iter()
+                                .position(|next| next.q == spelled && !next.spelled_too);
+                            let moved_up = later.and_then(|at| asked.remove(at)).is_some();
                             asked.push_front(Asked {
                                 spelled_too: true,
                                 ..ask
                             });
-                            if seen.insert(spelled.clone()) {
+                            if moved_up || seen.insert(spelled.clone()) {
                                 asked.push_front(Asked {
                                     variant,
                                     q: spelled,
