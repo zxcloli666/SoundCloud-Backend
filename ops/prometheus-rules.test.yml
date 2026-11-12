@@ -596,7 +596,7 @@ tests:
               service: api
             exp_annotations:
               summary: "LLM ladder chat spent over 80% of its day budget in 24 hours"
-              description: "Spend is summed over all api hosts, like the shared budget in NATS KV llm_spend. The budget counts the UTC day and this alert the last 24 hours, so it can fire a little early. Once the day budget is spent the ladder skips its priced steps for everyone until 00:00 UTC and answers come from the free steps only. The budget is day_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
+              description: "Spend is summed over all api hosts, like the shared budget in NATS KV llm_spend. The budget counts the UTC day and this alert the last 24 hours, so it can fire a little early. Once the day budget is spent the ladder skips its priced steps for everyone until 00:00 UTC: only its free steps answer, and a ladder without free steps answers nothing. The budget is day_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
 
   - interval: 2m
     input_series:
@@ -618,7 +618,7 @@ tests:
               service: api
             exp_annotations:
               summary: "LLM ladder chat spends faster than its month budget allows"
-              description: "At the pace of the last 7 days the ladder would spend more than month_usd in 30 days. Once the month budget is spent the priced steps are skipped for everyone until the month ends. With less than 7 days of history the pace is underestimated, never overestimated. The budget is month_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
+              description: "At the pace of the last 7 days the ladder would spend more than month_usd in 30 days. Once the month budget is spent the priced steps are skipped for everyone until the month ends: only the free steps answer, and a ladder without free steps answers nothing. With less than 7 days of history the pace is underestimated, never overestimated. The budget is month_usd in the ladder config (Infra roles/<host>/config/llm/ladder.toml)."
 
   - interval: 1m
     input_series:
