@@ -49,7 +49,7 @@ pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
     version: 334,
-    description: "track search indexes",
+    description: "track search uploader popular",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,
