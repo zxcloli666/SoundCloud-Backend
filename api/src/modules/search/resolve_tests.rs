@@ -11,6 +11,8 @@ const NEAR: &str = "00000000-0000-0000-0000-0000000000b4";
 const LATIN: &str = "00000000-0000-0000-0000-0000000000b5";
 const CYRILLIC: &str = "00000000-0000-0000-0000-0000000000b6";
 const PART: &str = "00000000-0000-0000-0000-0000000000b7";
+const WHOLE: &str = "00000000-0000-0000-0000-0000000000b8";
+const FORM: &str = "00000000-0000-0000-0000-0000000000b9";
 
 async fn seed_equal_matches(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
@@ -73,9 +75,29 @@ async fn words(pool: &PgPool, counted: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_a_name_and_its_other_form(pool: &PgPool, popularity: f64) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary,
+                              monthly_listeners, popularity_score)
+         VALUES ($1::uuid, 'Queen', 'queen', 'test', 40, 900, $3),
+                ($2::uuid, 'Queens', 'queens', 'test', 40, 900, 0.5)",
+    )
+    .bind(WHOLE)
+    .bind(FORM)
+    .bind(popularity)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn artists(pool: &PgPool, said: &str) -> anyhow::Result<Vec<Resolved>> {
+    artists_of(pool, &[said]).await
+}
+
+async fn artists_of(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
+    let variants: Vec<String> = said.iter().map(|text| (*text).to_owned()).collect();
     let found = service(pool)?
-        .resolve(&[said.to_owned()], &[Kind::Artist], 5)
+        .resolve(&variants, &[Kind::Artist], 5)
         .await?;
     Ok(found.get(&Kind::Artist).cloned().unwrap_or_default())
 }
@@ -133,6 +155,37 @@ async fn a_name_without_a_latin_spelling_is_looked_up_by_its_parts_too(
     let found = artists(&pool, "плейбой карти").await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
     assert_eq!(ids, [CYRILLIC, PART], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_whole_name_found_exactly_and_well_known_ends_the_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.86).await?;
+    let found = artists_of(&pool, &["queen", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_whole_name_found_exactly_but_little_known_keeps_the_lookup_going(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    let found = artists_of(&pool, &["queen", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [FORM, WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_later_form_found_exactly_does_not_end_the_lookup(pool: PgPool) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.86).await?;
+    let found = artists_of(&pool, &["kween", "queen", "queens"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [WHOLE, FORM], "{found:?}");
     Ok(())
 }
 
