@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
 use super::catalog::{Request, SearchService};
 use super::failure::{self, Shed, search_timeout};
-use super::terms::{self, Shape, quote};
+use super::lanes::Lane;
+use super::terms::{self, Shape, Terms, quote};
 use crate::error::{AppError, AppResult};
 
 pub const MAX_VARIANTS: usize = 8;
@@ -69,8 +72,16 @@ struct Asked {
 }
 
 enum Answer {
-    Found(Vec<Resolved>),
+    Found,
     Spelled(String),
+}
+
+struct Question<'a> {
+    ask: &'a Asked,
+    of_tracks: &'a Terms,
+    of_entities: Option<&'a Terms>,
+    stem: Option<&'a str>,
+    per_kind: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -180,7 +191,7 @@ impl SearchService {
         let soft = Instant::now() + SOFT_BUDGET;
         let found = self
             .guarded(|| async {
-                let mut tx = self.begin().await?;
+                let mut lanes = self.lanes(kinds.len()).await?;
                 let mut found = Vec::new();
                 let mut asked: VecDeque<Asked> = queries
                     .iter()
@@ -195,13 +206,13 @@ impl SearchService {
                 let mut seen: HashSet<String> = queries.iter().cloned().collect();
                 while let Some(ask) = asked.pop_front() {
                     let left = soft.saturating_duration_since(Instant::now());
-                    let answer = self.resolve_variant(&mut tx, &ask, &kinds, per_kind);
+                    let answer = self.resolve_variant(&mut lanes, &ask, &kinds, per_kind);
                     let answer = tokio::time::timeout(left, answer).await;
+                    let at = found.len();
+                    found.extend(lanes.iter_mut().flat_map(|lane| lane.found.drain(..)));
                     match answer {
-                        Ok(Ok(Answer::Found(rows))) => {
-                            let settled = rows.iter().any(Resolved::settles);
-                            found.extend(rows);
-                            if settled {
+                        Ok(Ok(Answer::Found)) => {
+                            if found[at..].iter().any(Resolved::settles) {
                                 asked
                                     .retain(|next| next.spelled_too && next.variant == ask.variant);
                             }
@@ -228,7 +239,7 @@ impl SearchService {
                         Err(_) => return past_deadline(found),
                     }
                 }
-                tx.commit().await?;
+                try_join_all(lanes.into_iter().map(|lane| lane.tx.commit())).await?;
                 Ok::<Vec<Resolved>, crate::error::AppError>(found)
             })
             .await?;
@@ -237,99 +248,124 @@ impl SearchService {
 
     async fn resolve_variant(
         &self,
-        tx: &mut Transaction<'static, Postgres>,
+        lanes: &mut [Lane<'_>],
         ask: &Asked,
         kinds: &[Kind],
         per_kind: i64,
     ) -> AppResult<Answer> {
         let q = ask.q.as_str();
-        let Some(strict_terms) = terms::resolve(&self.terms, tx, q, Shape::Tracks).await? else {
-            return Ok(Answer::Found(Vec::new()));
+        let tx = &mut lanes[0].tx;
+        let Some(of_tracks) = terms::resolve(&self.terms, tx, q, Shape::Tracks).await? else {
+            return Ok(Answer::Found);
         };
         if !ask.spelled_too
-            && let Some(spelled) = &strict_terms.spelled
+            && let Some(spelled) = &of_tracks.spelled
         {
             return Ok(Answer::Spelled(spelled.clone()));
         }
-        let entity_terms = terms::resolve(&self.terms, tx, q, Shape::Entities).await?;
+        let of_entities = terms::resolve(&self.terms, tx, q, Shape::Entities).await?;
         let stem = match ask.spelled_too {
             true => None,
             false => stem_for(tx, q).await?,
         };
-        let mut out = Vec::new();
-        for kind in kinds {
-            let (strict, loose) = match (kind, &entity_terms) {
-                (Kind::Track, _) => (&strict_terms.strict, &strict_terms.loose),
-                (_, Some(terms)) => (&terms.strict, &terms.loose),
-                _ => continue,
-            };
-            let loose = loose.as_deref().filter(|_| !ask.spelled_too);
-            let rows = match kind {
-                Kind::Track => {
-                    sqlx::query_file_as!(
-                        Row,
-                        "queries/search/resolve_tracks.sql",
-                        strict,
-                        loose,
-                        q,
-                        stem.as_deref(),
-                        per_kind * 3
-                    )
-                    .fetch_all(&mut **tx)
-                    .await?
-                }
-                Kind::Artist => {
-                    sqlx::query_file_as!(
-                        Row,
-                        "queries/search/resolve_artists.sql",
-                        strict,
-                        loose,
-                        q,
-                        stem.as_deref(),
-                        per_kind
-                    )
-                    .fetch_all(&mut **tx)
-                    .await?
-                }
-                Kind::Album => {
-                    sqlx::query_file_as!(
-                        Row,
-                        "queries/search/resolve_albums.sql",
-                        strict,
-                        loose,
-                        q,
-                        stem.as_deref(),
-                        per_kind
-                    )
-                    .fetch_all(&mut **tx)
-                    .await?
-                }
-                Kind::Playlist => {
-                    sqlx::query_file_as!(
-                        Row,
-                        "queries/search/resolve_playlists.sql",
-                        strict,
-                        loose,
-                        q,
-                        stem.as_deref(),
-                        per_kind
-                    )
-                    .fetch_all(&mut **tx)
-                    .await?
-                }
-            };
-            out.extend(rows.into_iter().map(|row| Resolved {
-                id: row.id,
-                kind: *kind,
-                name: row.name,
-                artist: row.artist,
-                popularity: row.popularity,
-                score: row.match_score,
-                variant: ask.variant,
-                tier: row.tier,
-            }));
-        }
-        Ok(Answer::Found(out))
+        let question = &Question {
+            ask,
+            of_tracks: &of_tracks,
+            of_entities: of_entities.as_ref(),
+            stem: stem.as_deref(),
+            per_kind,
+        };
+        let next = &AtomicUsize::new(0);
+        try_join_all(lanes.iter_mut().map(|lane| async move {
+            while let Some(kind) = kinds.get(next.fetch_add(1, Ordering::Relaxed)) {
+                let rows = question.rows(&mut lane.tx, *kind).await?;
+                lane.found.extend(rows.into_iter().map(|row| Resolved {
+                    id: row.id,
+                    kind: *kind,
+                    name: row.name,
+                    artist: row.artist,
+                    popularity: row.popularity,
+                    score: row.match_score,
+                    variant: ask.variant,
+                    tier: row.tier,
+                }));
+            }
+            Ok::<(), AppError>(())
+        }))
+        .await?;
+        Ok(Answer::Found)
+    }
+}
+
+impl Question<'_> {
+    async fn rows(
+        &self,
+        tx: &mut Transaction<'static, Postgres>,
+        kind: Kind,
+    ) -> AppResult<Vec<Row>> {
+        let terms = match (kind, self.of_entities) {
+            (Kind::Track, _) => self.of_tracks,
+            (_, Some(terms)) => terms,
+            _ => return Ok(Vec::new()),
+        };
+        let q = self.ask.q.as_str();
+        let strict = &terms.strict;
+        let loose = terms.loose.as_deref().filter(|_| !self.ask.spelled_too);
+        let rows = match kind {
+            Kind::Track => {
+                sqlx::query_file_as!(
+                    Row,
+                    "queries/search/resolve_tracks.sql",
+                    strict,
+                    loose,
+                    q,
+                    self.stem,
+                    self.per_kind * 3
+                )
+                .fetch_all(&mut **tx)
+                .await?
+            }
+            Kind::Artist => {
+                sqlx::query_file_as!(
+                    Row,
+                    "queries/search/resolve_artists.sql",
+                    strict,
+                    loose,
+                    q,
+                    self.stem,
+                    self.per_kind
+                )
+                .fetch_all(&mut **tx)
+                .await?
+            }
+            Kind::Album => {
+                sqlx::query_file_as!(
+                    Row,
+                    "queries/search/resolve_albums.sql",
+                    strict,
+                    loose,
+                    q,
+                    self.stem,
+                    self.per_kind
+                )
+                .fetch_all(&mut **tx)
+                .await?
+            }
+            Kind::Playlist => {
+                sqlx::query_file_as!(
+                    Row,
+                    "queries/search/resolve_playlists.sql",
+                    strict,
+                    loose,
+                    q,
+                    self.stem,
+                    self.per_kind
+                )
+                .fetch_all(&mut **tx)
+                .await?
+            }
+        };
+        Ok(rows)
     }
 }
 

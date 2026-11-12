@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod failure;
 pub mod handlers;
+pub mod lanes;
 pub mod lyrics;
 pub mod matching;
 pub mod resolve;
