@@ -942,7 +942,7 @@
       "id": 33,
       "type": "timeseries",
       "title": "Local model: complete calls per worker",
-      "description": "Calls per minute the local model on each worker answered, refused (why: busy, invalid_request, cut_at_max_tokens, not_a_json_object, off_schema) or could not take (state: off, or the state of an engine that is not ready). The worker counts from its own start, so a restart drops the series to zero.",
+      "description": "Calls per minute the local model on each worker answered, refused (why: busy, invalid_request, cut_at_max_tokens, not_a_json_object, off_schema) or could not take (state: off, or the state of an engine that is not ready), or answered expired: out of time, including a call that came too late or found the model busy. Only a call cut in the middle of its read keeps that read for the next call. The worker counts from its own start, so a restart drops the series to zero.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -974,6 +974,11 @@
           "refId": "C",
           "expr": "sum by (node, state) (rate(jobs_worker_complete_unavailable_total[15m])) * 60",
           "legendFormat": "unavailable {{node}} {{state}}"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (node) (rate(jobs_worker_rpc_expired_total{method=\"complete\"}[15m])) * 60",
+          "legendFormat": "expired {{node}}"
         }
       ]
     },
