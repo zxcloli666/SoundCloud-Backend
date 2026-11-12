@@ -49,6 +49,7 @@ heartbeat, и отдаёт задачу обработчику сразу, ка�
 | `jobs_worker_complete_rejected_total{node,why}` | `counters.complete_rejected` | `complete_rejected_total{why}` |
 | `jobs_worker_complete_unavailable_total{node,state}` | `counters.complete_unavailable` | `complete_unavailable_total{state}` |
 | `jobs_worker_rpc_handed_on_total{node,method}` | `counters.rpc_handed_on` | `rpc_handed_on_total{method}` |
+| `jobs_worker_rpc_expired_total{node,method}` | `counters.rpc_expired_by_method` | `rpc_expired_total{method}` |
 | `jobs_worker_pull_unanswered_total{node,lane}` | `lanes.<lane>.pull_unanswered` | `pull_unanswered_total{lane}` |
 
 Значение — итог воркера с его старта, как у `jobs_worker_done_total`: перезапуск воркера — сброс

@@ -162,7 +162,7 @@ async def test_expired_deadline_replies_expired_and_acks(rpc: Rpc) -> None:
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, REPLY_MARGIN_S))
     assert await rpc.run_one() == {"ok": False, "error": "expired"}
     assert rpc.calls == []
-    assert rpc.harness.counters.value("rpc_expired_total") == 1
+    assert rpc.harness.counters.value("rpc_expired_total", method="resolve_artist") == 1
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
 
@@ -189,7 +189,7 @@ async def test_domain_deadline_inside_the_process_margin_replies_expired(
     )
     assert await rpc.run_one() == {"ok": False, "error": "expired"}
     assert engines.calls == []
-    assert rpc.harness.counters.value("rpc_expired_total") == 1
+    assert rpc.harness.counters.value("rpc_expired_total", method=method) == 1
     assert rpc.harness.counters.total("rpc_internal_total") == 0
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
@@ -296,6 +296,8 @@ async def test_failures_map_to_the_error_envelope(
     assert await rpc.run_one() == {"ok": False, "error": error}
     if counter is not None:
         assert rpc.harness.counters.total(counter) == 1
+    if error == "expired":
+        assert rpc.harness.counters.value("rpc_expired_total", method="resolve_artist") == 1
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
 

@@ -127,6 +127,8 @@ struct CounterReport {
     complete_unavailable: BTreeMap<String, u64>,
     #[serde(default)]
     rpc_handed_on: BTreeMap<String, u64>,
+    #[serde(default)]
+    rpc_expired_by_method: BTreeMap<String, u64>,
 }
 
 impl WorkerStatusBoard {
@@ -439,6 +441,7 @@ impl CounterReport {
             complete_rejected: first_labels(self.complete_rejected),
             complete_unavailable: first_labels(self.complete_unavailable),
             rpc_handed_on: first_labels(self.rpc_handed_on),
+            rpc_expired_by_method: first_labels(self.rpc_expired_by_method),
         }
     }
 
@@ -452,6 +455,9 @@ impl CounterReport {
         }
         for (method, total) in &self.rpc_handed_on {
             series.rpc_handed_on(node, method, *total);
+        }
+        for (method, total) in &self.rpc_expired_by_method {
+            series.rpc_expired(node, method, *total);
         }
     }
 }
@@ -852,6 +858,7 @@ mod tests {
                 "complete_rejected": { "busy": busy },
                 "complete_unavailable": { "off": 1 },
                 "rpc_handed_on": { "complete": 2 },
+                "rpc_expired_by_method": { "complete": 3 },
             },
         })
         .to_string()
@@ -891,6 +898,10 @@ mod tests {
             )
         );
         assert!(
+            second
+                .contains("jobs_worker_rpc_expired_total{node=\"gpu-main\",method=\"complete\"} 3")
+        );
+        assert!(
             second.contains("jobs_worker_pull_unanswered_total{node=\"gpu-main\",lane=\"ai\"} 2")
         );
         assert!(third.contains("jobs_worker_complete_answers_total{node=\"gpu-main\"} 1"));
@@ -923,6 +934,7 @@ mod tests {
         );
         assert!(!series.contains("jobs_worker_complete_rejected_total"));
         assert!(!series.contains("jobs_worker_rpc_handed_on_total"));
+        assert!(!series.contains("jobs_worker_rpc_expired_total"));
         Ok(())
     }
 

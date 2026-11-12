@@ -51,6 +51,7 @@ const WORKER_COMPLETE_ANSWERS: &str = "jobs_worker_complete_answers_total";
 const WORKER_COMPLETE_REJECTED: &str = "jobs_worker_complete_rejected_total";
 const WORKER_COMPLETE_UNAVAILABLE: &str = "jobs_worker_complete_unavailable_total";
 const WORKER_RPC_HANDED_ON: &str = "jobs_worker_rpc_handed_on_total";
+const WORKER_RPC_EXPIRED: &str = "jobs_worker_rpc_expired_total";
 const WORKER_LANE_STATUS_AGE: &str = "jobs_worker_lane_status_age_seconds";
 const WORKER_LANE_REQUIRED: &str = "jobs_worker_lane_required";
 const WORKER_LANE_SERVING_NODES: &str = "jobs_worker_lane_serving_nodes";
@@ -515,6 +516,7 @@ pub struct NodeSeries {
     complete_rejected: String,
     complete_unavailable: String,
     rpc_handed_on: String,
+    rpc_expired: String,
 }
 
 impl NodeSeries {
@@ -602,6 +604,15 @@ impl NodeSeries {
         ));
     }
 
+    pub fn rpc_expired(&mut self, node: &str, method: &str, total: u64) {
+        self.rpc_expired.push_str(&node_total(
+            WORKER_RPC_EXPIRED,
+            node,
+            ("method", method),
+            total,
+        ));
+    }
+
     pub fn render(self) -> String {
         [
             (WORKER_STATUS_AGE, "gauge", self.status_age),
@@ -618,6 +629,7 @@ impl NodeSeries {
                 self.complete_unavailable,
             ),
             (WORKER_RPC_HANDED_ON, "counter", self.rpc_handed_on),
+            (WORKER_RPC_EXPIRED, "counter", self.rpc_expired),
         ]
         .into_iter()
         .filter(|(_, _, samples)| !samples.is_empty())
