@@ -19,6 +19,8 @@ use crate::modules::voice_chat::testing::{CHAT_SECTION, Heard, hear, lane, tools
 const NOTE: &str = "зови меня Саша";
 const SPEECH: &str = "{\"actions\":[],\"say\":\"Привет.\"}";
 const LOUDER: &str = "{\"actions\":[{\"name\":\"volume_set\",\"args\":[{\"name\":\"level\",\"value\":90}]}],\"say\":\"Громче.\"}";
+const NOTHING: &str = "{\"actions\":[],\"say\":\"\"}";
+const NO_WORD: &str = "{\"say\":\" \"}";
 const PLAIN: &str = "plain = true\n";
 
 struct Asked {
@@ -52,6 +54,27 @@ impl Observer for Unwatched {
 }
 
 async fn talk(answer: &'static str, provider_keys: &str) -> Talk {
+    told(phrase(), answer, provider_keys).await
+}
+
+async fn overheard(answer: &'static str, provider_keys: &str) -> Talk {
+    let mut body = phrase();
+    body["quiet"] = json!(true);
+    told(body, answer, provider_keys).await
+}
+
+fn phrase() -> Value {
+    json!({
+        "text": "привет",
+        "persona": "loli",
+        "language": "ru",
+        "tools": tools(),
+        "notes": [NOTE],
+        "context": {"volume": 40},
+    })
+}
+
+async fn told(body: Value, answer: &'static str, provider_keys: &str) -> Talk {
     let asked = Arc::new(Asked {
         answer,
         payloads: Mutex::default(),
@@ -63,24 +86,13 @@ async fn talk(answer: &'static str, provider_keys: &str) -> Talk {
     };
     let chat = VoiceChat::hosted(&local_only(provider_keys), hosting).expect("the chat ladder");
     let live = chat.live().expect("a live chat");
-    let body: ChatBody = serde_json::from_value(json!({
-        "text": "привет",
-        "persona": "loli",
-        "language": "ru",
-        "tools": tools(),
-        "notes": [NOTE],
-        "context": {"volume": 40},
-    }))
-    .expect("a chat body");
+    let body: ChatBody = serde_json::from_value(body).expect("a chat body");
     let turn = body.into_turn(live.limits()).expect("a valid turn");
     let request = live
         .request(&turn, "contract")
         .expect("a prompt within the cap");
     let sections = request.system.sections.clone();
-    let response = live
-        .answer(request, turn.tools)
-        .await
-        .expect("an open step");
+    let response = live.answer(request, turn).await.expect("an open step");
     let heard = hear(response).await.expect("a stream");
     let payloads = asked.payloads.lock().unwrap();
     Talk {
@@ -167,6 +179,57 @@ async fn an_action_is_run_for_a_trusted_worker_and_refused_from_a_plain_one() {
         plain.heard.named(),
         [("error", &json!({"code": "provider_failed"}))]
     );
+}
+
+#[tokio::test]
+async fn an_answer_that_does_and_says_nothing_is_a_silence_for_an_overheard_phrase() {
+    for nothing in [NOTHING, NO_WORD] {
+        let silent = overheard(nothing, "").await;
+        assert_eq!(
+            silent.heard.named(),
+            [("quiet", &json!({})), ("done", &json!({}))]
+        );
+        assert!(
+            of_the_contract(&silent.sent)
+                .system
+                .contains("Staying silent.")
+        );
+
+        let asked = talk(nothing, "").await;
+        assert_eq!(
+            asked.heard.named(),
+            [("error", &json!({"code": "provider_failed"}))]
+        );
+        assert!(
+            !of_the_contract(&asked.sent)
+                .system
+                .contains("Staying silent.")
+        );
+    }
+    let answered = overheard(LOUDER, "").await;
+    assert_eq!(events(&answered.heard), ["action", "say", "done"]);
+}
+
+#[tokio::test]
+async fn a_plain_worker_is_not_let_to_stay_silent() {
+    let mut with_tools = phrase();
+    with_tools["quiet"] = json!(true);
+    let mut with_no_tools = with_tools.clone();
+    with_no_tools["tools"] = json!([]);
+    for body in [with_tools, with_no_tools] {
+        let plain = told(body, NO_WORD, PLAIN).await;
+        assert_eq!(
+            plain.heard.named(),
+            [("error", &json!({"code": "provider_failed"}))]
+        );
+        assert!(
+            !of_the_contract(&plain.sent)
+                .system
+                .contains("Staying silent.")
+        );
+    }
+    let spoken = overheard(SPEECH, PLAIN).await;
+    assert_eq!(events(&spoken.heard), ["say", "done"]);
 }
 
 #[test]

@@ -273,3 +273,29 @@ fn the_plain_form_of_a_turn_is_the_same_turn_asked_without_its_tools() {
         ["hi", "{\"say\":\"hello \\\"you\\\"\"}", "make it louder"]
     );
 }
+
+#[test]
+fn the_rule_about_silence_is_given_only_for_a_phrase_that_may_be_overheard() {
+    let overheard = read(json!({"text": "kids, dinner", "tools": tools(), "quiet": true}));
+    let rules = system(&limits(), &overheard).sections.remove(0).text;
+    let at = |part: &str| {
+        rules
+            .find(part)
+            .unwrap_or_else(|| panic!("missing: {part}"))
+    };
+    assert!(at("Reply format.") < at("Staying silent."));
+    assert!(at("Staying silent.") < at("Tools:\n"));
+    assert!(rules.ends_with(TRUST));
+    let plain = plain_system(&limits(), &overheard).joined();
+    assert!(!plain.contains("Staying silent."));
+    assert!(
+        !system(&limits(), &full())
+            .joined()
+            .contains("Staying silent.")
+    );
+
+    let with_no_tools = read(json!({"text": "kids, dinner", "quiet": true}));
+    let rules = system(&limits(), &with_no_tools).sections.remove(0).text;
+    assert!(rules.contains("No tools are available"));
+    assert!(rules.contains("Staying silent."));
+}

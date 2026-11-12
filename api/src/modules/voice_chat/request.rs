@@ -31,6 +31,8 @@ pub struct ChatBody {
     tools: Vec<ToolSpec>,
     #[serde(default)]
     results: Vec<ToolResult>,
+    #[serde(default)]
+    quiet: bool,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +67,7 @@ pub struct Turn {
     pub notes: Vec<String>,
     pub tools: Tools,
     pub results: Option<String>,
+    pub quiet: bool,
 }
 
 impl ChatBody {
@@ -103,6 +106,7 @@ impl ChatBody {
             } else {
                 tools
             },
+            quiet: self.quiet && self.results.is_empty(),
             results: results(self.results)?,
         })
     }
