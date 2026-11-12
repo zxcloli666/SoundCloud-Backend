@@ -5,7 +5,10 @@ use tracing::info;
 
 use crate::queue::{JobError, JobResult};
 
+mod paced;
+mod popularity;
 mod stage;
+mod tags;
 
 pub(crate) use stage::Group;
 use stage::{Shards, Stage};
@@ -94,6 +97,14 @@ impl DiscoverHandler {
     }
 
     async fn run(&self, stage: Stage, shards: Shards) -> JobResult {
+        match stage {
+            Stage::ArtistPopularity => popularity::refresh(&self.pool).await,
+            Stage::ArtistTags => tags::refresh(&self.pool).await,
+            _ => self.run_in_transaction(stage, shards).await,
+        }
+    }
+
+    async fn run_in_transaction(&self, stage: Stage, shards: Shards) -> JobResult {
         let started = std::time::Instant::now();
         let mut transaction = self.locked_transaction().await?;
 
@@ -127,5 +138,7 @@ impl DiscoverHandler {
     }
 }
 
+#[cfg(test)]
+mod paced_tests;
 #[cfg(test)]
 mod tests;
