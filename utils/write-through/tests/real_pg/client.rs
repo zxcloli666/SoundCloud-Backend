@@ -9,7 +9,7 @@ use wt::{Kind, Raced};
 use crate::db::{self, hashes};
 use crate::harness::Pair;
 
-const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state", "track_search"];
 
 pub const TRACK: &str = "INSERT INTO public.tracks (id, urn, sc_track_id, title, title_normalized, duration_ms)
     VALUES ('00000000-0000-0000-0000-0000000000a1', 'soundcloud:tracks:1', '1', 'Old', 'old', 1000)";
@@ -127,6 +127,7 @@ async fn derived_rows_are_core_only_and_show_up_as_a_difference() {
         [
             "api and core differ: lyrics_lookup_queue",
             "api and core differ: lyrics_lookup_state",
+            "api and core differ: track_search",
             "core local run and dispatch differ: lyrics_lookup_queue",
             "core local run and dispatch differ: lyrics_lookup_state"
         ]

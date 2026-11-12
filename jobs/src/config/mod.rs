@@ -141,12 +141,15 @@ impl WantedConfig {
 #[derive(Clone, Copy, Debug)]
 pub struct AdminMaintenanceConfig {
     pub scan_batch: i64,
+    pub track_search_batch: i64,
 }
 
 impl AdminMaintenanceConfig {
     fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
             scan_batch: env::positive_u64("ADMIN_MAINTENANCE_SCAN_BATCH", 2_000)? as i64,
+            track_search_batch: env::positive_u64("ADMIN_MAINTENANCE_TRACK_SEARCH_BATCH", 1_000)?
+                as i64,
         })
     }
 }

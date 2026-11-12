@@ -41,6 +41,10 @@ pub fn router() -> Router<AppState> {
             post(maintenance::lyrics_lookup_queue),
         )
         .route(
+            "/admin/maintenance/track-search",
+            post(maintenance::track_search),
+        )
+        .route(
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
         )

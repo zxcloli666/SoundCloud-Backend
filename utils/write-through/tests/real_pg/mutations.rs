@@ -36,7 +36,7 @@ const FIXTURE: &str = "INSERT INTO public.tracks (
     VALUES ('204411307', '501', '2026-01-15 12:00:00+00');
     INSERT INTO public.user_owned_playlists (user_id, playlist_urn, created_at)
     VALUES ('204411307', 'soundcloud:playlists:1990011', '2026-02-01 10:00:00+00')";
-const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state", "track_search"];
 
 fn at(stamp: &str) -> DateTime<Utc> {
     stamp.parse().unwrap()
