@@ -3,7 +3,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use super::terms::TermRow;
 
-const BIG_TABLES: &[&str] = &["tracks", "users", "playlists", "lyrics_cache"];
+const BIG_TABLES: &[&str] = &["tracks", "track_search", "users", "playlists", "lyrics_cache"];
 
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     crate::db::insert_replicated(
@@ -18,6 +18,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          FROM generate_series(1, 20000) n",
     )
     .await?;
+    crate::db::replicate_track_search(pool).await?;
     sqlx::raw_sql(
         "INSERT INTO users (sc_user_id, urn, username, username_normalized, full_name, followers_count)
          SELECT n::text, 'soundcloud:users:' || n, 'user' || n, 'user' || n, 'Name ' || n, n
@@ -36,7 +37,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
     super::lexicon_refresh::refresh(pool).await?;
-    sqlx::raw_sql("ANALYZE tracks, users, playlists, artists, albums, lyrics_cache, search_terms")
+    sqlx::raw_sql("ANALYZE tracks, track_search, users, playlists, artists, albums, lyrics_cache, search_terms")
         .execute(pool)
         .await?;
     Ok(())
@@ -105,7 +106,7 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
             None,
             "love",
             None,
-            "tracks_search_doc_gin",
+            "track_search_doc_gin",
         ),
         (
             "a rare multi-token",
@@ -113,7 +114,7 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
             Some("'song' | '4242'"),
             "song 4242",
             None,
-            "tracks_search_doc_gin",
+            "track_search_doc_gin",
         ),
         (
             "a zero-match multi-token",
@@ -121,7 +122,7 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
             Some("('qqzx' & 'xzzq') | ('zzqx' & 'xzzq') | ('zzqx' & 'qqzx')"),
             "zzqx qqzx xzzq",
             None,
-            "tracks_search_doc_gin",
+            "track_search_doc_gin",
         ),
         (
             "an owner scope",
@@ -129,7 +130,7 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
             None,
             "love",
             Some("17"),
-            "tracks_uploader_",
+            "track_search_uploader_popular",
         ),
     ] {
         let plan = explain!(
