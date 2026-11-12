@@ -18,7 +18,7 @@ def read(
     model: Model, states: PromptStates[State], prompt: Prompt, pace: Pace, chunk_tokens: int
 ) -> int:
     tokens = prompt.tokens
-    marks = prompt.marks or (states.stable_prefix(tokens, prompt.shared) or prompt.shared,)
+    marks = prompt.marks or unmarked_stops(states, tokens, prompt.shared)
     reused = restore(model, states, tokens)
     try:
         for stop, anchor in (*((mark, True) for mark in marks), (prompt.turn, False)):
@@ -34,6 +34,13 @@ def read(
             )
         raise
     return reused
+
+
+def unmarked_stops(
+    states: PromptStates[State], tokens: Sequence[int], shared: int
+) -> tuple[int, ...]:
+    stable = states.stable_prefix(tokens, shared)
+    return (stable, shared) if stable else (shared,)
 
 
 def restore(model: Model, states: PromptStates[State], tokens: Sequence[int]) -> int:

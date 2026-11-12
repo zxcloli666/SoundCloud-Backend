@@ -345,6 +345,34 @@ def test_a_changing_tail_of_the_system_prompt_still_reuses_its_stable_part(slot:
     assert reused[2] > 0.8 * len(system) / 4
 
 
+def test_a_longer_system_prompt_with_a_known_beginning_is_reused_whole_after_a_cut_read(
+    slot: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from worker.models.local_llm.prompt import Prompt
+
+    chunk_tokens = SETTINGS.llm.local.eval_chunk_tokens
+    short = own_rules("a system prompt that grows")
+    longer = long_system("a system prompt that grows", CUT_SYSTEM_SENTENCES)
+    ask(slot, short, [user("pause the music")])
+    try:
+        with monkeypatch.context() as patched:
+            expire_after_full_chunks(patched, slot, chunk_tokens)
+            with pytest.raises(CallExpired):
+                ask(slot, longer, [user("pause the music")])
+    finally:
+        CALL_GUARD.expires_at = math.inf
+    resumed = ask(slot, longer, [user("pause the music")])
+    other = ask(slot, longer, [user("skip this track")])
+    shared = [
+        Prompt.render(slot._model, slot._template, system, [user("skip this track")]).shared
+        for system in (short, longer)
+    ]
+
+    assert shared[0] < resumed["reused_tokens"] < shared[1]
+    assert other["reused_tokens"] == shared[1]
+    assert {"name": "next_track", "args": {}} in json.loads(str(other["text"]))["actions"]
+
+
 def test_a_new_tail_after_a_mark_is_all_that_its_first_call_reads(slot: object) -> None:
     from worker.models.local_llm.prompt import Prompt
 
