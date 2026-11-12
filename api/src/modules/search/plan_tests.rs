@@ -3,7 +3,13 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use super::terms::TermRow;
 
-const BIG_TABLES: &[&str] = &["tracks", "track_search", "users", "playlists", "lyrics_cache"];
+const BIG_TABLES: &[&str] = &[
+    "tracks",
+    "track_search",
+    "users",
+    "playlists",
+    "lyrics_cache",
+];
 
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     crate::db::insert_replicated(
