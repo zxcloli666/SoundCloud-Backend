@@ -27,6 +27,9 @@ mod plan_tests;
 mod resolve_tests;
 
 #[cfg(test)]
+mod sound_tests;
+
+#[cfg(test)]
 mod stampede_tests;
 
 #[cfg(test)]

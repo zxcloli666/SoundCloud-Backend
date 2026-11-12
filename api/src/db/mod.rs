@@ -30,8 +30,8 @@ pub(crate) async fn insert_replicated(pool: &PgPool, sql: &str) -> anyhow::Resul
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 324,
-    description: "users banner url",
+    version: 334,
+    description: "search terms sound idx",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,

@@ -197,3 +197,63 @@ fn lyrics_with_two_groups_have_no_loose_form() {
 fn no_tokens_is_no_terms() {
     assert_eq!(build(&[], Shape::Tracks), None);
 }
+
+fn heard(ord: i16, said: &str, word: &str, ndoc: i32) -> TermRow {
+    alt(ord, said, word, ndoc, "sound")
+}
+
+fn twin(ord: i16, said: &str, word: &str, ndoc: i32) -> TermRow {
+    alt(ord, said, word, ndoc, "same")
+}
+
+#[test]
+fn a_sound_alike_stays_out_of_the_query() {
+    let rows = [
+        token(1, "психосиз"),
+        heard(1, "психосиз", "psychosis", 2107),
+    ];
+    let terms = built(&rows, Shape::Entities);
+    assert_eq!(terms.strict, "'психосиз'");
+    assert_eq!(terms.spelled.as_deref(), Some("psychosis"));
+}
+
+#[test]
+fn every_said_word_is_spelled_as_its_most_common_latin_word() {
+    let rows = [
+        twin(1, "бэд", "bed", 59067),
+        known(1, "бэд", 250),
+        heard(1, "бэд", "bad", 206949),
+        twin(2, "бой", "boy", 209818),
+        known(2, "бой", 2603),
+    ];
+    let terms = built(&rows, Shape::Tracks);
+    assert_eq!(terms.strict, "('бэд' | 'bed') & ('бой' | 'boy')");
+    assert_eq!(terms.spelled.as_deref(), Some("bad boy"));
+}
+
+#[test]
+fn a_word_better_known_as_said_keeps_its_letters() {
+    let rows = [
+        known(1, "руки", 13220),
+        heard(1, "руки", "rookie", 3245),
+        known(2, "вверх", 4542),
+    ];
+    assert_eq!(built(&rows, Shape::Tracks).spelled, None);
+    let rows = [known(1, "кино", 5635), twin(1, "кино", "kino", 2334)];
+    assert_eq!(built(&rows, Shape::Tracks).spelled, None);
+}
+
+#[test]
+fn only_the_cyrillic_words_of_a_name_are_respelled() {
+    let rows = [
+        known(1, "тейлор", 31),
+        heard(1, "тейлор", "taylor", 19474),
+        known(2, "swift", 8841),
+    ];
+    assert_eq!(
+        built(&rows, Shape::Tracks).spelled.as_deref(),
+        Some("taylor swift")
+    );
+    let rows = [known(1, "taylor", 19474), known(2, "swift", 8841)];
+    assert_eq!(built(&rows, Shape::Tracks).spelled, None);
+}
