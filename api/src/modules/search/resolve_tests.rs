@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 
 use super::catalog_tests::{seed, service, song};
+use super::lanes::SPARE_LANES;
 use super::resolve::{Kind, Resolved, keep_on_timeout};
 use crate::error::AppError;
 
@@ -229,6 +230,46 @@ async fn a_name_that_ends_the_lookup_ends_it_for_every_kind_asked(
     let found = found_of(&pool, &kinds, &["queen", "roadgame"]).await?;
     let ids: Vec<&str> = found.iter().map(|hit| hit.id.as_str()).collect();
     assert_eq!(ids, [WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_kind_that_cannot_answer_in_time_does_not_hold_back_the_other_kinds(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.5).await?;
+    let mut locked = pool.begin().await?;
+    sqlx::query("LOCK TABLE tracks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *locked)
+        .await?;
+    let search = service(&pool)?;
+    let kinds = [Kind::Track, Kind::Artist];
+    let found = search.resolve(&["queen".to_owned()], &kinds, 5).await?;
+    let ids: Vec<&str> = found
+        .values()
+        .flatten()
+        .map(|hit| hit.id.as_str())
+        .collect();
+    assert_eq!(ids, [WHOLE], "{found:?}");
+    assert_eq!(search.spare_lanes.available_permits(), SPARE_LANES);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn with_no_spare_lane_every_kind_is_still_asked(pool: PgPool) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.5).await?;
+    seed(&pool, &[song(2, "Queen", "Other Band", 100)]).await?;
+    let search = service(&pool)?;
+    let taken = search.spare_lanes.acquire_many(SPARE_LANES as u32).await?;
+    let kinds = [Kind::Artist, Kind::Track];
+    let found = search.resolve(&["queen".to_owned()], &kinds, 5).await?;
+    drop(taken);
+    assert_eq!(found[&Kind::Artist][0].id, WHOLE, "{found:?}");
+    assert_eq!(
+        found[&Kind::Track][0].id,
+        "soundcloud:tracks:2",
+        "{found:?}"
+    );
     Ok(())
 }
 

@@ -12,6 +12,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::failure::{self, Shed, search_busy, search_timeout};
+use super::lanes::SPARE_LANES;
 use super::terms::{self, Shape, TermsCache};
 use crate::cache::cache_service::CacheScope;
 use crate::cache::{CacheService, KeyedCoalesce, ListPageResult, build_list_cache_key};
@@ -40,6 +41,7 @@ pub struct SearchService {
     flights: KeyedCoalesce<Result<String, Shed>>,
     pub(super) terms: TermsCache,
     pub(super) permits: Semaphore,
+    pub(super) spare_lanes: Semaphore,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +119,7 @@ impl SearchService {
             flights: KeyedCoalesce::new(),
             terms: TermsCache::new(),
             permits: Semaphore::new(PERMITS),
+            spare_lanes: Semaphore::new(SPARE_LANES),
         })
     }
 
