@@ -83,6 +83,7 @@ struct Question<'a> {
     of_tracks: &'a Terms,
     of_entities: Option<&'a Terms>,
     stem: Option<&'a str>,
+    strictly: bool,
     per_kind: i64,
 }
 
@@ -276,21 +277,42 @@ impl SearchService {
             return Ok(Answer::Spelled(spelled.clone()));
         }
         let of_entities = terms::resolve(&self.terms, tx, q, Shape::Entities).await?;
-        let stem = match ask.spelled_too {
-            true => None,
-            false => stem_for(tx, q).await?,
-        };
-        let question = &Question {
+        let strictly = Question {
             ask,
             of_tracks: &of_tracks,
             of_entities: of_entities.as_ref(),
-            stem: stem.as_deref(),
+            stem: None,
+            strictly: true,
             per_kind,
         };
+        if ask.spelled_too || ask.known {
+            strictly.ask(lanes, kinds).await?;
+            if ask.spelled_too || found_exactly(lanes) {
+                return Ok(Answer::Found);
+            }
+        }
+        let stem = stem_for(&mut lanes[0].tx, q).await?;
+        let widely = Question {
+            stem: stem.as_deref(),
+            strictly: false,
+            ..strictly
+        };
+        widely.ask(lanes, kinds).await?;
+        Ok(Answer::Found)
+    }
+}
+
+fn found_exactly(lanes: &[Lane]) -> bool {
+    let mut found = lanes.iter().flat_map(|lane| &lane.found);
+    found.any(|hit| hit.settles(true))
+}
+
+impl Question<'_> {
+    async fn ask(&self, lanes: &mut [Lane], kinds: &[Kind]) -> AppResult<()> {
         let next = &AtomicUsize::new(0);
         try_join_all(lanes.iter_mut().map(|lane| async move {
             while let Some(kind) = kinds.get(next.fetch_add(1, Ordering::Relaxed)) {
-                let rows = question.rows(&mut lane.tx, *kind).await?;
+                let rows = self.rows(&mut lane.tx, *kind).await?;
                 lane.found.extend(rows.into_iter().map(|row| Resolved {
                     id: row.id,
                     kind: *kind,
@@ -298,18 +320,16 @@ impl SearchService {
                     artist: row.artist,
                     popularity: row.popularity,
                     score: row.match_score,
-                    variant: ask.variant,
+                    variant: self.ask.variant,
                     tier: row.tier,
                 }));
             }
             Ok::<(), AppError>(())
         }))
         .await?;
-        Ok(Answer::Found)
+        Ok(())
     }
-}
 
-impl Question<'_> {
     async fn rows(
         &self,
         tx: &mut Transaction<'static, Postgres>,
@@ -322,7 +342,7 @@ impl Question<'_> {
         };
         let q = self.ask.q.as_str();
         let strict = &terms.strict;
-        let loose = terms.loose.as_deref().filter(|_| !self.ask.spelled_too);
+        let loose = terms.loose.as_deref().filter(|_| !self.strictly);
         let rows = match kind {
             Kind::Track => {
                 sqlx::query_file_as!(

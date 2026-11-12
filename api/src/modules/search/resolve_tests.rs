@@ -70,6 +70,20 @@ async fn seed_a_name_of_two_words(pool: &PgPool) -> anyhow::Result<()> {
     words(pool, "('плеибои', 73), ('карти', 156), ('клуб', 5000)").await
 }
 
+async fn seed_two_names_sharing_a_word(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary,
+                              monthly_listeners, popularity_score)
+         VALUES ($1::uuid, 'Playboi Carti', 'playboi carti', 'test', 40, 900, 0.3),
+                ($2::uuid, 'Carti Club', 'carti club', 'test', 40, 900, 0.5)",
+    )
+    .bind(LATIN)
+    .bind(PART)
+    .execute(pool)
+    .await?;
+    words(pool, "('playboi', 17698), ('carti', 21025), ('club', 5000)").await
+}
+
 async fn words(pool: &PgPool, counted: &str) -> anyhow::Result<()> {
     sqlx::query(&format!(
         "INSERT INTO search_terms (word, ndoc, latin)
@@ -202,6 +216,29 @@ async fn a_known_name_found_exactly_ends_the_lookup_whatever_its_popularity(
     let found = artists_of_a_known_name(&pool, &["queen", "queens"]).await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
     assert_eq!(ids, [WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_found_exactly_is_not_looked_up_loosely(pool: PgPool) -> anyhow::Result<()> {
+    seed_two_names_sharing_a_word(&pool).await?;
+    let found = artists_of(&pool, &["playboi carti"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [LATIN, PART], "{found:?}");
+    let found = artists_of_a_known_name(&pool, &["playboi carti"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [LATIN], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_not_found_exactly_is_looked_up_loosely_too(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_two_names_sharing_a_word(&pool).await?;
+    let found = artists_of_a_known_name(&pool, &["carti playboi"]).await?;
+    let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
+    assert_eq!(ids, [LATIN, PART], "{found:?}");
     Ok(())
 }
 
