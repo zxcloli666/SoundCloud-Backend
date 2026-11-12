@@ -1,0 +1,1 @@
+ANALYZE pg_temp.artist_genre_counts
