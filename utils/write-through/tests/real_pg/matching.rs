@@ -6,7 +6,7 @@ use wt::{AlbumSlot, MatchAlbumTrack, MatchGeniusSong, MatchScAccount, MatchWante
 
 use crate::harness::Pair;
 
-const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state", "track_search"];
 const ARTIST_ID: &str = "0b7e5c3a-1d2f-4a6b-8c9d-3e4f5a6b7c8d";
 const TRACK_ID: &str = "6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94";
 const WANTED_ID: &str = "4a3b2c1d-9e8f-4b7a-8c6d-5e4f3a2b1c0d";
