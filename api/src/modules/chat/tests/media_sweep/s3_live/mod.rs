@@ -57,10 +57,20 @@ impl Live {
     async fn bucket(&self, index: usize) -> anyhow::Result<String> {
         let name = format!("relsweep-test-{index}");
         let client = self.client();
-        if client.head_bucket().bucket(&name).send().await.is_err() {
-            client.create_bucket().bucket(&name).send().await?;
+        if client.head_bucket().bucket(&name).send().await.is_ok() {
+            return Ok(name);
         }
-        Ok(name)
+        match client.create_bucket().bucket(&name).send().await {
+            Ok(_) => Ok(name),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|error| error.is_bucket_already_owned_by_you()) =>
+            {
+                Ok(name)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn empty(&self, bucket: &str) -> anyhow::Result<()> {
