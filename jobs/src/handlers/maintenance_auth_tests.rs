@@ -51,6 +51,22 @@ async fn run_and_count(
     .await?)
 }
 
+async fn slot_gone(pool: &PgPool, slot: &str) -> anyhow::Result<()> {
+    for _ in 0..100 {
+        let present: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)",
+        )
+        .bind(slot)
+        .fetch_one(pool)
+        .await?;
+        if !present {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    anyhow::bail!("slot {slot} still exists after its session closed")
+}
+
 fn sample(handle: &PrometheusHandle, name: &str, labels: &[&str]) -> Option<f64> {
     handle.render().lines().find_map(|line| {
         let (series, value) = line.rsplit_once(' ')?;
@@ -107,8 +123,9 @@ async fn auth_cleanup_waits_only_for_active_lagging_replicas(pool: PgPool) -> an
 
     backlog(&pool, 100).await?;
     let mut consumer = pool.acquire().await?.detach();
+    let live = format!("cleanup_live_{}", Uuid::new_v4().simple());
     sqlx::query("SELECT pg_create_physical_replication_slot($1, true, true)")
-        .bind(format!("cleanup_live_{}", Uuid::new_v4().simple()))
+        .bind(&live)
         .execute(&mut consumer)
         .await?;
     let behind_live = match fill_wal(&pool).await {
@@ -116,6 +133,7 @@ async fn auth_cleanup_waits_only_for_active_lagging_replicas(pool: PgPool) -> an
         Err(error) => Err(error),
     };
     consumer.close().await?;
+    slot_gone(&pool, &live).await?;
     let after_live = (progress(&handle), skipped(&handle, "replication_lag"));
     let resumed = run_and_count(&maintenance, &pool).await?;
     let after_resume = progress(&handle);
