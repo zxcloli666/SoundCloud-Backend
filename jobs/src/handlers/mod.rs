@@ -110,6 +110,7 @@ pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminCatalogRenormalize,
     JobKind::AdminLyricsLookupQueue,
     JobKind::AdminMusicBrainzNames,
+    JobKind::AdminTrackSearch,
     JobKind::AdminWantedAliases,
     JobKind::CatalogRefresh,
     JobKind::CatalogCollection,
@@ -164,6 +165,7 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
         JobKind::AdminCatalogRenormalize
             | JobKind::AdminLyricsLookupQueue
             | JobKind::AdminMusicBrainzNames
+            | JobKind::AdminTrackSearch
             | JobKind::AdminWantedAliases
             | JobKind::CollabTrain
             | JobKind::CatalogRefresh
@@ -494,6 +496,12 @@ impl JobHandlers {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
                 self.admin_maintenance
                     .reconcile_musicbrainz_names(job, payload)
+                    .await
+            }
+            JobKind::AdminTrackSearch => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance
+                    .backfill_track_search(job, payload)
                     .await
             }
             JobKind::AdminWantedAliases => {

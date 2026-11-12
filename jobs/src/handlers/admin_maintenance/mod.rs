@@ -1,6 +1,7 @@
 mod lyrics_queue;
 mod musicbrainz_names;
 mod renormalize;
+mod track_search;
 mod wanted_aliases;
 
 #[cfg(test)]
@@ -21,6 +22,7 @@ use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueE
 pub const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
 pub const LYRICS_LOOKUP_QUEUE: &str = "lyrics_lookup_queue";
 pub const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
+pub const TRACK_SEARCH: &str = "track_search";
 pub const WANTED_ALIASES: &str = "wanted_aliases";
 
 const SLICE_DEADLINE: Duration = Duration::from_secs(180);
@@ -54,6 +56,7 @@ pub struct AdminMaintenanceHandler {
     queue: JobRepository,
     musicbrainz: Arc<MbClient>,
     scan_batch: i64,
+    track_search_batch: i64,
 }
 
 impl AdminMaintenanceHandler {
@@ -63,6 +66,7 @@ impl AdminMaintenanceHandler {
             pool,
             musicbrainz,
             scan_batch: config.scan_batch,
+            track_search_batch: config.track_search_batch,
         }
     }
 
@@ -96,6 +100,14 @@ impl AdminMaintenanceHandler {
         payload: AdminMaintenancePayload,
     ) -> JobResult {
         self.run(job, payload, LYRICS_LOOKUP_QUEUE).await
+    }
+
+    pub async fn backfill_track_search(
+        &self,
+        job: &LeasedJob,
+        payload: AdminMaintenancePayload,
+    ) -> JobResult {
+        self.run(job, payload, TRACK_SEARCH).await
     }
 
     async fn run(
@@ -156,6 +168,8 @@ impl AdminMaintenanceHandler {
             wanted_aliases::FIRST_PHASE
         } else if kind == LYRICS_LOOKUP_QUEUE {
             lyrics_queue::FIRST_PHASE
+        } else if kind == TRACK_SEARCH {
+            track_search::FIRST_PHASE
         } else {
             renormalize::FIRST_PHASE
         }
@@ -168,6 +182,8 @@ impl AdminMaintenanceHandler {
             wanted_aliases::execute(self, state).await
         } else if kind == LYRICS_LOOKUP_QUEUE {
             lyrics_queue::execute(self, state).await
+        } else if kind == TRACK_SEARCH {
+            track_search::execute(self, state).await
         } else {
             renormalize::execute(self, state).await
         }
@@ -255,6 +271,8 @@ fn continuation_kind(kind: &str) -> JobKind {
         JobKind::AdminWantedAliases
     } else if kind == LYRICS_LOOKUP_QUEUE {
         JobKind::AdminLyricsLookupQueue
+    } else if kind == TRACK_SEARCH {
+        JobKind::AdminTrackSearch
     } else {
         JobKind::AdminCatalogRenormalize
     }

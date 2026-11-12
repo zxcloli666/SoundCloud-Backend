@@ -108,6 +108,7 @@ pub enum JobKind {
     AdminCatalogRenormalize,
     AdminLyricsLookupQueue,
     AdminMusicBrainzNames,
+    AdminTrackSearch,
     AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
@@ -167,6 +168,7 @@ impl JobKind {
         Self::AdminCatalogRenormalize,
         Self::AdminLyricsLookupQueue,
         Self::AdminMusicBrainzNames,
+        Self::AdminTrackSearch,
         Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
@@ -226,6 +228,7 @@ impl JobKind {
             Self::AdminCatalogRenormalize => "admin.renormalize_catalog",
             Self::AdminLyricsLookupQueue => "admin.lyrics_lookup_queue",
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
+            Self::AdminTrackSearch => "admin.track_search",
             Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
@@ -330,6 +333,7 @@ impl JobKind {
             Self::AdminCatalogRenormalize
             | Self::AdminLyricsLookupQueue
             | Self::AdminMusicBrainzNames
+            | Self::AdminTrackSearch
             | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
@@ -355,6 +359,7 @@ impl FromStr for JobKind {
             "admin.renormalize_catalog" => Self::AdminCatalogRenormalize,
             "admin.lyrics_lookup_queue" => Self::AdminLyricsLookupQueue,
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
+            "admin.track_search" => Self::AdminTrackSearch,
             "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
@@ -497,7 +502,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 55);
+        assert_eq!(kinds.len(), 56);
     }
 
     #[test]

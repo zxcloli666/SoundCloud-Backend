@@ -13,6 +13,7 @@ use crate::state::AppState;
 const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
 const LYRICS_LOOKUP_QUEUE: &str = "lyrics_lookup_queue";
 const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
+const TRACK_SEARCH: &str = "track_search";
 const WANTED_ALIASES: &str = "wanted_aliases";
 const MAINTENANCE_PRIORITY: i16 = 20;
 const MAINTENANCE_MAX_ATTEMPTS: i16 = 8;
@@ -74,6 +75,14 @@ pub async fn lyrics_lookup_queue(
     State(state): State<AppState>,
 ) -> AppResult<Json<MaintenanceAccepted>> {
     enqueue(&state, LYRICS_LOOKUP_QUEUE, JobKind::AdminLyricsLookupQueue).await
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn track_search(
+    _: AdminAuth,
+    State(state): State<AppState>,
+) -> AppResult<Json<MaintenanceAccepted>> {
+    enqueue(&state, TRACK_SEARCH, JobKind::AdminTrackSearch).await
 }
 
 #[tracing::instrument(skip_all)]
