@@ -136,6 +136,7 @@ SELECT v.cls FROM (VALUES
     ('track_artist_blocks', 'A'),
     ('track_artists', 'C'),
     ('track_comments', 'C'),
+    ('track_search', 'C'),
     ('track_work_aliases', 'P'),
     ('tracks', 'C'),
     ('transcription_sync_versions', 'P'),
@@ -299,6 +300,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_artists', jsonb_build_object('track_id', t.track_id, 'artist_id', t.artist_id, 'role', t.role) FROM public.track_artists t ON CONFLICT DO NOTHING;
         WHEN 'track_comments' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_comments', jsonb_build_object('id', t.id) FROM public.track_comments t ON CONFLICT DO NOTHING;
+        WHEN 'track_search' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_search', jsonb_build_object('id', t.id) FROM public.track_search t ON CONFLICT DO NOTHING;
         WHEN 'tracks' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'tracks', jsonb_build_object('id', t.id) FROM public.tracks t ON CONFLICT DO NOTHING;
         WHEN 'user_auras' THEN
@@ -409,6 +412,7 @@ BEGIN
         ('track_artist_blocks', 'A'),
         ('track_artists', 'C'),
         ('track_comments', 'C'),
+        ('track_search', 'C'),
         ('tracks', 'C'),
         ('user_auras', 'A'),
         ('user_blocked_artists', 'A'),

@@ -64,6 +64,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_taste_model_versions;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_taste_schedule;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_comments;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_transcription_sync_versions;
@@ -5757,6 +5758,77 @@ ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_search FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_search', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_owner_track_search()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.track_search (duration_ms, id, metadata_artist, play_count_sc, sc_track_id, title, title_normalized, uploader_sc_user_id, uploader_username, variant) VALUES (NEW.duration_ms, NEW.id, NEW.metadata_artist, NEW.play_count_sc, NEW.sc_track_id, NEW.title, NEW.title_normalized, NEW.uploader_sc_user_id, NEW.uploader_username, NEW.variant);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.track_search t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.track_search t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.track_search t SET duration_ms = NEW.duration_ms, metadata_artist = NEW.metadata_artist, play_count_sc = NEW.play_count_sc, sc_track_id = NEW.sc_track_id, title = NEW.title, title_normalized = NEW.title_normalized, uploader_sc_user_id = NEW.uploader_sc_user_id, uploader_username = NEW.uploader_username, variant = NEW.variant WHERE t.id = NEW.id;
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.track_search (duration_ms, id, metadata_artist, play_count_sc, sc_track_id, title, title_normalized, uploader_sc_user_id, uploader_username, variant)
+        VALUES (NEW.duration_ms, NEW.id, NEW.metadata_artist, NEW.play_count_sc, NEW.sc_track_id, NEW.title, NEW.title_normalized, NEW.uploader_sc_user_id, NEW.uploader_username, NEW.variant)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.track_search still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_search FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_search();
+ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_search FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_tracks', 'cmd', 'migration', 'repl');
@@ -7776,6 +7848,7 @@ FROM (VALUES
     ('guard', 'taste_schedule', 'scd_guard_taste_schedule'),
     ('guard', 'track_artists', 'scd_guard_track_artists'),
     ('guard', 'track_comments', 'scd_guard_track_comments'),
+    ('guard', 'track_search', 'scd_guard_track_search'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
     ('guard', 'tracks', 'scd_guard_tracks'),
     ('guard', 'transcription_sync_versions', 'scd_guard_transcription_sync_versions'),
@@ -8071,6 +8144,9 @@ BEGIN
             ('track_comments', 'zz_guard'),
             ('track_comments', 'zz_owner'),
             ('track_comments', 'zzz_suppress'),
+            ('track_search', 'zz_guard'),
+            ('track_search', 'zz_owner'),
+            ('track_search', 'zzz_suppress'),
             ('track_work_aliases', 'zz_guard'),
             ('tracks', 'zz_guard'),
             ('tracks', 'zz_owner'),
