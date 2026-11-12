@@ -16,6 +16,9 @@ pub const MAX_VARIANT_CHARS: usize = 80;
 pub const DEFAULT_PER_KIND: i64 = 5;
 pub const MAX_PER_KIND: i64 = 10;
 pub const SOFT_BUDGET: Duration = Duration::from_millis(1800);
+const WELL_KNOWN: f64 = 0.8;
+const EXACT_ARTIST: f64 = 1.5;
+const EXACT_TITLE: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -48,6 +51,14 @@ impl Resolved {
 
     fn beats(&self, other: &Resolved) -> bool {
         (self.tier, -self.rank()) < (other.tier, -other.rank())
+    }
+
+    fn settles(&self) -> bool {
+        let exact = match self.kind {
+            Kind::Artist => EXACT_ARTIST,
+            _ => EXACT_TITLE,
+        };
+        self.variant == 0 && self.tier == 0 && self.score >= exact && self.popularity >= WELL_KNOWN
     }
 }
 
@@ -187,7 +198,14 @@ impl SearchService {
                     let answer = self.resolve_variant(&mut tx, &ask, &kinds, per_kind);
                     let answer = tokio::time::timeout(left, answer).await;
                     match answer {
-                        Ok(Ok(Answer::Found(rows))) => found.extend(rows),
+                        Ok(Ok(Answer::Found(rows))) => {
+                            let settled = rows.iter().any(Resolved::settles);
+                            found.extend(rows);
+                            if settled {
+                                asked
+                                    .retain(|next| next.spelled_too && next.variant == ask.variant);
+                            }
+                        }
                         Ok(Ok(Answer::Spelled(spelled))) => {
                             let variant = ask.variant;
                             asked.push_front(Asked {
