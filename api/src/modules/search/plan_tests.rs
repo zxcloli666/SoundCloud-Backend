@@ -217,6 +217,18 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
         !seq_scans(&plan).contains(&"search_terms".to_owned()),
         "{plan}"
     );
+
+    let plan = explain!(
+        tx,
+        "../../../queries/search/terms.sql",
+        "плейбой карти",
+        8_i64
+    );
+    assert!(plan.contains("search_terms_sound_idx"), "{plan}");
+    assert!(
+        !seq_scans(&plan).contains(&"search_terms".to_owned()),
+        "{plan}"
+    );
     Ok(())
 }
 

@@ -6,7 +6,7 @@ WITH tokens AS (
     ORDER BY min(p)
     LIMIT $2
 ),
-last AS (SELECT max(ord) AS ord FROM tokens)
+last AS (SELECT max(ord) AS ord, count(*) AS total FROM tokens)
 SELECT t.ord AS "ord!", t.token AS "lexeme!", alt.word AS "word?", alt.ndoc AS "ndoc?", alt.kind AS "kind?"
 FROM tokens t
 CROSS JOIN last
@@ -18,6 +18,15 @@ LEFT JOIN LATERAL (
      WHERE char_length(t.token) >= 3 AND latin % search_latin(t.token)
        AND NOT EXISTS (SELECT 1 FROM search_terms s WHERE s.latin = search_latin(t.token))
      ORDER BY similarity(latin, search_latin(t.token)) DESC, ndoc DESC LIMIT 3)
+    UNION ALL
+    (SELECT word, ndoc, 'sound' FROM search_terms
+     WHERE t.token ~ '[а-яёіїєґ]' AND word !~ '[а-яёіїєґ]'
+       AND search_sound(latin) = search_sound(t.token)
+       AND latin <> search_latin(t.token)
+       AND CASE WHEN EXISTS (SELECT 1 FROM search_terms s WHERE s.word = t.token AND s.ndoc >= 500)
+                THEN last.total > 1 AND char_length(search_sound(t.token)) >= 4
+                ELSE char_length(search_sound(t.token)) >= 3 END
+     ORDER BY ndoc DESC LIMIT 1)
     UNION ALL
     (SELECT word, ndoc, 'prefix' FROM search_terms
      WHERE t.ord = last.ord AND char_length(t.token) >= 2

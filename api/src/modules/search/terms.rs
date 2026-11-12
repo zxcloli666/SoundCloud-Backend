@@ -12,6 +12,7 @@ const LYRICS_TOKENS: i64 = 8;
 const LYRICS_GROUPS: usize = 4;
 const ROWS_KEPT: Duration = Duration::from_secs(300);
 const ROWS_CAPACITY: u64 = 20_000;
+const RESPELLED_TIMES_MORE: i64 = 3;
 
 const NOISE: &[&str] = &[
     "official",
@@ -81,6 +82,7 @@ pub struct Terms {
     pub strict: String,
     pub loose: Option<String>,
     pub variant: bool,
+    pub spelled: Option<String>,
 }
 
 #[derive(Debug)]
@@ -204,6 +206,7 @@ pub fn build(rows: &[TermRow], shape: Shape) -> Option<Terms> {
         strict: clauses.join(" & "),
         loose,
         variant,
+        spelled: spelled(rows),
     })
 }
 
@@ -233,6 +236,7 @@ fn groups(rows: &[TermRow]) -> Vec<Group> {
                 group.known = true;
                 group.rarity = group.rarity.min(i64::from(row.ndoc.unwrap_or(0)));
             }
+            "sound" => continue,
             _ => group.corrected = true,
         }
         if !group.alternatives.iter().any(|known| known == word) {
@@ -248,6 +252,44 @@ fn groups(rows: &[TermRow]) -> Vec<Group> {
             group
         })
         .collect()
+}
+
+fn spelled(rows: &[TermRow]) -> Option<String> {
+    let mut respelled = false;
+    let words: Vec<&str> = rows
+        .chunk_by(|a, b| a.ord == b.ord)
+        .map(|said| match latin_twin(said) {
+            Some(word) => {
+                respelled = true;
+                word
+            }
+            None => said[0].lexeme.as_str(),
+        })
+        .collect();
+    respelled.then(|| words.join(" "))
+}
+
+fn latin_twin(said: &[TermRow]) -> Option<&str> {
+    let lexeme = said[0].lexeme.as_str();
+    if !lexeme.chars().any(is_cyrillic) {
+        return None;
+    }
+    let own = said
+        .iter()
+        .find(|row| row.word.as_deref() == Some(lexeme))
+        .and_then(|row| row.ndoc)
+        .unwrap_or(0);
+    said.iter()
+        .filter(|row| matches!(row.kind.as_deref(), Some("same" | "sound")))
+        .filter_map(|row| Some((row.ndoc?, row.word.as_deref()?)))
+        .filter(|(_, word)| !word.chars().any(is_cyrillic))
+        .max_by_key(|(ndoc, _)| *ndoc)
+        .filter(|(ndoc, _)| i64::from(*ndoc) >= RESPELLED_TIMES_MORE * i64::from(own))
+        .map(|(_, word)| word)
+}
+
+fn is_cyrillic(letter: char) -> bool {
+    matches!(letter, 'а'..='я' | 'ё' | 'і' | 'ї' | 'є' | 'ґ')
 }
 
 fn is_word(group: &Group) -> bool {
