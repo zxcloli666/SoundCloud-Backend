@@ -51,6 +51,17 @@ impl Resolved {
     }
 }
 
+struct Asked {
+    variant: usize,
+    q: String,
+    spelled_too: bool,
+}
+
+enum Answer {
+    Found(Vec<Resolved>),
+    Spelled(String),
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct Row {
     id: String,
@@ -160,19 +171,35 @@ impl SearchService {
             .guarded(|| async {
                 let mut tx = self.begin().await?;
                 let mut found = Vec::new();
-                let mut asked: VecDeque<(usize, String)> =
-                    queries.iter().cloned().enumerate().collect();
+                let mut asked: VecDeque<Asked> = queries
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(variant, q)| Asked {
+                        variant,
+                        q,
+                        spelled_too: false,
+                    })
+                    .collect();
                 let mut seen: HashSet<String> = queries.iter().cloned().collect();
-                while let Some((index, q)) = asked.pop_front() {
+                while let Some(ask) = asked.pop_front() {
                     let left = soft.saturating_duration_since(Instant::now());
-                    let variant = self.resolve_variant(&mut tx, index, &q, &kinds, per_kind);
-                    match tokio::time::timeout(left, variant).await {
-                        Ok(Ok((rows, spelled))) => {
-                            found.extend(rows);
-                            if let Some(spelled) = spelled
-                                && seen.insert(spelled.clone())
-                            {
-                                asked.push_front((index, spelled));
+                    let answer = self.resolve_variant(&mut tx, &ask, &kinds, per_kind);
+                    let answer = tokio::time::timeout(left, answer).await;
+                    match answer {
+                        Ok(Ok(Answer::Found(rows))) => found.extend(rows),
+                        Ok(Ok(Answer::Spelled(spelled))) => {
+                            let variant = ask.variant;
+                            asked.push_front(Asked {
+                                spelled_too: true,
+                                ..ask
+                            });
+                            if seen.insert(spelled.clone()) {
+                                asked.push_front(Asked {
+                                    variant,
+                                    q: spelled,
+                                    spelled_too: false,
+                                });
                             }
                         }
                         Ok(Err(error)) => return keep_on_timeout(found, error),
@@ -189,16 +216,24 @@ impl SearchService {
     async fn resolve_variant(
         &self,
         tx: &mut Transaction<'static, Postgres>,
-        index: usize,
-        q: &str,
+        ask: &Asked,
         kinds: &[Kind],
         per_kind: i64,
-    ) -> AppResult<(Vec<Resolved>, Option<String>)> {
+    ) -> AppResult<Answer> {
+        let q = ask.q.as_str();
         let Some(strict_terms) = terms::resolve(&self.terms, tx, q, Shape::Tracks).await? else {
-            return Ok((Vec::new(), None));
+            return Ok(Answer::Found(Vec::new()));
         };
+        if !ask.spelled_too
+            && let Some(spelled) = &strict_terms.spelled
+        {
+            return Ok(Answer::Spelled(spelled.clone()));
+        }
         let entity_terms = terms::resolve(&self.terms, tx, q, Shape::Entities).await?;
-        let stem = stem_for(tx, q).await?;
+        let stem = match ask.spelled_too {
+            true => None,
+            false => stem_for(tx, q).await?,
+        };
         let mut out = Vec::new();
         for kind in kinds {
             let (strict, loose) = match (kind, &entity_terms) {
@@ -206,13 +241,14 @@ impl SearchService {
                 (_, Some(terms)) => (&terms.strict, &terms.loose),
                 _ => continue,
             };
+            let loose = loose.as_deref().filter(|_| !ask.spelled_too);
             let rows = match kind {
                 Kind::Track => {
                     sqlx::query_file_as!(
                         Row,
                         "queries/search/resolve_tracks.sql",
                         strict,
-                        loose.as_deref(),
+                        loose,
                         q,
                         stem.as_deref(),
                         per_kind * 3
@@ -225,7 +261,7 @@ impl SearchService {
                         Row,
                         "queries/search/resolve_artists.sql",
                         strict,
-                        loose.as_deref(),
+                        loose,
                         q,
                         stem.as_deref(),
                         per_kind
@@ -238,7 +274,7 @@ impl SearchService {
                         Row,
                         "queries/search/resolve_albums.sql",
                         strict,
-                        loose.as_deref(),
+                        loose,
                         q,
                         stem.as_deref(),
                         per_kind
@@ -251,7 +287,7 @@ impl SearchService {
                         Row,
                         "queries/search/resolve_playlists.sql",
                         strict,
-                        loose.as_deref(),
+                        loose,
                         q,
                         stem.as_deref(),
                         per_kind
@@ -267,11 +303,11 @@ impl SearchService {
                 artist: row.artist,
                 popularity: row.popularity,
                 score: row.match_score,
-                variant: index,
+                variant: ask.variant,
                 tier: row.tier,
             }));
         }
-        Ok((out, strict_terms.spelled))
+        Ok(Answer::Found(out))
     }
 }
 
