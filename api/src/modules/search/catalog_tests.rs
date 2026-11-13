@@ -340,3 +340,36 @@ async fn the_last_page_never_promises_another(pool: PgPool) -> anyhow::Result<()
     );
     Ok(())
 }
+
+pub(super) async fn seed_a_name_after_many_lookalikes(
+    pool: &PgPool,
+    id: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary,
+                              monthly_listeners, popularity_score)
+         SELECT gen_random_uuid(), 'Jay A ' || n, 'jay a ' || n, 'test', 40, 900, 0.5
+         FROM generate_series(1, 600) AS n",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary,
+                              monthly_listeners, popularity_score)
+         VALUES ($1::uuid, 'Jay-Z', 'jay z', 'test', 40, 900, 0.5)",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn an_artist_named_exactly_is_found_among_more_lookalikes_than_the_search_takes(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_after_many_lookalikes(&pool, "00000000-0000-0000-0000-0000000000c1").await?;
+    let artists = service(&pool)?.artists("Jay-Z", 0, 10).await?;
+    assert_eq!(artists.collection[0]["name"], "Jay-Z");
+    Ok(())
+}
