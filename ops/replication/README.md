@@ -148,7 +148,7 @@ Order for 0335-0336: main and star first, then core, all before the first run of
 
 Order for 0337-0338: only after the `track_search` run of 0332 finished clean and `VACUUM ANALYZE track_search` ran. Build both indexes by hand on core, main and star with the statements of the two files (a concurrent build takes no write lock, so the triggers and the apply keep writing) with `lock_timeout` 0: the build waits for every older transaction, and a timeout leaves an invalid index to drop with `DROP INDEX CONCURRENTLY`. Check `indisvalid`, then migrate the three nodes (both files no-op), then the api on main and star and jobs on core. An api before its node has 0338 refuses to start.
 
-Order for 0339: any node order, after the api that requires 0338 runs on main and star and its search was watched for 1-2 h. The drop takes SHARE UPDATE EXCLUSIVE on `tracks`: reads and writes do not wait behind it, it waits for an autovacuum of `tracks`.
+Order for 0339: any node order, after the api that requires 0338 runs on main and star and its search was watched for 1-2 h. The drop takes SHARE UPDATE EXCLUSIVE on `tracks`: reads and writes do not wait behind it, it waits for an autovacuum of `tracks` and for every older transaction, so run it with `lock_timeout` 0.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
