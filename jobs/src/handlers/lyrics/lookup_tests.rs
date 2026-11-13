@@ -724,6 +724,7 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
         &pool,
         &job,
         5,
+        0,
         900,
         crate::handlers::star_priority::Turn::led_by(
             crate::handlers::star_priority::Tier::StarLiked,
@@ -731,7 +732,7 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
     )
     .await?;
 
-    let claimed: Vec<String> = claims.into_iter().map(|claim| claim.sc_track_id).collect();
+    let claimed = super::refetch_tests::track_ids(&claims);
     assert_eq!(claimed, ["44", "42", "43", "41", "45"]);
     assert_eq!(state_versions(&pool).await?, versions);
     let held: i64 =

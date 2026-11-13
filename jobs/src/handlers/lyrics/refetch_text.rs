@@ -2,7 +2,7 @@ use catalog_sources::GeniusText;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Verdict {
-    Replace,
+    Replace(usize),
     Unchanged,
     Different,
 }
@@ -10,12 +10,12 @@ pub(super) enum Verdict {
 pub(super) fn verdict(stored: &str, candidates: &[GeniusText]) -> Verdict {
     let old = comparable(without_header(stored));
     let mut unchanged = false;
-    for candidate in candidates {
+    for (index, candidate) in candidates.iter().enumerate() {
         let new = comparable(&candidate.text);
         if new == old {
             unchanged = true;
         } else if replaces(&old, &new, candidate.linked) {
-            return Verdict::Replace;
+            return Verdict::Replace(index);
         }
     }
     if unchanged {
@@ -71,14 +71,14 @@ mod tests {
     fn a_plural_header_line_is_dropped() {
         let stored = "879 ContributorsTranslationsDeutsch\nline two\nline three";
         let new = searched("line one\nline two\nline three");
-        assert_eq!(verdict(stored, &[new]), Verdict::Replace);
+        assert_eq!(verdict(stored, &[new]), Verdict::Replace(0));
     }
 
     #[test]
     fn a_singular_header_line_is_dropped() {
         let stored = "1 ContributorM1 Lyrics\nline two\nline three";
         let new = searched("line one\nline two\nline three");
-        assert_eq!(verdict(stored, &[new]), Verdict::Replace);
+        assert_eq!(verdict(stored, &[new]), Verdict::Replace(0));
     }
 
     #[test]
@@ -104,7 +104,7 @@ mod tests {
     fn the_old_text_must_start_at_a_word_boundary() {
         let stored = "ar C";
         assert_eq!(verdict(stored, &[searched("A bar C")]), Verdict::Different);
-        assert_eq!(verdict(stored, &[searched("A ar C")]), Verdict::Replace);
+        assert_eq!(verdict(stored, &[searched("A ar C")]), Verdict::Replace(0));
     }
 
     #[test]
@@ -120,7 +120,7 @@ mod tests {
         let stored = "old tail";
         assert_eq!(
             verdict(stored, &[linked("the page was edited, new tail")]),
-            Verdict::Replace
+            Verdict::Replace(0)
         );
     }
 
@@ -146,7 +146,7 @@ mod tests {
         let stored = "12 Contributors";
         assert_eq!(
             verdict(stored, &[linked("whole song text")]),
-            Verdict::Replace
+            Verdict::Replace(0)
         );
     }
 
@@ -159,7 +159,7 @@ mod tests {
             searched("head tail"),
             linked("another head and more tail"),
         ];
-        assert_eq!(verdict(stored, &candidates), Verdict::Replace);
+        assert_eq!(verdict(stored, &candidates), Verdict::Replace(2));
     }
 
     #[test]

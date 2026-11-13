@@ -1,6 +1,11 @@
 #[cfg(test)]
 #[path = "lookup_tests.rs"]
 mod db_tests;
+#[path = "lookup_refetch.rs"]
+mod refetch;
+#[cfg(test)]
+#[path = "lookup_refetch_tests.rs"]
+mod refetch_tests;
 #[cfg(test)]
 #[path = "lookup_sweep_tests.rs"]
 mod sweep_tests;
@@ -20,6 +25,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+use self::refetch::RefetchClaim;
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
 use crate::metrics::LookupPath;
@@ -49,6 +55,11 @@ struct LookupClaim {
     input_sc_created_at: Option<chrono::DateTime<Utc>>,
     miss_streak: i32,
     failure_streak: i32,
+}
+
+enum Work {
+    Lookup(LookupClaim),
+    Refetch(RefetchClaim),
 }
 
 pub struct LyricsLookupHandler {
@@ -131,6 +142,7 @@ impl LyricsLookupHandler {
         .execute(&self.pool)
         .await
         .map_err(JobError::retryable)?;
+        self.release_expired_refetches().await?;
         self.backfill().await?;
 
         super::wake::enqueue_due(&self.pool, &self.queue, DUE_WAKE_BATCH).await?;
@@ -143,6 +155,7 @@ impl LyricsLookupHandler {
                 self.config.concurrency,
                 lane.sweep_slots(),
             ),
+            self.config.refetch_share_percent,
             self.config.claim_seconds,
             self.turns.next(),
         )
@@ -154,7 +167,7 @@ impl LyricsLookupHandler {
     async fn process_batch(
         &self,
         job: &LeasedJob,
-        claims: Vec<LookupClaim>,
+        claims: Vec<Work>,
         lane: &Arc<LookupLane>,
     ) -> JobResult {
         let demand = lane.sweep_demand();
@@ -167,10 +180,10 @@ impl LyricsLookupHandler {
                 let Some(slot) = lane.sweep_slot() else {
                     break;
                 };
-                let Some(claim) = queue.next() else {
+                let Some(work) = queue.next() else {
                     break;
                 };
-                running.push(self.process_in_slot(job, claim, slot));
+                running.push(self.process_in_slot(job, work, slot));
             }
             if running.is_empty() && queue.as_slice().is_empty() {
                 return failed.map_or(Ok(()), Err);
@@ -188,13 +201,11 @@ impl LyricsLookupHandler {
         }
     }
 
-    async fn process_in_slot(
-        &self,
-        job: &LeasedJob,
-        claim: LookupClaim,
-        slot: LookupSlot,
-    ) -> JobResult {
-        let result = self.process(job, claim).await;
+    async fn process_in_slot(&self, job: &LeasedJob, work: Work, slot: LookupSlot) -> JobResult {
+        let result = match work {
+            Work::Lookup(claim) => self.process(job, claim).await,
+            Work::Refetch(claim) => self.process_refetch(job, claim).await,
+        };
         drop(slot);
         result
     }
