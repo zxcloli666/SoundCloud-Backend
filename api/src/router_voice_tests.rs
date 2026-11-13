@@ -901,6 +901,7 @@ async fn resolve_merges_variants_and_matches_case_forms(pool: PgPool) -> anyhow:
                 ('9002', 'soundcloud:tracks:9002', 'Хочешь (remix)', 'хочешь remix', 'Земфира', 'Земфира', '555', 210000, 10, 'public')",
     )
     .await?;
+    crate::db::replicate_track_search(&pool).await?;
     crate::modules::search::lexicon_refresh::refresh(&pool).await?;
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;

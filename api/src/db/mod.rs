@@ -27,11 +27,29 @@ pub(crate) async fn insert_replicated(pool: &PgPool, sql: &str) -> anyhow::Resul
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) async fn replicate_track_search(pool: &PgPool) -> anyhow::Result<()> {
+    insert_replicated(
+        pool,
+        "INSERT INTO track_search (
+             id, sc_track_id, uploader_sc_user_id, title, title_normalized,
+             metadata_artist, uploader_username, duration_ms, play_count_sc, variant
+         )
+         SELECT id, sc_track_id, uploader_sc_user_id, title, title_normalized,
+                metadata_artist, uploader_username, duration_ms, play_count_sc,
+                track_search_variant(title_normalized)
+         FROM tracks
+         WHERE sharing = 'public' AND deleted_at IS NULL AND superseded_by IS NULL
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .await
+}
+
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 334,
-    description: "search terms sound idx",
+    version: 338,
+    description: "track search uploader popular",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,

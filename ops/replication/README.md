@@ -126,6 +126,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 59. `0334_search_terms_sound_idx`: `CREATE INDEX CONCURRENTLY` of `search_terms_sound_idx`, the sound key of `latin` over the words of `search_terms` that have no Cyrillic letter. `terms.sql` reads it to give a Cyrillic token its most common Latin word that sounds the same; the word never joins the tsquery, resolve asks the name once more in that spelling. `ndoc` is not in the index, so an `ndoc` update stays HOT.
 60. `0335_lyrics_repair`: `lyrics_repair`, class P, the ledger of the genius text repairs (old text kept for rollback), and the kinds `lyrics_refetch` and `lyrics_description` in the `admin_maintenance_runs` CHECK.
 61. `0336_scd_install`: the generated SQL again, on top of 0331: the P table gets its registry, row hash and purge entries, every trigger is kept.
+62. `0337_track_search_doc_gin`: the full-text GIN of the search on `track_search`, the same expression as `tracks_search_doc_gin` without its partial predicate; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`.
+63. `0338_track_search_uploader_popular`: `(uploader_sc_user_id, play_count_sc DESC NULLS LAST, id DESC)` on `track_search` for the uploader arm; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`. The api requires 0338: its track search reads only `track_search`.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -142,6 +144,8 @@ Order for 0332: main and star any time (`scd_derived()` is false there, the trig
 Order for 0333-0334: core, main and star in any order, all three before the api that requires 0334. Nothing is published and no row is written: the function and the index are local to each node. On a node with the full lexicon build the index by hand first with the statement of 0334 (about a minute per 2 million words), the migration then finds it.
 
 Order for 0335-0336: main and star first, then core, all before the first run of the new admin kinds: `admin_maintenance_runs` is C, and an api node with the old kind CHECK fails the apply of core's `lyrics_refetch` or `lyrics_description` run row. `lyrics_repair` is core-private, nothing is published for it; main and star get the empty table and never write it.
+
+Order for 0337-0338: only after the `track_search` run of 0332 finished clean and `VACUUM ANALYZE track_search` ran. Build both indexes by hand on core, main and star with the statements of the two files (a concurrent build takes no write lock, so the triggers and the apply keep writing) with `lock_timeout` 0: the build waits for every older transaction, and a timeout leaves an invalid index to drop with `DROP INDEX CONCURRENTLY`. Check `indisvalid`, then migrate the three nodes (both files no-op), then the api on main and star and jobs on core. An api before its node has 0338 refuses to start.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 

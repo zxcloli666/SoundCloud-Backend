@@ -1,9 +1,8 @@
 CREATE TEMP TABLE search_terms_delta AS
 WITH counted AS (
     SELECT doc.lexeme COLLATE "C" AS word, count(*) AS ndoc
-    FROM tracks
+    FROM track_search
     CROSS JOIN LATERAL unnest(to_tsvector('simple', coalesce(title_normalized, '') || ' ' || coalesce(metadata_artist, '') || ' ' || coalesce(uploader_username, ''))) AS doc
-    WHERE sharing = 'public' AND deleted_at IS NULL AND superseded_by IS NULL
     GROUP BY 1
     UNION ALL
     SELECT doc.lexeme COLLATE "C", count(*)
