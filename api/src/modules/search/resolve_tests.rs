@@ -119,15 +119,29 @@ async fn artists_of(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved
 
 async fn found_of(pool: &PgPool, kinds: &[Kind], said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
     let variants: Vec<String> = said.iter().map(|text| (*text).to_owned()).collect();
-    let found = service(pool)?.resolve(&variants, kinds, 5, false).await?;
+    let found = service(pool)?
+        .resolve(&variants, kinds, 5, false, &[])
+        .await?;
+    Ok(found.into_values().flatten().collect())
+}
+
+async fn found_of_a_known_name(
+    pool: &PgPool,
+    kinds: &[Kind],
+    said: &[&str],
+    fuller: &[&str],
+) -> anyhow::Result<Vec<Resolved>> {
+    let owned =
+        |texts: &[&str]| -> Vec<String> { texts.iter().map(|text| (*text).to_owned()).collect() };
+    let (variants, fuller) = (owned(said), owned(fuller));
+    let found = service(pool)?
+        .resolve(&variants, kinds, 5, true, &fuller)
+        .await?;
     Ok(found.into_values().flatten().collect())
 }
 
 async fn artists_of_a_known_name(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
-    let variants: Vec<String> = said.iter().map(|text| (*text).to_owned()).collect();
-    let kinds = [Kind::Artist];
-    let found = service(pool)?.resolve(&variants, &kinds, 5, true).await?;
-    Ok(found.into_values().flatten().collect())
+    found_of_a_known_name(pool, &[Kind::Artist], said, &[]).await
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -335,6 +349,81 @@ async fn a_name_that_ends_the_lookup_ends_it_for_every_kind_asked(
     Ok(())
 }
 
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_artist_found_exactly_is_answered_without_the_other_kinds(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.86).await?;
+    seed(&pool, &[song(2, "Queen", "Other Band", 100)]).await?;
+    let kinds = [Kind::Artist, Kind::Track];
+    let found = found_of(&pool, &kinds, &["queen"]).await?;
+    let ids: Vec<&str> = found.iter().map(|hit| hit.id.as_str()).collect();
+    assert!(
+        ids.contains(&"soundcloud:tracks:2") && ids.contains(&WHOLE),
+        "{found:?}"
+    );
+    let found = found_of_a_known_name(&pool, &kinds, &["queen"], &[]).await?;
+    let ids: Vec<&str> = found.iter().map(|hit| hit.id.as_str()).collect();
+    assert_eq!(ids, [WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_that_is_not_an_artist_is_looked_up_among_the_other_kinds(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let songs = [
+        song(1, "Nightcall", "Kavinsky", 100),
+        song(2, "Roadgame", "Other Band", 100),
+    ];
+    seed(&pool, &songs).await?;
+    let kinds = [Kind::Artist, Kind::Track];
+    let said = ["nightcall kavinsky", "roadgame"];
+    let found = found_of_a_known_name(&pool, &kinds, &said, &[]).await?;
+    let ids: Vec<&str> = found.iter().map(|hit| hit.id.as_str()).collect();
+    assert_eq!(ids, ["soundcloud:tracks:1"], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_fuller_variant_is_asked_after_the_name_that_ends_the_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.3).await?;
+    seed(&pool, &[song(2, "Roadgame", "Queen", 100)]).await?;
+    let kinds = [Kind::Artist, Kind::Track];
+    let said = ["queen", "queens", "roadgame queen"];
+    let found = found_of_a_known_name(&pool, &kinds, &said, &["Roadgame  Queen"]).await?;
+    let asked = |id: &str| found.iter().find(|hit| hit.id == id).map(|hit| hit.variant);
+    assert_eq!(asked(WHOLE), Some(0), "{found:?}");
+    assert_eq!(asked("soundcloud:tracks:2"), Some(2), "{found:?}");
+    assert_eq!(asked(FORM), None, "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_fuller_variant_found_exactly_does_not_end_the_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_and_its_other_form(&pool, 0.86).await?;
+    let found = service(&pool)?
+        .resolve(
+            &["kween".to_owned(), "queen".to_owned(), "queens".to_owned()],
+            &[Kind::Artist],
+            5,
+            false,
+            &["queen".to_owned()],
+        )
+        .await?;
+    let ids: Vec<&str> = found
+        .values()
+        .flatten()
+        .map(|hit| hit.id.as_str())
+        .collect();
+    assert_eq!(ids, [WHOLE, FORM], "{found:?}");
+    Ok(())
+}
+
 async fn a_pool_with_idle(pool: &PgPool, idle: usize) -> anyhow::Result<PgPool> {
     let own = PgPoolOptions::new()
         .max_connections(IDLE_KEPT as u32 + 4)
@@ -360,7 +449,7 @@ async fn a_kind_that_cannot_answer_in_time_does_not_hold_back_the_other_kinds(
     let own = a_pool_with_idle(&pool, IDLE_KEPT + 2).await?;
     let kinds = [Kind::Track, Kind::Artist];
     let found = service(&own)?
-        .resolve(&["queen".to_owned()], &kinds, 5, false)
+        .resolve(&["queen".to_owned()], &kinds, 5, false, &[])
         .await;
     own.close().await;
     let found = found?;
@@ -382,7 +471,7 @@ async fn with_no_connection_to_spare_every_kind_is_still_asked(pool: PgPool) -> 
     let lanes = search.lanes(4).await.map(|lanes| lanes.len());
     let kinds = [Kind::Artist, Kind::Track];
     let found = search
-        .resolve(&["queen".to_owned()], &kinds, 5, false)
+        .resolve(&["queen".to_owned()], &kinds, 5, false, &[])
         .await;
     own.close().await;
     assert_eq!(lanes?, 1);
