@@ -127,6 +127,7 @@ async fn gated_handler(
             concurrency: 8,
             claim_seconds: 900,
             backfill_batch: 100,
+            refetch_share_percent: 0,
             musixmatch_base: MUSIXMATCH.to_owned(),
         },
     );

@@ -108,7 +108,9 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
 
 pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminCatalogRenormalize,
+    JobKind::AdminLyricsDescription,
     JobKind::AdminLyricsLookupQueue,
+    JobKind::AdminLyricsRefetch,
     JobKind::AdminMusicBrainzNames,
     JobKind::AdminTrackSearch,
     JobKind::AdminWantedAliases,
@@ -492,6 +494,9 @@ impl JobHandlers {
                     .backfill_lyrics_lookup_queue(job, payload)
                     .await
             }
+            JobKind::AdminLyricsDescription | JobKind::AdminLyricsRefetch => Err(
+                JobError::permanent(anyhow::anyhow!("{} has no handler yet", job.kind)),
+            ),
             JobKind::AdminMusicBrainzNames => {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
                 self.admin_maintenance

@@ -4,6 +4,7 @@ mod embedding_queue;
 mod embedding_result;
 mod lookup;
 mod reaper;
+mod refetch_text;
 mod text;
 mod transcription;
 mod vectors;

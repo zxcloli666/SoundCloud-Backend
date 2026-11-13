@@ -106,7 +106,9 @@ pub const INDEX_TRACK_PRIORITY: i16 = 5;
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
     AdminCatalogRenormalize,
+    AdminLyricsDescription,
     AdminLyricsLookupQueue,
+    AdminLyricsRefetch,
     AdminMusicBrainzNames,
     AdminTrackSearch,
     AdminWantedAliases,
@@ -166,7 +168,9 @@ pub enum JobKind {
 impl JobKind {
     pub const ALL: &'static [Self] = &[
         Self::AdminCatalogRenormalize,
+        Self::AdminLyricsDescription,
         Self::AdminLyricsLookupQueue,
+        Self::AdminLyricsRefetch,
         Self::AdminMusicBrainzNames,
         Self::AdminTrackSearch,
         Self::AdminWantedAliases,
@@ -226,7 +230,9 @@ impl JobKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AdminCatalogRenormalize => "admin.renormalize_catalog",
+            Self::AdminLyricsDescription => "admin.lyrics_description",
             Self::AdminLyricsLookupQueue => "admin.lyrics_lookup_queue",
+            Self::AdminLyricsRefetch => "admin.lyrics_refetch",
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
             Self::AdminTrackSearch => "admin.track_search",
             Self::AdminWantedAliases => "admin.wanted_aliases",
@@ -331,7 +337,9 @@ impl JobKind {
             | Self::StarTrackTiers
             | Self::SubscriptionsSnapshot => JobLane::Maintenance,
             Self::AdminCatalogRenormalize
+            | Self::AdminLyricsDescription
             | Self::AdminLyricsLookupQueue
+            | Self::AdminLyricsRefetch
             | Self::AdminMusicBrainzNames
             | Self::AdminTrackSearch
             | Self::AdminWantedAliases
@@ -357,7 +365,9 @@ impl FromStr for JobKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let kind = match value {
             "admin.renormalize_catalog" => Self::AdminCatalogRenormalize,
+            "admin.lyrics_description" => Self::AdminLyricsDescription,
             "admin.lyrics_lookup_queue" => Self::AdminLyricsLookupQueue,
+            "admin.lyrics_refetch" => Self::AdminLyricsRefetch,
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
             "admin.track_search" => Self::AdminTrackSearch,
             "admin.wanted_aliases" => Self::AdminWantedAliases,
@@ -502,7 +512,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 56);
+        assert_eq!(kinds.len(), 58);
     }
 
     #[test]
