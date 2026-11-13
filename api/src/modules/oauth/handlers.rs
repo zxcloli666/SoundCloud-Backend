@@ -62,7 +62,7 @@ fn refused(status: StatusCode, text: &str) -> Response {
 
 fn target_name(provider: LinkProvider) -> &'static str {
     match provider {
-        LinkProvider::Alice => "Алису",
+        LinkProvider::Alice => "Алиса",
         LinkProvider::Salut => "Салют",
     }
 }

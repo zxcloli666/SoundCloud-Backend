@@ -86,7 +86,7 @@ const FORM_TEMPLATE: &str = r#"<!DOCTYPE html>
 <body>
 <main>
 <h1>Связать __ASSISTANT__</h1>
-<p>Введите шесть цифр из приложения на компьютере: Голос, Колонки, Подключить __TARGET__.</p>
+<p>Введите шесть цифр из приложения на компьютере: Настройки → Голос → Алиса и Салют → __TARGET__ → Подключить.</p>
 __ERROR__
 <form method="post" action="/oauth/authorize">
 <input type="hidden" name="client_id" value="__CLIENT_ID__">
