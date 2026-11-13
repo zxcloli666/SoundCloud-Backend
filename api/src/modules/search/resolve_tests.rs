@@ -326,7 +326,7 @@ async fn a_name_that_ends_the_lookup_ends_it_for_every_kind_asked(
 
 async fn a_pool_with_idle(pool: &PgPool, idle: usize) -> anyhow::Result<PgPool> {
     let own = PgPoolOptions::new()
-        .max_connections(8)
+        .max_connections(IDLE_KEPT as u32 + 4)
         .idle_timeout(None)
         .connect_with((*pool.connect_options()).clone())
         .await?;

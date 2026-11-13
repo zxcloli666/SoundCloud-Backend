@@ -5,7 +5,7 @@ use super::catalog::{SearchService, configured};
 use super::resolve::Resolved;
 use crate::error::AppResult;
 
-pub const IDLE_KEPT: usize = 2;
+pub const IDLE_KEPT: usize = 6;
 
 pub struct Lane {
     pub tx: Transaction<'static, Postgres>,
