@@ -337,6 +337,65 @@ async fn a_title_said_with_its_artist_found_exactly_and_well_known_ends_the_look
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_well_known_title_said_alone_ends_the_lookup(pool: PgPool) -> anyhow::Result<()> {
+    let songs = [
+        song(1, "Nightcall", "Kavinsky", 5_000_000),
+        song(2, "Roadgame", "Other Band", 100),
+    ];
+    seed(&pool, &songs).await?;
+    let found = found_of(&pool, &[Kind::Track], &["nightcall", "roadgame"]).await?;
+    assert_eq!(found[0].id, "soundcloud:tracks:1", "{found:?}");
+    assert!(found.iter().all(|track| track.variant == 0), "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_title_said_alone_that_few_have_played_does_not_end_the_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let songs = [
+        song(1, "Nightcall", "Kavinsky", 400_000),
+        song(2, "Roadgame", "Other Band", 100),
+    ];
+    seed(&pool, &songs).await?;
+    let found = found_of(&pool, &[Kind::Track], &["nightcall", "roadgame"]).await?;
+    assert_eq!(found[0].id, "soundcloud:tracks:1", "{found:?}");
+    assert!(found.iter().any(|track| track.variant == 1), "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_title_said_exactly_comes_before_a_longer_title(pool: PgPool) -> anyhow::Result<()> {
+    let songs = [
+        song(1, "Mama", "A Band With A Long Name", 300_000),
+        song(2, "Mama Said", "Sol", 5_000_000),
+    ];
+    seed(&pool, &songs).await?;
+    let found = found_of(&pool, &[Kind::Track], &["mama"]).await?;
+    assert_eq!(found[0].id, "soundcloud:tracks:1", "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_well_known_title_is_found_among_thousands_that_share_its_word(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, metadata_artist,
+                             uploader_username, uploader_sc_user_id, duration_ms, play_count_sc, sharing)
+         SELECT n::text, 'soundcloud:tracks:' || n, 'Mama take ' || n, 'mama take ' || n,
+                'band ' || n, 'band ' || n, n::text, 100000 + n, 50, 'public'
+         FROM generate_series(1000, 3600) AS n",
+    )
+    .execute(&pool)
+    .await?;
+    seed(&pool, &[song(1, "Mama", "Sol", 5_000_000)]).await?;
+    let found = found_of(&pool, &[Kind::Track], &["mama"]).await?;
+    assert_eq!(found[0].id, "soundcloud:tracks:1", "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_name_that_ends_the_lookup_ends_it_for_every_kind_asked(
     pool: PgPool,
 ) -> anyhow::Result<()> {
