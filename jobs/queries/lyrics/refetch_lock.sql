@@ -24,6 +24,7 @@ WITH repair AS MATERIALIZED (
 ), cache AS MATERIALIZED (
     SELECT cache.plain_text,
            cache.content_generation,
+           (NULLIF(btrim(cache.synced_lrc), '') IS NOT NULL) AS has_synced,
            (cache.source = 'genius'
                AND COALESCE(cache.plain_source, cache.source) = 'genius'
                AND cache.created_at = repair.cache_created_at) AS same_row
@@ -34,6 +35,7 @@ WITH repair AS MATERIALIZED (
 )
 SELECT cache.plain_text,
        cache.content_generation AS "content_generation?",
-       COALESCE(cache.same_row, false) AS "same_row!"
+       COALESCE(cache.same_row, false) AS "same_row!",
+       COALESCE(cache.has_synced, false) AS "has_synced!"
 FROM repair
          LEFT JOIN cache ON true
