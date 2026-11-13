@@ -91,6 +91,7 @@ SELECT v.cls FROM (VALUES
     ('lyrics_lookup_backfill_state', 'P'),
     ('lyrics_lookup_queue', 'P'),
     ('lyrics_lookup_state', 'C'),
+    ('lyrics_repair', 'P'),
     ('oauth_app_request_cooldowns', 'A'),
     ('oauth_app_token_issuance_reservations', 'P'),
     ('oauth_app_token_refresh_state', 'P'),

@@ -515,6 +515,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_lyrics_repair(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.lyrics_repair t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.lyrics_repair t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_oauth_app_token_issuance_reservations(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1256,6 +1271,8 @@ BEGIN
             PERFORM public.scd_purge_lyrics_lookup_queue(k);
         WHEN 'lyrics_lookup_state' THEN
             PERFORM public.scd_purge_lyrics_lookup_state(k);
+        WHEN 'lyrics_repair' THEN
+            PERFORM public.scd_purge_lyrics_repair(k);
         WHEN 'oauth_app_token_issuance_reservations' THEN
             PERFORM public.scd_purge_oauth_app_token_issuance_reservations(k);
         WHEN 'oauth_app_token_refresh_state' THEN
