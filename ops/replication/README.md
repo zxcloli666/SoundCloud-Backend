@@ -145,7 +145,7 @@ Order for 0333-0334: core, main and star in any order, all three before the api 
 
 Order for 0335-0336: main and star first, then core, all before the first run of the new admin kinds: `admin_maintenance_runs` is C, and an api node with the old kind CHECK fails the apply of core's `lyrics_refetch` or `lyrics_description` run row. `lyrics_repair` is core-private, nothing is published for it; main and star get the empty table and never write it.
 
-Order for 0337-0338: only after the `track_search` run of 0332 finished clean and `VACUUM ANALYZE track_search` ran. Build both indexes by hand on core, main and star with the statements of the two files (a concurrent build takes no write lock, so the triggers and the apply keep writing), check `indisvalid`, then migrate the three nodes (both files no-op), then the api on main and star and jobs on core. An api before its node has 0338 refuses to start.
+Order for 0337-0338: only after the `track_search` run of 0332 finished clean and `VACUUM ANALYZE track_search` ran. Build both indexes by hand on core, main and star with the statements of the two files (a concurrent build takes no write lock, so the triggers and the apply keep writing) with `lock_timeout` 0: the build waits for every older transaction, and a timeout leaves an invalid index to drop with `DROP INDEX CONCURRENTLY`. Check `indisvalid`, then migrate the three nodes (both files no-op), then the api on main and star and jobs on core. An api before its node has 0338 refuses to start.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
