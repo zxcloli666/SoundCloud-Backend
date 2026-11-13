@@ -1235,6 +1235,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_repair_pkey", "primary": true, "where": null}
