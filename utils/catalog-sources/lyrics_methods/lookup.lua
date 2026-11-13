@@ -1,5 +1,6 @@
 local MAX_REQUESTS = 5
 local requests = 0
+local genius_only = inputs.genius_only == true
 
 local function spare(count)
   return requests + count <= MAX_REQUESTS
@@ -302,7 +303,7 @@ end
 
 local linked = attempt("genius", linked_genius)
 if linked ~= nil then
-  if spare(1) then
+  if not genius_only and spare(1) then
     attempt("lrclib", add_lrclib_exact)
   end
   candidates[#candidates + 1] = {
@@ -322,7 +323,9 @@ for index, query in ipairs(inputs.queries or {}) do
     break
   end
   if nonempty(query) then
-    attempt("lrclib", add_lrclib, query, index)
+    if not genius_only then
+      attempt("lrclib", add_lrclib, query, index)
+    end
     if genius_pages < 2 and not settled() and spare(2) then
       attempt("genius", add_genius, query, index)
     end
