@@ -76,6 +76,8 @@ struct LuaInputs<'a> {
     genius_song_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     genius_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    genius_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +162,7 @@ impl LyricsSources {
         &self,
         hints: &LyricsHints,
         queries: &[String],
+        genius_only: bool,
     ) -> SourceResult<LuaEnvelope> {
         let payload = serde_json::to_vec(&LuaInputs {
             artist: hints.artist.trim(),
@@ -168,6 +171,7 @@ impl LyricsSources {
             queries,
             genius_song_id: hints.genius_song_id,
             genius_url: hints.genius_url.as_deref(),
+            genius_only,
         })
         .map_err(|error| SourceError::Invalid(format!("lyrics lua input: {error}")))?;
         let output = self
@@ -188,7 +192,7 @@ impl LyricsSources {
         hints: &LyricsHints,
         queries: &[String],
     ) -> SourceResult<LyricsLookupOutcome> {
-        let envelope = self.lua_envelope(hints, queries).await?;
+        let envelope = self.lua_envelope(hints, queries, false).await?;
         let only_blocked_genius = envelope.genius_blocked
             && envelope
                 .failed
@@ -1181,6 +1185,7 @@ mod tests {
         raw_mode: RawMode,
         method_calls: AtomicUsize,
         raw_calls: AtomicUsize,
+        last_inputs: std::sync::Mutex<Option<Bytes>>,
     }
 
     struct LiveRelay {
@@ -1242,6 +1247,7 @@ mod tests {
                 raw_mode,
                 method_calls: AtomicUsize::new(0),
                 raw_calls: AtomicUsize::new(0),
+                last_inputs: std::sync::Mutex::new(None),
             })
         }
     }
@@ -1251,9 +1257,10 @@ mod tests {
             &self,
             _method_id: String,
             _script: String,
-            _inputs: Bytes,
+            inputs: Bytes,
         ) -> RelayFuture<'_, Bytes> {
             self.method_calls.fetch_add(1, Ordering::Relaxed);
+            *self.last_inputs.lock().unwrap() = Some(inputs);
             Box::pin(async move {
                 match self.method_mode {
                     MethodMode::Found => Ok(Bytes::from_static(
@@ -1623,12 +1630,30 @@ mod tests {
             queries: &[],
             genius_song_id: None,
             genius_url: None,
+            genius_only: false,
         })
         .unwrap();
         let object = payload.as_object().unwrap();
         assert!(!object.contains_key("genius_song_id"));
         assert!(!object.contains_key("genius_url"));
         assert!(!object.contains_key("duration_sec"));
+        assert!(!object.contains_key("genius_only"));
+    }
+
+    #[tokio::test]
+    async fn the_normal_lookup_leaves_genius_only_out_and_the_refetch_sets_it() {
+        let relay = MockRelay::new(MethodMode::Found, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+
+        service.lookup(&hints()).await;
+        let normal: serde_json::Value =
+            serde_json::from_slice(&relay.last_inputs.lock().unwrap().clone().unwrap()).unwrap();
+        service.genius_texts(&hints()).await;
+        let refetch: serde_json::Value =
+            serde_json::from_slice(&relay.last_inputs.lock().unwrap().clone().unwrap()).unwrap();
+
+        assert!(!normal.as_object().unwrap().contains_key("genius_only"));
+        assert_eq!(refetch["genius_only"], true);
     }
 
     #[tokio::test]
