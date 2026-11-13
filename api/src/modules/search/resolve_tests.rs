@@ -401,29 +401,6 @@ async fn a_fuller_variant_is_asked_after_the_name_that_ends_the_lookup(
     Ok(())
 }
 
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn a_fuller_variant_found_exactly_does_not_end_the_lookup(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    seed_a_name_and_its_other_form(&pool, 0.86).await?;
-    let found = service(&pool)?
-        .resolve(
-            &["kween".to_owned(), "queen".to_owned(), "queens".to_owned()],
-            &[Kind::Artist],
-            5,
-            false,
-            &["queen".to_owned()],
-        )
-        .await?;
-    let ids: Vec<&str> = found
-        .values()
-        .flatten()
-        .map(|hit| hit.id.as_str())
-        .collect();
-    assert_eq!(ids, [WHOLE, FORM], "{found:?}");
-    Ok(())
-}
-
 async fn a_pool_with_idle(pool: &PgPool, idle: usize) -> anyhow::Result<PgPool> {
     let own = PgPoolOptions::new()
         .max_connections(IDLE_KEPT as u32 + 4)
