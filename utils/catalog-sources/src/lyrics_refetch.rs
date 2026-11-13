@@ -24,7 +24,7 @@ impl LyricsSources {
             return GeniusTexts::InsufficientMetadata;
         }
         let queries = heuristic_queries(hints.artist.trim(), title);
-        match self.lua_envelope(hints, &queries).await {
+        match self.lua_envelope(hints, &queries, true).await {
             Ok(envelope) => genius_texts(envelope),
             Err(error) => GeniusTexts::Retry(failure(&error)),
         }
