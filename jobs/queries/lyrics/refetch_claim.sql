@@ -15,7 +15,7 @@ WITH owned_job AS MATERIALIZED (
       AND repair.status = 'pending'
       AND repair.claim_job_id IS NULL
       AND repair.next_run_at <= now()
-    ORDER BY repair.priority DESC, repair.next_run_at, repair.sc_track_id
+    ORDER BY repair.priority, repair.next_run_at, repair.sc_track_id
     FOR UPDATE OF repair SKIP LOCKED
     LIMIT $4
 ), claimed AS (

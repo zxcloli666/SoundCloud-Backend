@@ -131,6 +131,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 64. `0339_track_search_title_popular`: `(title_normalized, play_count_sc DESC, id DESC)` on `track_search`, only the rows with `play_count_sc >= 100000`; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`. The voice lookup (`resolve_tracks.sql`) reads it to always see the most played tracks whose title is exactly what was said, however many other titles share its words. The api requires 0339.
 65. `0340_tracks_search_doc_gin_drop`: `DROP INDEX CONCURRENTLY` of `tracks_search_doc_gin`; the track search reads `track_search_doc_gin` since 0337-0338 and nothing else reads the old index.
 66. `0341_tracks_uploader_popular_idx_drop`: `DROP INDEX CONCURRENTLY` of `tracks_uploader_popular_idx`; its only reader was the uploader arm of the old track search, which reads `track_search_uploader_popular` since 0338. `followings_tracks.sql` uses `tracks_uploader_idx`.
+67. `0342_lyrics_repair_due_important_idx`: `(priority, next_run_at, sc_track_id)` on `lyrics_repair`, the same partial predicate as `lyrics_repair_due_idx`; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`. The refetch claim takes the lowest `priority` first, the most important tracks.
+68. `0343_lyrics_repair_due_idx_drop`: `DROP INDEX CONCURRENTLY` of `lyrics_repair_due_idx`; its order was `priority DESC`, nothing reads it once the claim sorts ascending.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -153,6 +155,8 @@ Order for 0337-0338: only after the `track_search` run of 0332 finished clean an
 Order for 0339: build the index by hand on core, main and star with the statement of the file and `lock_timeout` 0, check `indisvalid`, then migrate the three nodes (the file no-ops), then the api on main and star and jobs on core. An api before its node has 0339 refuses to start.
 
 Order for 0340-0341: any node order, after the api that requires 0338 runs on main and star and its search was watched for 1-2 h. Each drop takes SHARE UPDATE EXCLUSIVE on `tracks`: reads and writes do not wait behind it, it waits for an autovacuum of `tracks` and for every older transaction, so run it with `lock_timeout` 0.
+
+Order for 0342-0343: core only, `lyrics_repair` is core-private. 0342 first, then jobs with the ascending claim, then 0343. Until jobs is new, the old claim still reads `lyrics_repair_due_idx`.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
