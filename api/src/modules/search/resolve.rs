@@ -372,7 +372,8 @@ impl Question<'_> {
                     loose,
                     q,
                     self.stem,
-                    self.per_kind * 3
+                    self.per_kind * 3,
+                    WELL_KNOWN_TRACK
                 )
                 .fetch_all(&mut **tx)
                 .await?
