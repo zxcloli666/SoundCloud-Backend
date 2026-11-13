@@ -8,11 +8,16 @@ pub(super) enum Verdict {
 }
 
 pub(super) fn verdict(stored: &str, candidates: &[GeniusText]) -> Verdict {
-    let old = comparable(without_header(stored));
+    let body = without_header(stored);
+    let had_header = body.len() != stored.len();
+    let old = comparable(body);
     let mut unchanged = false;
     for (index, candidate) in candidates.iter().enumerate() {
         let new = comparable(&candidate.text);
         if new == old {
+            if had_header && !new.is_empty() {
+                return Verdict::Replace(index);
+            }
             unchanged = true;
         } else if replaces(&old, &new, candidate.linked) {
             return Verdict::Replace(index);
@@ -89,6 +94,28 @@ mod tests {
             Verdict::Unchanged
         );
         assert_eq!(verdict(stored, &[searched("line two")]), Verdict::Different);
+    }
+
+    #[test]
+    fn a_header_in_front_of_an_equal_text_is_replaced() {
+        let stored = "12 Contributors\nline one\nline two";
+        assert_eq!(
+            verdict(stored, &[searched("line one\nline two")]),
+            Verdict::Replace(0)
+        );
+        assert_eq!(
+            verdict(stored, &[linked("line one line two")]),
+            Verdict::Replace(0)
+        );
+    }
+
+    #[test]
+    fn a_text_without_a_header_equal_to_a_linked_candidate_is_unchanged() {
+        let stored = "line one\nline two";
+        assert_eq!(
+            verdict(stored, &[linked("line one\nline two")]),
+            Verdict::Unchanged
+        );
     }
 
     #[test]
