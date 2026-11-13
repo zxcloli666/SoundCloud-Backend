@@ -71,6 +71,7 @@ struct Asked {
     q: String,
     spelled_too: bool,
     known: bool,
+    fuller: bool,
 }
 
 enum Answer {
@@ -194,9 +195,11 @@ impl SearchService {
         kinds: &[Kind],
         per_kind: i64,
         known: bool,
+        fuller: &[String],
     ) -> AppResult<BTreeMap<Kind, Vec<Resolved>>> {
         let queries = clean_variants(variants);
         let known = known && first_kept(variants, &queries);
+        let fuller = clean_variants(fuller);
         let kinds = clean_kinds(kinds);
         let per_kind = per_kind.clamp(1, MAX_PER_KIND);
         let soft = Instant::now() + SOFT_BUDGET;
@@ -210,6 +213,7 @@ impl SearchService {
                     .enumerate()
                     .map(|(variant, q)| Asked {
                         variant,
+                        fuller: fuller.contains(&q),
                         q,
                         spelled_too: false,
                         known: known && variant == 0,
@@ -225,12 +229,13 @@ impl SearchService {
                     match answer {
                         Ok(Ok(Answer::Found)) => {
                             if found[at..].iter().any(|hit| hit.settles(ask.known)) {
-                                asked
-                                    .retain(|next| next.spelled_too && next.variant == ask.variant);
+                                asked.retain(|next| {
+                                    next.fuller || next.spelled_too && next.variant == ask.variant
+                                });
                             }
                         }
                         Ok(Ok(Answer::Spelled(spelled))) => {
-                            let variant = ask.variant;
+                            let (variant, fuller) = (ask.variant, ask.fuller);
                             let later = asked
                                 .iter()
                                 .position(|next| next.q == spelled && !next.spelled_too);
@@ -245,6 +250,7 @@ impl SearchService {
                                     q: spelled,
                                     spelled_too: false,
                                     known: false,
+                                    fuller,
                                 });
                             }
                         }
@@ -286,8 +292,13 @@ impl SearchService {
             per_kind,
         };
         if ask.spelled_too || ask.known {
-            strictly.ask(lanes, kinds).await?;
-            if ask.spelled_too || found_exactly(lanes) {
+            for kinds in artists_first(kinds, ask.known) {
+                strictly.ask(lanes, &kinds).await?;
+                if found_exactly(lanes) {
+                    return Ok(Answer::Found);
+                }
+            }
+            if ask.spelled_too {
                 return Ok(Answer::Found);
             }
         }
@@ -300,6 +311,13 @@ impl SearchService {
         widely.ask(lanes, kinds).await?;
         Ok(Answer::Found)
     }
+}
+
+fn artists_first(kinds: &[Kind], known: bool) -> Vec<Vec<Kind>> {
+    let named = |kind: &Kind| known && *kind == Kind::Artist;
+    let (artists, rest): (Vec<Kind>, Vec<Kind>) = kinds.iter().partition(|kind| named(kind));
+    let asked = [artists, rest].into_iter();
+    asked.filter(|kinds| !kinds.is_empty()).collect()
 }
 
 fn found_exactly(lanes: &[Lane]) -> bool {
