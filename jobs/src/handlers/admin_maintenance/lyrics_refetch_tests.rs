@@ -110,7 +110,7 @@ async fn the_seed_arms_only_genius_rows_inside_the_broken_window(
                 status: "pending".to_owned(),
                 outcome: None,
                 attempts: 0,
-                priority: 0,
+                priority: 5,
             },
         ]
     );

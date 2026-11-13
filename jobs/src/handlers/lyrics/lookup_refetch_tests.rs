@@ -823,7 +823,7 @@ async fn half_the_batch_goes_to_the_most_important_refetches(pool: PgPool) -> an
 
     let (refetches, lookups) = split(&pool, &job, 4, 50).await?;
 
-    assert_eq!(refetches, ["202", "204"]);
+    assert_eq!(refetches, ["201", "203"]);
     assert_eq!(lookups.len(), 2);
     Ok(())
 }
@@ -854,5 +854,22 @@ async fn an_unused_refetch_share_goes_back_to_the_lookups(pool: PgPool) -> anyho
 
     assert_eq!(refetches, ["201"]);
     assert_eq!(lookups.len(), 3);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_refetch_takes_the_most_important_texts_first(pool: PgPool) -> anyhow::Result<()> {
+    seed_many(&pool, &[("201", 5), ("202", 1), ("203", 0)], &[]).await?;
+    let job = sweep_job(&pool).await?;
+
+    let (refetches, lookups) = split(&pool, &job, 2, 100).await?;
+
+    assert_eq!(refetches, ["202", "203"]);
+    assert!(lookups.is_empty());
+    let pending: Vec<String> =
+        sqlx::query_scalar("SELECT sc_track_id FROM lyrics_repair WHERE claim_job_id IS NULL")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(pending, ["201"]);
     Ok(())
 }

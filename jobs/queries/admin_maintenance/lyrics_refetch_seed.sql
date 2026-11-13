@@ -1,7 +1,7 @@
 WITH page AS MATERIALIZED (
     SELECT cache.sc_track_id,
            cache.created_at,
-           COALESCE(track.index_priority, 0) AS priority,
+           COALESCE(track.index_priority, 5) AS priority,
            cache.source = 'genius'
                AND COALESCE(cache.plain_source, cache.source) = 'genius'
                AND cache.plain_text IS NOT NULL
