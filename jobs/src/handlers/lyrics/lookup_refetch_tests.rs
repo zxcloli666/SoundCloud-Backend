@@ -184,7 +184,20 @@ async fn due_refetches(pool: &PgPool, job: &LeasedJob) -> anyhow::Result<usize> 
 }
 
 async fn kept(pool: &PgPool, texts: GeniusTexts, outcome: &str) -> anyhow::Result<()> {
+    kept_text(pool, OLD, texts, outcome).await
+}
+
+async fn kept_text(
+    pool: &PgPool,
+    stored: &str,
+    texts: GeniusTexts,
+    outcome: &str,
+) -> anyhow::Result<()> {
     seed(pool, "42", "Track", 0).await?;
+    sqlx::query("UPDATE lyrics_cache SET plain_text = $1 WHERE sc_track_id = '42'")
+        .bind(stored)
+        .execute(pool)
+        .await?;
     let job = sweep_job(pool).await?;
     let handler = handler(pool)?;
     let claim = claim_one(pool, &job).await?;
@@ -265,7 +278,36 @@ async fn a_different_text_keeps_the_stored_one(pool: PgPool) -> anyhow::Result<(
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_same_text_is_unchanged(pool: PgPool) -> anyhow::Result<()> {
-    kept(&pool, linked("line two\nline three"), "unchanged").await
+    kept_text(
+        &pool,
+        "line two\nline three",
+        linked("line two\nline three"),
+        "unchanged",
+    )
+    .await
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_junk_header_in_front_of_the_same_text_is_dropped(pool: PgPool) -> anyhow::Result<()> {
+    seed(&pool, "42", "Track", 0).await?;
+    let job = sweep_job(&pool).await?;
+    let handler = handler(&pool)?;
+    let claim = claim_one(&pool, &job).await?;
+
+    handler
+        .settle_refetch(&job, &claim, linked("line two\nline three"))
+        .await?;
+
+    let text: String =
+        sqlx::query_scalar("SELECT plain_text FROM lyrics_cache WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(text, "line two\nline three");
+    assert_eq!(
+        ledger(&pool, "42").await?,
+        ("done".to_owned(), Some("replaced".to_owned()), 1, true)
+    );
+    Ok(())
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]

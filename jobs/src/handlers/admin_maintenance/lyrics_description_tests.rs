@@ -106,7 +106,8 @@ async fn a_leaked_description_is_cut_off_and_the_old_text_is_kept(
         .await?;
     let before = rows(&pool).await?;
 
-    run(&pool).await?;
+    let job = claimed(&pool).await?;
+    run(&pool, &job).await?;
 
     let after = rows(&pool).await?;
     for (before, after) in before.iter().zip(&after) {
@@ -177,13 +178,12 @@ async fn a_leaked_description_is_cut_off_and_the_old_text_is_kept(
     assert_eq!(totals, (9, 3));
 
     let first = snapshot(&pool).await?;
-    run(&pool).await?;
+    run(&pool, &job).await?;
     assert_eq!(first, snapshot(&pool).await?);
     Ok(())
 }
 
-async fn run(pool: &PgPool) -> anyhow::Result<()> {
-    let run_id = Uuid::now_v7();
+async fn claimed(pool: &PgPool) -> anyhow::Result<LeasedJob> {
     let queue = JobRepository::new(pool.clone(), "lyrics-description-admin-test".to_owned());
     queue
         .enqueue_if_absent(&NewJob {
@@ -192,14 +192,14 @@ async fn run(pool: &PgPool) -> anyhow::Result<()> {
             dedup_key: Some(LYRICS_DESCRIPTION.to_owned()),
             payload: serde_json::json!({
                 "version": "1",
-                "payload": { "run_id": run_id }
+                "payload": { "run_id": Uuid::now_v7() }
             }),
             priority: 20,
             max_attempts: 8,
             available_at: chrono::Utc::now() - chrono::Duration::minutes(1),
         })
         .await?;
-    let job: LeasedJob = match queue
+    let job = queue
         .claim(
             &[JobKind::AdminLyricsDescription],
             ClaimOrder::Priority,
@@ -208,14 +208,16 @@ async fn run(pool: &PgPool) -> anyhow::Result<()> {
         )
         .await?
         .pop()
-    {
-        Some(job) => job,
-        None => anyhow::bail!("lyrics description job was not claimed"),
-    };
+        .ok_or_else(|| anyhow::anyhow!("lyrics description job was not claimed"))?;
+    Ok(job)
+}
+
+async fn run(pool: &PgPool, job: &LeasedJob) -> anyhow::Result<()> {
+    let run_id = Uuid::now_v7();
     let handler = handler(pool);
     for _ in 0..10 {
         handler
-            .strip_lyrics_descriptions(&job, AdminMaintenancePayload { run_id })
+            .strip_lyrics_descriptions(job, AdminMaintenancePayload { run_id })
             .await?;
         let status: String =
             sqlx::query_scalar("SELECT status FROM admin_maintenance_runs WHERE kind = $1")

@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_nats::jetstream::stream;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use backend_contracts::{JOB_INGRESS_STREAM, JOB_INGRESS_SUBJECT};
+use backend_contracts::{JOB_INGRESS_STREAM, JOB_INGRESS_SUBJECT, JobKind};
 use futures::StreamExt;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -85,12 +85,12 @@ async fn the_lyrics_repair_routes_enqueue_their_own_job_kinds(pool: PgPool) -> a
         (
             "/admin/maintenance/lyrics-refetch",
             "lyrics_refetch",
-            "admin.lyrics_refetch",
+            JobKind::AdminLyricsRefetch,
         ),
         (
             "/admin/maintenance/lyrics-description",
             "lyrics_description",
-            "admin.lyrics_description",
+            JobKind::AdminLyricsDescription,
         ),
     ] {
         let (status, _) = send(&app, "POST", path, None).await?;
@@ -102,7 +102,7 @@ async fn the_lyrics_repair_routes_enqueue_their_own_job_kinds(pool: PgPool) -> a
         assert_eq!(body["started"], true);
 
         let command = command_for(&mut subscription, kind).await?;
-        assert_eq!(command["kind"], job_kind);
+        assert_eq!(command["kind"], serde_json::to_value(job_kind)?);
         assert_eq!(command["enqueueIfAbsent"], true);
 
         sqlx::query(

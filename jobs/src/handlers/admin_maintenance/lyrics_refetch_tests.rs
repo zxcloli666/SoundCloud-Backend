@@ -206,6 +206,7 @@ async fn the_drain_waits_while_rows_are_pending_and_completes_when_none_are(
     seed_all(&pool, &job, run_id).await?;
     assert_eq!(totals(&pool).await?.phase, "drain");
 
+    let job = next_claim(&pool, &job, run_id).await?;
     step(&pool, &job, run_id).await?;
     let waiting = totals(&pool).await?;
     assert_eq!(
@@ -263,6 +264,10 @@ async fn the_drain_waits_while_rows_are_pending_and_completes_when_none_are(
 
 async fn start(pool: &PgPool) -> anyhow::Result<(LeasedJob, Uuid)> {
     let run_id = Uuid::now_v7();
+    Ok((claim(pool, run_id).await?, run_id))
+}
+
+async fn claim(pool: &PgPool, run_id: Uuid) -> anyhow::Result<LeasedJob> {
     let queue = JobRepository::new(pool.clone(), "lyrics-refetch-admin-test".to_owned());
     queue
         .enqueue_if_absent(&NewJob {
@@ -288,7 +293,17 @@ async fn start(pool: &PgPool) -> anyhow::Result<(LeasedJob, Uuid)> {
         .await?
         .pop()
         .ok_or_else(|| anyhow::anyhow!("lyrics refetch job was not claimed"))?;
-    Ok((job, run_id))
+    Ok(job)
+}
+
+async fn next_claim(pool: &PgPool, job: &LeasedJob, run_id: Uuid) -> anyhow::Result<LeasedJob> {
+    let queue = JobRepository::new(pool.clone(), "lyrics-refetch-admin-test".to_owned());
+    queue.complete(job).await?;
+    sqlx::query("UPDATE background_jobs SET available_at = now() WHERE dedup_key = $1")
+        .bind(LYRICS_REFETCH)
+        .execute(pool)
+        .await?;
+    claim(pool, run_id).await
 }
 
 async fn step(pool: &PgPool, job: &LeasedJob, run_id: Uuid) -> anyhow::Result<()> {
