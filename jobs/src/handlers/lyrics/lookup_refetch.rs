@@ -2,7 +2,7 @@ use catalog_sources::{GeniusTexts, LyricsFailure, LyricsHints};
 use sqlx::PgExecutor;
 
 use super::{EXPIRED_RELEASE_BATCH, LOOKUP_DEADLINE, LyricsLookupHandler};
-use crate::handlers::lyrics::refetch_text::{Verdict, verdict};
+use crate::handlers::lyrics::refetch_text::{Verdict, is_header_only, verdict};
 use crate::handlers::star_priority;
 use crate::queue::{JobError, JobResult, LeasedJob};
 
@@ -77,12 +77,12 @@ impl LyricsLookupHandler {
         texts: GeniusTexts,
     ) -> JobResult {
         match texts {
-            GeniusTexts::Missing => self.keep(&self.pool, job, claim, "not_found").await,
+            GeniusTexts::Missing => self.settle_texts(job, claim, &[], "not_found").await,
             GeniusTexts::InsufficientMetadata => {
                 self.keep(&self.pool, job, claim, "no_metadata").await
             }
             GeniusTexts::Retry(_) => self.retry_refetch(job, claim).await,
-            GeniusTexts::Found(texts) => self.settle_texts(job, claim, &texts).await,
+            GeniusTexts::Found(texts) => self.settle_texts(job, claim, &texts, "different").await,
         }
     }
 
@@ -108,6 +108,7 @@ impl LyricsLookupHandler {
         job: &LeasedJob,
         claim: &RefetchClaim,
         texts: &[catalog_sources::GeniusText],
+        unmatched: &'static str,
     ) -> JobResult {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         let locked = sqlx::query_file!(
@@ -136,9 +137,10 @@ impl LyricsLookupHandler {
                     Verdict::Unchanged => {
                         self.keep(&mut *transaction, job, claim, "unchanged").await
                     }
-                    Verdict::Different => {
-                        self.keep(&mut *transaction, job, claim, "different").await
+                    Verdict::Different if is_header_only(stored) && !locked.has_synced => {
+                        self.clear(&mut transaction, job, claim, generation).await
                     }
+                    Verdict::Different => self.keep(&mut *transaction, job, claim, unmatched).await,
                 }
             }
         };
@@ -179,6 +181,36 @@ impl LyricsLookupHandler {
         self.enqueue_align_if_ready(transaction, &claim.sc_track_id, tier)
             .await?;
         crate::metrics::record_lyrics_refetch("replaced", 1);
+        Ok(())
+    }
+
+    async fn clear(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        job: &LeasedJob,
+        claim: &RefetchClaim,
+        generation: i64,
+    ) -> JobResult {
+        let settled = sqlx::query_file_scalar!(
+            "queries/lyrics/refetch_clear.sql",
+            job.id,
+            job.generation,
+            job.lease_id,
+            &claim.sc_track_id,
+            generation
+        )
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(JobError::retryable)?;
+        let Some(outcome) = settled else {
+            return Ok(());
+        };
+        let label = if outcome == "cleared" {
+            "cleared"
+        } else {
+            "stale"
+        };
+        crate::metrics::record_lyrics_refetch(label, 1);
         Ok(())
     }
 

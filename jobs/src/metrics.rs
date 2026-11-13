@@ -119,8 +119,9 @@ const LYRICS_LOOKUP_RETRY_CLASSES: [&str; 10] = [
     "deadline",
     "other",
 ];
-const LYRICS_REFETCH_OUTCOME_LABELS: [&str; 9] = [
+const LYRICS_REFETCH_OUTCOME_LABELS: [&str; 10] = [
     "replaced",
+    "cleared",
     "unchanged",
     "different",
     "not_found",

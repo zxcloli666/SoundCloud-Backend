@@ -30,6 +30,11 @@ pub(super) fn verdict(stored: &str, candidates: &[GeniusText]) -> Verdict {
     }
 }
 
+pub(super) fn is_header_only(stored: &str) -> bool {
+    let body = without_header(stored);
+    body.len() != stored.len() && body.trim().is_empty()
+}
+
 fn replaces(old: &str, new: &str, linked: bool) -> bool {
     if new.len() <= old.len() {
         return false;
@@ -194,6 +199,25 @@ mod tests {
         let stored = "tail";
         let candidates = [searched("other song"), searched("tail")];
         assert_eq!(verdict(stored, &candidates), Verdict::Unchanged);
+    }
+
+    #[test]
+    fn a_text_of_only_a_header_line_is_header_only() {
+        assert!(is_header_only("12 ContributorsSong Lyrics"));
+        assert!(is_header_only("1 ContributorSong Lyrics"));
+        assert!(is_header_only("12 ContributorsSong Lyrics\n \n"));
+    }
+
+    #[test]
+    fn a_header_with_song_lines_is_not_header_only() {
+        assert!(!is_header_only("12 ContributorsSong Lyrics\nline one"));
+    }
+
+    #[test]
+    fn a_normal_or_empty_text_is_not_header_only() {
+        assert!(!is_header_only("line one\nline two"));
+        assert!(!is_header_only(""));
+        assert!(!is_header_only("   "));
     }
 
     #[test]

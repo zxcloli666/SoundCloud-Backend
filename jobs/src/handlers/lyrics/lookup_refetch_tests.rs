@@ -15,6 +15,7 @@ use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob};
 
 const OLD: &str = "12 Contributors\nline two\nline three";
 const NEW: &str = "zebrafish opening\nline two\nline three";
+const HEADER_ONLY: &str = "12 ContributorsSong Lyrics";
 const CREATED: &str = "2026-11-01 12:00:00";
 
 pub(super) fn track_ids(works: &[Work]) -> Vec<String> {
@@ -268,6 +269,207 @@ async fn a_better_text_replaces_the_stored_one_and_resets_the_derived_state(
         ("done".to_owned(), Some("replaced".to_owned()), 1, true)
     );
     assert_eq!(downstream, vec!["lyrics.dispatch_transcription".to_owned()]);
+    Ok(())
+}
+
+fn candidate(text: &str) -> GeniusTexts {
+    GeniusTexts::Found(vec![GeniusText {
+        text: text.to_owned(),
+        linked: false,
+    }])
+}
+
+async fn seed_header_only(pool: &PgPool, synced: Option<&str>) -> anyhow::Result<()> {
+    seed(pool, "42", "Track", 0).await?;
+    sqlx::query("UPDATE lyrics_cache SET plain_text = $1, synced_lrc = $2")
+        .bind(HEADER_ONLY)
+        .bind(synced)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn lookup_states(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_state")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn cleared(pool: &PgPool, texts: GeniusTexts) -> anyhow::Result<()> {
+    seed_header_only(pool, None).await?;
+    let job = sweep_job(pool).await?;
+    let handler = handler(pool)?;
+    let claim = claim_one(pool, &job).await?;
+
+    handler.settle_refetch(&job, &claim, texts).await?;
+
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_cache")
+        .fetch_one(pool)
+        .await?;
+    let old: Option<String> =
+        sqlx::query_scalar("SELECT old_plain_text FROM lyrics_repair WHERE sc_track_id = '42'")
+            .fetch_one(pool)
+            .await?;
+    let states: Vec<(String, String)> =
+        sqlx::query_as("SELECT sc_track_id, status FROM lyrics_lookup_state")
+            .fetch_all(pool)
+            .await?;
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue")
+        .fetch_one(pool)
+        .await?;
+    assert_eq!(rows, 0);
+    assert_eq!(old.as_deref(), Some(HEADER_ONLY));
+    assert_eq!(states, vec![("42".to_owned(), "pending".to_owned())]);
+    assert_eq!(queued, 1);
+    assert_eq!(
+        ledger(pool, "42").await?,
+        ("done".to_owned(), Some("cleared".to_owned()), 1, true)
+    );
+    Ok(())
+}
+
+async fn kept_with_synced(pool: &PgPool, texts: GeniusTexts, outcome: &str) -> anyhow::Result<()> {
+    seed_header_only(pool, Some("[00:01.00] line")).await?;
+    let job = sweep_job(pool).await?;
+    let handler = handler(pool)?;
+    let claim = claim_one(pool, &job).await?;
+    let before = version(pool, "42").await?;
+
+    handler.settle_refetch(&job, &claim, texts).await?;
+
+    assert_eq!(version(pool, "42").await?, before);
+    assert_eq!(
+        ledger(pool, "42").await?,
+        ("done".to_owned(), Some(outcome.to_owned()), 1, true)
+    );
+    assert_eq!(lookup_states(pool).await?, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_header_only_text_without_a_genius_text_is_cleared_and_requeued(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    cleared(&pool, GeniusTexts::Missing).await
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_header_only_text_with_an_unconfirmed_candidate_is_cleared(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    cleared(&pool, candidate("whole song text")).await
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_header_only_text_with_synced_lyrics_is_kept_when_the_page_is_missing(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    kept_with_synced(&pool, GeniusTexts::Missing, "not_found").await
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_header_only_text_with_synced_lyrics_is_kept_when_no_candidate_confirms(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    kept_with_synced(&pool, candidate("whole song text"), "different").await
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_header_with_song_lines_is_kept_when_the_page_is_missing(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    kept(&pool, GeniusTexts::Missing, "not_found").await?;
+    assert_eq!(lookup_states(&pool).await?, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_linked_text_still_replaces_a_header_only_text(pool: PgPool) -> anyhow::Result<()> {
+    seed_header_only(&pool, None).await?;
+    let job = sweep_job(&pool).await?;
+    let handler = handler(&pool)?;
+    let claim = claim_one(&pool, &job).await?;
+
+    handler.settle_refetch(&job, &claim, linked(NEW)).await?;
+
+    let text: String =
+        sqlx::query_scalar("SELECT plain_text FROM lyrics_cache WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(text, NEW);
+    assert_eq!(
+        ledger(&pool, "42").await?,
+        ("done".to_owned(), Some("replaced".to_owned()), 1, true)
+    );
+    assert_eq!(lookup_states(&pool).await?, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_existing_lookup_state_is_left_as_it_is(pool: PgPool) -> anyhow::Result<()> {
+    seed_header_only(&pool, None).await?;
+    sqlx::query(
+        "INSERT INTO lyrics_lookup_state (
+             track_id, sc_track_id, priority, input_title, input_artist, input_duration_ms,
+             status, miss_streak, created_at
+         ) SELECT id, sc_track_id, 3, 'kept title', 'kept artist', 1, 'not_found', 4, now()
+           FROM tracks",
+    )
+    .execute(&pool)
+    .await?;
+    let state = "SELECT input_title, status, miss_streak, priority FROM lyrics_lookup_state";
+    let before: Vec<(String, String, i32, i16)> = sqlx::query_as(state).fetch_all(&pool).await?;
+    let job = sweep_job(&pool).await?;
+    let handler = handler(&pool)?;
+    let claim = claim_one(&pool, &job).await?;
+
+    handler
+        .settle_refetch(&job, &claim, GeniusTexts::Missing)
+        .await?;
+
+    let after: Vec<(String, String, i32, i16)> = sqlx::query_as(state).fetch_all(&pool).await?;
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_cache")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(before.len(), 1);
+    assert_eq!(after, before);
+    assert_eq!(rows, 0);
+    assert_eq!(
+        ledger(&pool, "42").await?,
+        ("done".to_owned(), Some("cleared".to_owned()), 1, true)
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_clear_over_a_changed_generation_is_stale(pool: PgPool) -> anyhow::Result<()> {
+    seed_header_only(&pool, None).await?;
+    let job = sweep_job(&pool).await?;
+    let claim = claim_one(&pool, &job).await?;
+    sqlx::query("UPDATE lyrics_cache SET content_generation = 5")
+        .execute(&pool)
+        .await?;
+
+    let outcome = sqlx::query_file_scalar!(
+        "queries/lyrics/refetch_clear.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        &claim.sc_track_id,
+        1_i64
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let cache: (String, i64) =
+        sqlx::query_as("SELECT plain_text, content_generation FROM lyrics_cache")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(outcome, "stale");
+    assert_eq!(cache, (HEADER_ONLY.to_owned(), 5));
+    assert_eq!(lookup_states(&pool).await?, 0);
     Ok(())
 }
 
