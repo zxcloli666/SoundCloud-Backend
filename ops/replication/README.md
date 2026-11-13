@@ -128,6 +128,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 61. `0336_scd_install`: the generated SQL again, on top of 0331: the P table gets its registry, row hash and purge entries, every trigger is kept.
 62. `0337_track_search_doc_gin`: the full-text GIN of the search on `track_search`, the same expression as `tracks_search_doc_gin` without its partial predicate; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`.
 63. `0338_track_search_uploader_popular`: `(uploader_sc_user_id, play_count_sc DESC NULLS LAST, id DESC)` on `track_search` for the uploader arm; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`. The api requires 0338: its track search reads only `track_search`.
+64. `0339_track_search_title_popular`: `(title_normalized, play_count_sc DESC, id DESC)` on `track_search`, only the rows with `play_count_sc >= 100000`; one `CREATE INDEX CONCURRENTLY IF NOT EXISTS`. The voice lookup (`resolve_tracks.sql`) reads it to always see the most played tracks whose title is exactly what was said, however many other titles share its words. The api requires 0339.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -146,6 +147,8 @@ Order for 0333-0334: core, main and star in any order, all three before the api 
 Order for 0335-0336: main and star first, then core, all before the first run of the new admin kinds: `admin_maintenance_runs` is C, and an api node with the old kind CHECK fails the apply of core's `lyrics_refetch` or `lyrics_description` run row. `lyrics_repair` is core-private, nothing is published for it; main and star get the empty table and never write it.
 
 Order for 0337-0338: only after the `track_search` run of 0332 finished clean and `VACUUM ANALYZE track_search` ran. Build both indexes by hand on core, main and star with the statements of the two files (a concurrent build takes no write lock, so the triggers and the apply keep writing) with `lock_timeout` 0: the build waits for every older transaction, and a timeout leaves an invalid index to drop with `DROP INDEX CONCURRENTLY`. Check `indisvalid`, then migrate the three nodes (both files no-op), then the api on main and star and jobs on core. An api before its node has 0338 refuses to start.
+
+Order for 0339: build the index by hand on core, main and star with the statement of the file and `lock_timeout` 0, check `indisvalid`, then migrate the three nodes (the file no-ops), then the api on main and star and jobs on core. An api before its node has 0339 refuses to start.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
