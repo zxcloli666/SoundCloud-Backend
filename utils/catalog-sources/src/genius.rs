@@ -32,9 +32,8 @@ static RE_OPEN: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r#"(?i)<div\b[^>]*\bdata-lyrics-container="true"[^>]*>"#).ok());
 static RE_BR: Lazy<Option<Regex>> = Lazy::new(|| Regex::new(r"(?i)<br\s*/?>").ok());
 static RE_TAGS: Lazy<Option<Regex>> = Lazy::new(|| Regex::new(r"<[^>]+>").ok());
-static RE_LEAD_CONTRIB: Lazy<Option<Regex>> =
-    Lazy::new(|| Regex::new(r"(?i)^\d+\s*Contributors").ok());
-static RE_LEAD_LYRICS: Lazy<Option<Regex>> = Lazy::new(|| Regex::new(r"(?i)^[^\n]*?Lyrics").ok());
+static RE_EXCLUDED: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r#"(?i)<div\b[^>]*\bdata-exclude-from-selection="true"[^>]*>"#).ok());
 static RE_LEAD_TEXT_PESN: Lazy<Option<Regex>> =
     Lazy::new(|| Regex::new(r"(?i)^\[Текст песни.*?\]").ok());
 
@@ -1065,19 +1064,16 @@ fn parse_lyrics_html(html: &str) -> Option<String> {
     let open = RE_OPEN.as_ref()?;
     let br = RE_BR.as_ref()?;
     let tags = RE_TAGS.as_ref()?;
-    let lead_contributors = RE_LEAD_CONTRIB.as_ref()?;
-    let lead_lyrics = RE_LEAD_LYRICS.as_ref()?;
     let lead_text = RE_LEAD_TEXT_PESN.as_ref()?;
     let mut parts: Vec<String> = Vec::new();
     let mut cursor = 0usize;
     while let Some(m) = open.find_at(html, cursor) {
-        let start = m.end();
-        if let Some(inner) = extract_balanced_div_content(html, start) {
-            parts.push(inner);
-        }
         cursor = m.end();
-        if cursor >= html.len() {
-            break;
+        if let Some(close) = balanced_div_close(html, cursor) {
+            let part = without_excluded(&html[cursor..close]);
+            if !part.trim().is_empty() {
+                parts.push(part);
+            }
         }
     }
     if parts.is_empty() {
@@ -1096,9 +1092,7 @@ fn parse_lyrics_html(html: &str) -> Option<String> {
         .replace("&apos;", "'")
         .replace("&quot;", "\"");
 
-    text = lead_contributors.replace(&text, "").into_owned();
-    text = lead_lyrics.replace(&text, "").into_owned();
-    text = lead_text.replace(&text, "").into_owned();
+    text = lead_text.replace(text.trim_start(), "").into_owned();
     let trimmed = text.trim().to_string();
     if trimmed.len() > 20 {
         Some(trimmed)
@@ -1107,7 +1101,26 @@ fn parse_lyrics_html(html: &str) -> Option<String> {
     }
 }
 
-fn extract_balanced_div_content(html: &str, start_pos: usize) -> Option<String> {
+fn without_excluded(container: &str) -> String {
+    let Some(excluded) = RE_EXCLUDED.as_ref() else {
+        return container.to_owned();
+    };
+    let mut kept = String::with_capacity(container.len());
+    let mut cursor = 0usize;
+    while let Some(m) = excluded.find_at(container, cursor) {
+        let Some(close) = balanced_div_close(container, m.end()) else {
+            break;
+        };
+        kept.push_str(&container[cursor..m.start()]);
+        cursor = container[close..]
+            .find('>')
+            .map_or(container.len(), |offset| close + offset + 1);
+    }
+    kept.push_str(&container[cursor..]);
+    kept
+}
+
+fn balanced_div_close(html: &str, start_pos: usize) -> Option<usize> {
     let bytes = html.as_bytes();
     let len = bytes.len();
     let mut depth = 1i32;
@@ -1128,7 +1141,7 @@ fn extract_balanced_div_content(html: &str, start_pos: usize) -> Option<String> 
             _ => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(html[start_pos..nc].to_string());
+                    return Some(nc);
                 }
                 pos = nc + 5;
             }
@@ -1181,6 +1194,42 @@ mod tests {
         assert!(Arc::ptr_eq(&copy.api_throttle, &genius.api_throttle));
         assert!(Arc::ptr_eq(&copy.web_throttle, &genius.web_throttle));
         assert!(Arc::ptr_eq(&copy.scrape_sem, &genius.scrape_sem));
+    }
+
+    #[test]
+    fn the_page_header_is_dropped_and_every_lyrics_block_is_kept() {
+        let html = concat!(
+            r#"<div data-lyrics-container="true" class="Lyrics__Container">"#,
+            r#"<div data-exclude-from-selection="true" class="LyricsHeader__Container">"#,
+            r#"<button><span>8 Contributors</span></button>"#,
+            r#"<div class="LyricsHeader__GroupContainer"><div class="LyricsHeader__TitleContainer">"#,
+            r#"<h2>Лето812 Lyrics</h2></div></div>"#,
+            r#"<div class="SongBioPreview"><a href="/about">Саундтрек уходящего лета… Read More</a></div>"#,
+            r#"</div>[Текст песни «Лето812»]<br/><br/>[Интро]<br/>Вы слушаете 812<br/></div>"#,
+            r#"<div class="RightSidebar__Container"><div></div></div>"#,
+            r#"<div data-lyrics-container="true" class="Lyrics__Container"></div>"#,
+            r#"<div data-exclude-from-selection="true"><div id="div-gpt-ad"></div></div>"#,
+            r#"<div data-lyrics-container="true" class="Lyrics__Container">"#,
+            r#"[Куплет]<br/>Ты запомнишь это лето, ты запомнишь нас</div>"#,
+        );
+
+        assert_eq!(
+            parse_lyrics_html(html).as_deref(),
+            Some("[Интро]\nВы слушаете 812\n\n[Куплет]\nТы запомнишь это лето, ты запомнишь нас")
+        );
+    }
+
+    #[test]
+    fn a_first_line_with_the_word_lyrics_is_kept() {
+        let html = concat!(
+            r#"<div data-lyrics-container="true">[Lyrics from Snippet]<br/><br/>"#,
+            r#"[Chorus]<br/>Some line of the song</div>"#,
+        );
+
+        assert_eq!(
+            parse_lyrics_html(html).as_deref(),
+            Some("[Lyrics from Snippet]\n\n[Chorus]\nSome line of the song")
+        );
     }
 
     #[tokio::test]

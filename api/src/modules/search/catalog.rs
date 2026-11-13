@@ -100,6 +100,15 @@ impl Request {
     }
 }
 
+pub(super) async fn configured(
+    mut tx: Transaction<'static, Postgres>,
+) -> AppResult<Transaction<'static, Postgres>> {
+    sqlx::query_file!("queries/search/configure.sql")
+        .fetch_one(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
 fn parse_owner(raw: Option<&str>) -> Result<Option<String>, ()> {
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return Ok(None);
@@ -181,13 +190,10 @@ impl SearchService {
     }
 
     pub(super) async fn begin(&self) -> AppResult<Transaction<'static, Postgres>> {
-        let mut tx = tokio::time::timeout(BEGIN_WAIT, self.pg.begin())
+        let tx = tokio::time::timeout(BEGIN_WAIT, self.pg.begin())
             .await
             .map_err(|_| search_busy())??;
-        sqlx::query_file!("queries/search/configure.sql")
-            .fetch_one(&mut *tx)
-            .await?;
-        Ok(tx)
+        configured(tx).await
     }
 
     pub async fn tracks(

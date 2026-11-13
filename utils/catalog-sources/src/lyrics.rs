@@ -79,18 +79,18 @@ struct LuaInputs<'a> {
 }
 
 #[derive(Deserialize)]
-struct LuaEnvelope {
-    kind: String,
+pub(crate) struct LuaEnvelope {
+    pub(crate) kind: String,
     #[serde(default)]
-    candidates: Vec<LuaCandidate>,
+    pub(crate) candidates: Vec<LuaCandidate>,
     #[serde(default)]
-    failed: Vec<String>,
+    pub(crate) failed: Vec<String>,
     #[serde(default)]
-    genius_blocked: bool,
+    pub(crate) genius_blocked: bool,
 }
 
 #[derive(Deserialize)]
-struct LuaCandidate {
+pub(crate) struct LuaCandidate {
     source: String,
     #[serde(default)]
     synced_lrc: Option<String>,
@@ -156,11 +156,11 @@ impl LyricsSources {
         }
     }
 
-    async fn lookup_lua(
+    pub(crate) async fn lua_envelope(
         &self,
         hints: &LyricsHints,
         queries: &[String],
-    ) -> SourceResult<LyricsLookupOutcome> {
+    ) -> SourceResult<LuaEnvelope> {
         let payload = serde_json::to_vec(&LuaInputs {
             artist: hints.artist.trim(),
             title: hints.title.trim(),
@@ -179,8 +179,16 @@ impl LyricsSources {
                 LOOKUP_OUTPUT_LIMIT,
             )
             .await?;
-        let envelope: LuaEnvelope = serde_json::from_slice(&output)
-            .map_err(|error| SourceError::Invalid(format!("lyrics lua output: {error}")))?;
+        serde_json::from_slice(&output)
+            .map_err(|error| SourceError::Invalid(format!("lyrics lua output: {error}")))
+    }
+
+    async fn lookup_lua(
+        &self,
+        hints: &LyricsHints,
+        queries: &[String],
+    ) -> SourceResult<LyricsLookupOutcome> {
+        let envelope = self.lua_envelope(hints, queries).await?;
         let only_blocked_genius = envelope.genius_blocked
             && envelope
                 .failed
@@ -420,7 +428,7 @@ fn collect_source(
     }
 }
 
-fn lua_candidate(candidate: LuaCandidate) -> Option<LyricsCandidate> {
+pub(crate) fn lua_candidate(candidate: LuaCandidate) -> Option<LyricsCandidate> {
     normalize_candidate(LyricsCandidate {
         source: candidate.source,
         synced_lrc: candidate.synced_lrc,
@@ -733,7 +741,7 @@ fn normalize_query(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn heuristic_queries(artist: &str, title: &str) -> Vec<String> {
+pub(crate) fn heuristic_queries(artist: &str, title: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut queries = Vec::new();
     for value in [format!("{artist} {title}"), title.to_owned()] {
@@ -772,7 +780,7 @@ fn split_artist_title(value: &str) -> Option<(String, String)> {
     None
 }
 
-fn failure(error: &SourceError) -> LyricsFailure {
+pub(crate) fn failure(error: &SourceError) -> LyricsFailure {
     let class = match error {
         SourceError::Status { status: 429, .. } => "rate_limited",
         SourceError::Status {
@@ -791,7 +799,7 @@ fn failure(error: &SourceError) -> LyricsFailure {
     }
 }
 
-fn relay_failure(failed: &[String]) -> LyricsFailure {
+pub(crate) fn relay_failure(failed: &[String]) -> LyricsFailure {
     let any = |needle: &str| failed.iter().any(|failure| failure.contains(needle));
     let class = if any("status 5") {
         "upstream"
@@ -1144,6 +1152,7 @@ mod tests {
     use crate::http::{RelayFuture, RelayReply, RelayTransport};
 
     use super::*;
+    use crate::lyrics_refetch::{GeniusText, GeniusTexts};
 
     #[derive(Clone, Copy)]
     enum MethodMode {
@@ -1154,6 +1163,10 @@ mod tests {
         LrclibBusy,
         PlainWhileLrclibDown,
         SyncedWhileGeniusDown,
+        GeniusLinked,
+        GeniusSearched,
+        LrclibOnly,
+        EmptyGeniusFailed,
         Fail,
     }
 
@@ -1261,6 +1274,18 @@ mod tests {
                     )),
                     MethodMode::SyncedWhileGeniusDown => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"lrclib","synced_lrc":"[00:01.00] A sufficiently long lyrics body from relay","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1}],"failed":["genius: lyrics upstream status 500"]}"#,
+                    )),
+                    MethodMode::GeniusLinked => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"A sufficiently long lrclib lyrics body from relay","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1},{"source":"genius","plain_text":"A sufficiently long genius lyrics body from the linked page","exact":true,"query_index":0}]}"#,
+                    )),
+                    MethodMode::GeniusSearched => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"genius","plain_text":"A sufficiently long genius lyrics body found by search","artist":"Eminem","title":"Lose Yourself","query_index":2}]}"#,
+                    )),
+                    MethodMode::LrclibOnly => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"A sufficiently long lrclib lyrics body from relay","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1}]}"#,
+                    )),
+                    MethodMode::EmptyGeniusFailed => Ok(Bytes::from_static(
+                        br#"{"kind":"empty","failed":["genius: lyrics upstream status 500"]}"#,
                     )),
                     MethodMode::Fail => Err(SourceError::Unreachable(
                         "mock Lua channel failure".to_owned(),
@@ -1395,6 +1420,120 @@ mod tests {
         assert!(matches!(outcome, LyricsLookupOutcome::Found(_)));
         assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
         assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn a_linked_genius_page_is_found_with_the_link_mark() {
+        let relay = MockRelay::new(MethodMode::GeniusLinked, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+
+        let texts = service.genius_texts(&hints()).await;
+
+        assert_eq!(
+            texts,
+            GeniusTexts::Found(vec![GeniusText {
+                text: "A sufficiently long genius lyrics body from the linked page".to_owned(),
+                linked: true,
+            }])
+        );
+        assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn a_searched_genius_page_is_found_without_the_link_mark() {
+        let relay = MockRelay::new(MethodMode::GeniusSearched, RawMode::Fail);
+        let service = sources(relay, String::new());
+
+        let texts = service.genius_texts(&hints()).await;
+
+        assert_eq!(
+            texts,
+            GeniusTexts::Found(vec![GeniusText {
+                text: "A sufficiently long genius lyrics body found by search".to_owned(),
+                linked: false,
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn lrclib_alone_is_a_missing_genius_text() {
+        let relay = MockRelay::new(MethodMode::LrclibOnly, RawMode::Fail);
+        let service = sources(relay, String::new());
+
+        assert_eq!(service.genius_texts(&hints()).await, GeniusTexts::Missing);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_genius_is_retried_not_missing() {
+        let relay = MockRelay::new(MethodMode::GeniusBlocked, RawMode::Hit);
+        let service = sources(relay.clone(), String::new());
+
+        let texts = service.genius_texts(&hints()).await;
+
+        assert_eq!(
+            texts,
+            GeniusTexts::Retry(LyricsFailure {
+                class: "blocked".to_owned(),
+                retry_after_seconds: None,
+            })
+        );
+        assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn an_empty_answer_with_a_genius_failure_is_retried() {
+        let relay = MockRelay::new(MethodMode::EmptyGeniusFailed, RawMode::Hit);
+        let service = sources(relay, String::new());
+
+        let texts = service.genius_texts(&hints()).await;
+
+        assert_eq!(
+            texts,
+            GeniusTexts::Retry(LyricsFailure {
+                class: "upstream".to_owned(),
+                retry_after_seconds: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_empty_answer_is_a_missing_genius_text() {
+        let relay = MockRelay::new(MethodMode::Empty, RawMode::Fail);
+        let service = sources(relay, String::new());
+
+        assert_eq!(service.genius_texts(&hints()).await, GeniusTexts::Missing);
+    }
+
+    #[tokio::test]
+    async fn a_relay_error_is_retried_without_the_raw_path() {
+        let relay = MockRelay::new(MethodMode::Fail, RawMode::Hit);
+        let service = sources(relay.clone(), String::new());
+
+        let texts = service.genius_texts(&hints()).await;
+
+        assert_eq!(
+            texts,
+            GeniusTexts::Retry(LyricsFailure {
+                class: "transport".to_owned(),
+                retry_after_seconds: None,
+            })
+        );
+        assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn a_blank_title_has_insufficient_metadata_for_a_genius_text() {
+        let relay = MockRelay::new(MethodMode::GeniusLinked, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+        let mut blank = hints();
+        blank.title = "  ".to_owned();
+
+        assert_eq!(
+            service.genius_texts(&blank).await,
+            GeniusTexts::InsufficientMetadata
+        );
+        assert_eq!(relay.method_calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

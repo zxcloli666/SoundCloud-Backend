@@ -550,6 +550,18 @@ AS $f$
 SELECT md5(ROW(t.algorithm_version, t.created_at, t.failure_streak, t.generation, t.input_artist, t.input_duration_ms, t.input_genius_song_id, t.input_genius_url, t.input_release_date, t.input_sc_created_at, t.input_title, t.last_error, t.last_outcome, t.miss_streak, t.next_run_at, t.priority, t.retry_after_at, t.sc_track_id, t.source_set_version, t.status, t.track_id, t.updated_at, t.wake_durable_at, t.wake_generation, t.wake_message_id)::text) FROM public.lyrics_lookup_state t WHERE t.track_id = (k ->> 'track_id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_lyrics_repair(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempts, t.cache_created_at, t.claim_expires_at, t.claim_job_generation, t.claim_job_id, t.claim_job_lease_id, t.created_at, t.kind, t.next_run_at, t.old_plain_text, t.outcome, t.priority, t.sc_track_id, t.settled_at, t.status, t.updated_at)::text) FROM public.lyrics_repair t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_oauth_app_request_cooldowns(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1416,6 +1428,8 @@ BEGIN
             RETURN public.scd_row_hash_lyrics_lookup_queue(k);
         WHEN 'lyrics_lookup_state' THEN
             RETURN public.scd_row_hash_lyrics_lookup_state(k);
+        WHEN 'lyrics_repair' THEN
+            RETURN public.scd_row_hash_lyrics_repair(k);
         WHEN 'oauth_app_request_cooldowns' THEN
             RETURN public.scd_row_hash_oauth_app_request_cooldowns(k);
         WHEN 'oauth_app_token_issuance_reservations' THEN

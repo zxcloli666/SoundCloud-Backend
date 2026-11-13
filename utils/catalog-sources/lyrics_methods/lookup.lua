@@ -52,6 +52,49 @@ local function decode_html(value)
   return value
 end
 
+local function div_close(html, from)
+  local depth = 1
+  local position = from
+  while true do
+    local close = string.find(html, "</div", position, true)
+    if close == nil then
+      return nil
+    end
+    local open = string.find(html, "<div", position, true)
+    if open ~= nil and open < close then
+      if string.find(string.sub(html, open + 4, open + 4), "[%s>/]") ~= nil then
+        depth = depth + 1
+      end
+      position = open + 4
+    else
+      depth = depth - 1
+      if depth == 0 then
+        return close
+      end
+      position = close + 5
+    end
+  end
+end
+
+local function selectable(container)
+  local kept = {}
+  local position = 1
+  while true do
+    local start, tag_end = string.find(container, '<div[^>]-data%-exclude%-from%-selection="true"[^>]*>', position)
+    if start == nil then
+      break
+    end
+    local close = div_close(container, tag_end + 1)
+    if close == nil then
+      break
+    end
+    kept[#kept + 1] = string.sub(container, position, start - 1)
+    position = close + 6
+  end
+  kept[#kept + 1] = string.sub(container, position)
+  return table.concat(kept)
+end
+
 local function genius_lyrics(url)
   if not nonempty(url) then
     return nil
@@ -64,14 +107,25 @@ local function genius_lyrics(url)
     return nil
   end
   local parts = {}
-  for container in string.gmatch(html, '<div[^>]-data%-lyrics%-container="true"[^>]*>(.-)</div>') do
-    local text = decode_html(container)
-    if nonempty(text) and #text > 20 then
-      parts[#parts + 1] = text
+  local position = 1
+  while true do
+    local _, tag_end = string.find(html, '<div[^>]-data%-lyrics%-container="true"[^>]*>', position)
+    if tag_end == nil then
+      break
     end
+    local close = div_close(html, tag_end + 1)
+    if close == nil then
+      break
+    end
+    local part = selectable(string.sub(html, tag_end + 1, close - 1))
+    if nonempty(part) then
+      parts[#parts + 1] = part
+    end
+    position = close
   end
-  if #parts > 0 then
-    return table.concat(parts, "\n")
+  local text = string.gsub(decode_html(table.concat(parts, "\n")), "^%[Текст песни[^%]\n]*%]%s*", "")
+  if #text > 20 then
+    return text
   end
   local lower = string.lower(html)
   if string.find(lower, "cf%-challenge") ~= nil or string.find(lower, "just a moment", 1, true) ~= nil then

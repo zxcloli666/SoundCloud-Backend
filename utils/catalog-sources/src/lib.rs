@@ -2,6 +2,7 @@ mod error;
 mod genius;
 mod http;
 mod lyrics;
+mod lyrics_refetch;
 mod musicbrainz;
 mod throttle;
 
@@ -15,6 +16,7 @@ pub use lyrics::{
     LyricsCandidate, LyricsFailure, LyricsHints, LyricsLookupOutcome, LyricsSources,
     strip_lrc_timestamps,
 };
+pub use lyrics_refetch::{GeniusText, GeniusTexts};
 pub use musicbrainz::{
     MbArtist, MbArtistDetails, MbArtistUrl, MbClient, MbRecording, MbRecordingBrief, MbRelease,
     MbReleaseBrief,

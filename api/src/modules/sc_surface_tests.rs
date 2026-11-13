@@ -122,7 +122,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 83] = [
+const CLASSIFIED_ROUTES: [&str; 85] = [
     "/admin/albums",
     "/admin/artists",
     "/admin/artists/{artist_id}",
@@ -137,7 +137,9 @@ const CLASSIFIED_ROUTES: [&str; 83] = [
     "/admin/hydrate",
     "/admin/index-usage",
     "/admin/infra",
+    "/admin/maintenance/lyrics-description",
     "/admin/maintenance/lyrics-lookup-queue",
+    "/admin/maintenance/lyrics-refetch",
     "/admin/maintenance/mb-artist-names",
     "/admin/maintenance/renormalize",
     "/admin/maintenance/track-search",

@@ -168,7 +168,7 @@ async fn finish(handler: &AdminMaintenanceHandler, state: &RunState) -> JobResul
     Ok(PhaseOutcome::Finished)
 }
 
-async fn lagging(handler: &AdminMaintenanceHandler) -> JobResult<bool> {
+pub(super) async fn lagging(handler: &AdminMaintenanceHandler) -> JobResult<bool> {
     let lag: Lag = sqlx::query_as(LAG)
         .fetch_one(&handler.pool)
         .await
@@ -178,13 +178,13 @@ async fn lagging(handler: &AdminMaintenanceHandler) -> JobResult<bool> {
         tracing::info!(
             lag_seconds = lag.lag_seconds,
             backlog_mb = lag.backlog_bytes >> 20,
-            "track_search waits for the subscribers"
+            "admin maintenance waits for the subscribers"
         );
     }
     Ok(lagging)
 }
 
-async fn yielding(
+pub(super) async fn yielding(
     handler: &AdminMaintenanceHandler,
 ) -> JobResult<sqlx::Transaction<'static, sqlx::Postgres>> {
     let mut transaction = handler.pool.begin().await.map_err(JobError::retryable)?;
@@ -195,7 +195,7 @@ async fn yielding(
     Ok(transaction)
 }
 
-fn yielded(error: &sqlx::Error) -> bool {
+pub(super) fn yielded(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .and_then(|error| error.code())

@@ -173,6 +173,10 @@ struct ResolveBody {
     kinds: Vec<Kind>,
     #[serde(default)]
     limit: Option<i64>,
+    #[serde(default)]
+    known: bool,
+    #[serde(default)]
+    fuller: Vec<String>,
 }
 
 async fn resolve(
@@ -192,6 +196,8 @@ async fn resolve(
             &body.variants,
             &kinds,
             body.limit.unwrap_or(DEFAULT_PER_KIND),
+            body.known,
+            &body.fuller,
         )
         .await?;
     Ok(Json(json!({ "results": found })))

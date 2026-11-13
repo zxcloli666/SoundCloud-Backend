@@ -39,6 +39,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_embedding_wire_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_backfill_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_state;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_repair;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_oauth_app_token_issuance_reservations;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_oauth_app_token_refresh_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_oauth_app_tokens;
@@ -2848,6 +2849,8 @@ ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_repair FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_repair', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_oauth_app_request_cooldowns()
 RETURNS trigger
@@ -7823,6 +7826,7 @@ FROM (VALUES
     ('guard', 'lyrics_lookup_backfill_state', 'scd_guard_lyrics_lookup_backfill_state'),
     ('guard', 'lyrics_lookup_queue', 'scd_guard_lyrics_lookup_queue'),
     ('guard', 'lyrics_lookup_state', 'scd_guard_lyrics_lookup_state'),
+    ('guard', 'lyrics_repair', 'scd_guard_lyrics_repair'),
     ('guard', 'oauth_app_token_issuance_reservations', 'scd_guard_oauth_app_token_issuance_reservations'),
     ('guard', 'oauth_app_token_refresh_state', 'scd_guard_oauth_app_token_refresh_state'),
     ('guard', 'oauth_app_tokens', 'scd_guard_oauth_app_tokens'),
@@ -8029,6 +8033,7 @@ BEGIN
             ('lyrics_lookup_state', 'zz_guard'),
             ('lyrics_lookup_state', 'zz_owner'),
             ('lyrics_lookup_state', 'zzz_suppress'),
+            ('lyrics_repair', 'zz_guard'),
             ('oauth_app_request_cooldowns', 'zz_merge'),
             ('oauth_app_request_cooldowns', 'zz_orphan'),
             ('oauth_app_request_cooldowns', 'zz_ver'),

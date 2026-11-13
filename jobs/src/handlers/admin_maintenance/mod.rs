@@ -1,4 +1,6 @@
+mod lyrics_description;
 mod lyrics_queue;
+mod lyrics_refetch;
 mod musicbrainz_names;
 mod renormalize;
 mod track_search;
@@ -20,13 +22,16 @@ use crate::config::AdminMaintenanceConfig;
 use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError};
 
 pub const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
+pub const LYRICS_DESCRIPTION: &str = "lyrics_description";
 pub const LYRICS_LOOKUP_QUEUE: &str = "lyrics_lookup_queue";
+pub const LYRICS_REFETCH: &str = "lyrics_refetch";
 pub const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
 pub const TRACK_SEARCH: &str = "track_search";
 pub const WANTED_ALIASES: &str = "wanted_aliases";
 
 const SLICE_DEADLINE: Duration = Duration::from_secs(180);
 const CONTINUATION_DELAY: Duration = Duration::from_secs(1);
+const WAITING_DELAY: Duration = Duration::from_secs(60);
 const MAX_ATTEMPTS: i16 = 8;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -40,6 +45,7 @@ pub struct SliceProgress {
 #[derive(Debug, Clone, Copy)]
 pub enum PhaseOutcome {
     Advanced,
+    Waiting,
     Finished,
 }
 
@@ -102,6 +108,22 @@ impl AdminMaintenanceHandler {
         self.run(job, payload, LYRICS_LOOKUP_QUEUE).await
     }
 
+    pub async fn refetch_lyrics(
+        &self,
+        job: &LeasedJob,
+        payload: AdminMaintenancePayload,
+    ) -> JobResult {
+        self.run(job, payload, LYRICS_REFETCH).await
+    }
+
+    pub async fn strip_lyrics_descriptions(
+        &self,
+        job: &LeasedJob,
+        payload: AdminMaintenancePayload,
+    ) -> JobResult {
+        self.run(job, payload, LYRICS_DESCRIPTION).await
+    }
+
     pub async fn backfill_track_search(
         &self,
         job: &LeasedJob,
@@ -146,7 +168,14 @@ impl AdminMaintenanceHandler {
         };
 
         match outcome {
-            PhaseOutcome::Advanced => self.enqueue_continuation(kind, payload.run_id).await,
+            PhaseOutcome::Advanced => {
+                self.enqueue_continuation(kind, payload.run_id, CONTINUATION_DELAY)
+                    .await
+            }
+            PhaseOutcome::Waiting => {
+                self.enqueue_continuation(kind, payload.run_id, WAITING_DELAY)
+                    .await
+            }
             PhaseOutcome::Finished => {
                 sqlx::query_file!(
                     "queries/admin_maintenance/complete_run.sql",
@@ -170,6 +199,10 @@ impl AdminMaintenanceHandler {
             lyrics_queue::FIRST_PHASE
         } else if kind == TRACK_SEARCH {
             track_search::FIRST_PHASE
+        } else if kind == LYRICS_REFETCH {
+            lyrics_refetch::FIRST_PHASE
+        } else if kind == LYRICS_DESCRIPTION {
+            lyrics_description::FIRST_PHASE
         } else {
             renormalize::FIRST_PHASE
         }
@@ -184,6 +217,10 @@ impl AdminMaintenanceHandler {
             lyrics_queue::execute(self, state).await
         } else if kind == TRACK_SEARCH {
             track_search::execute(self, state).await
+        } else if kind == LYRICS_REFETCH {
+            lyrics_refetch::execute(self, state).await
+        } else if kind == LYRICS_DESCRIPTION {
+            lyrics_description::execute(self, state).await
         } else {
             renormalize::execute(self, state).await
         }
@@ -244,7 +281,12 @@ impl AdminMaintenanceHandler {
         Ok(())
     }
 
-    async fn enqueue_continuation(&self, kind: &'static str, run_id: Uuid) -> JobResult {
+    async fn enqueue_continuation(
+        &self,
+        kind: &'static str,
+        run_id: Uuid,
+        delay: Duration,
+    ) -> JobResult {
         let job = NewJob {
             id: Uuid::now_v7(),
             kind: continuation_kind(kind),
@@ -254,7 +296,7 @@ impl AdminMaintenanceHandler {
             priority: 20,
             max_attempts: MAX_ATTEMPTS,
             available_at: chrono::Utc::now()
-                + chrono::Duration::from_std(CONTINUATION_DELAY).unwrap_or_default(),
+                + chrono::Duration::from_std(delay).unwrap_or_default(),
         };
         self.queue
             .enqueue(&job)
@@ -273,6 +315,10 @@ fn continuation_kind(kind: &str) -> JobKind {
         JobKind::AdminLyricsLookupQueue
     } else if kind == TRACK_SEARCH {
         JobKind::AdminTrackSearch
+    } else if kind == LYRICS_REFETCH {
+        JobKind::AdminLyricsRefetch
+    } else if kind == LYRICS_DESCRIPTION {
+        JobKind::AdminLyricsDescription
     } else {
         JobKind::AdminCatalogRenormalize
     }

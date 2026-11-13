@@ -214,16 +214,25 @@ pub struct LyricsConfig {
     pub concurrency: usize,
     pub claim_seconds: i64,
     pub backfill_batch: i64,
+    pub refetch_share_percent: i64,
     pub musixmatch_base: String,
 }
 
 impl LyricsConfig {
     fn from_env() -> Result<Self, ConfigError> {
+        let refetch_share_percent: u64 = env::parse("LYRICS_REFETCH_SHARE_PERCENT", "50")?;
+        if refetch_share_percent > 100 {
+            return Err(ConfigError::Invalid {
+                key: "LYRICS_REFETCH_SHARE_PERCENT".to_owned(),
+                reason: "must be at most 100".to_owned(),
+            });
+        }
         Ok(Self {
             batch: env::positive_u64("LYRICS_LOOKUP_BATCH", 512)? as i64,
             concurrency: env::non_zero_usize("LYRICS_LOOKUP_CONCURRENCY", 128)?,
             claim_seconds: env::positive_u64("LYRICS_LOOKUP_CLAIM_SECONDS", 1_200)? as i64,
             backfill_batch: env::positive_u64("LYRICS_LOOKUP_BACKFILL_BATCH", 20_000)? as i64,
+            refetch_share_percent: refetch_share_percent as i64,
             musixmatch_base: env::optional("MUSIXMATCH_API_BASE")
                 .unwrap_or_else(|| "https://apic-desktop.musixmatch.com/ws/1.1".to_owned()),
         })
