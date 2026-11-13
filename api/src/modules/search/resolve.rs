@@ -20,6 +20,7 @@ pub const DEFAULT_PER_KIND: i64 = 5;
 pub const MAX_PER_KIND: i64 = 10;
 pub const SOFT_BUDGET: Duration = Duration::from_millis(1800);
 const WELL_KNOWN: f64 = 0.8;
+const WELL_KNOWN_TRACK: f64 = 0.75;
 const EXACT_ARTIST: f64 = 1.5;
 const EXACT_TITLE: f64 = 1.0;
 
@@ -57,11 +58,12 @@ impl Resolved {
     }
 
     fn settles(&self, known: bool) -> bool {
-        let exact = match self.kind {
-            Kind::Artist => EXACT_ARTIST,
-            _ => EXACT_TITLE,
+        let (exact, well_known) = match self.kind {
+            Kind::Artist => (EXACT_ARTIST, WELL_KNOWN),
+            Kind::Track => (EXACT_TITLE, WELL_KNOWN_TRACK),
+            _ => (EXACT_TITLE, WELL_KNOWN),
         };
-        let trusted = known || self.popularity >= WELL_KNOWN;
+        let trusted = known || self.popularity >= well_known;
         self.variant == 0 && self.tier == 0 && self.score >= exact && trusted
     }
 }

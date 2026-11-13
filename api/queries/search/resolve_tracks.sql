@@ -20,11 +20,21 @@ stemmed AS MATERIALIZED (
       AND to_tsvector('simple', coalesce(title_normalized, '') || ' ' || coalesce(metadata_artist, '') || ' ' || coalesce(uploader_username, '')) @@ $4::text::tsquery
     LIMIT 2000
 ),
+exact AS MATERIALIZED (
+    SELECT id, sc_track_id, title, title_normalized, metadata_artist, uploader_username, duration_ms, play_count_sc, variant
+    FROM track_search
+    WHERE title_normalized = $3
+      AND play_count_sc >= 100000
+    ORDER BY play_count_sc DESC, id DESC
+    LIMIT 20
+),
 hits AS MATERIALIZED (
     SELECT DISTINCT ON (id) id, sc_track_id, tier, title, variant, duration_ms, play_count_sc,
            coalesce(nullif(metadata_artist, ''), uploader_username, '') AS artist,
+           coalesce(title_normalized = $3, false) AS named,
            search_latin(title_normalized || ' ' || coalesce(nullif(metadata_artist, ''), uploader_username, '')) AS doc
-    FROM (SELECT strict.*, 0 AS tier FROM strict
+    FROM (SELECT exact.*, 0 AS tier FROM exact
+          UNION ALL SELECT strict.*, 0 FROM strict
           UNION ALL SELECT stemmed.*, 1 FROM stemmed
           UNION ALL SELECT loose.*, 1 FROM loose) found
     ORDER BY id, tier
@@ -32,7 +42,8 @@ hits AS MATERIALIZED (
 scored AS (
     SELECT id, sc_track_id, title, tier, doc, duration_ms, artist,
            least(1, ln(1 + coalesce(play_count_sc, 0)) / 18)::float8 AS popularity,
-           (least(2, similarity(search_latin($3), doc) + word_similarity(search_latin($3), doc)) / 2)::float8
+           greatest((least(2, similarity(search_latin($3), doc) + word_similarity(search_latin($3), doc)) / 2)::float8,
+                    CASE WHEN named THEN 1 ELSE 0 END)
              - CASE WHEN variant AND $3 !~ '\m(remix|sped up|slowed|nightcore|cover|live|8d|reverb|bass boosted|instrumental|karaoke|mashup|edit)\M' THEN 0.25 ELSE 0 END AS match_score
     FROM hits
 ),
