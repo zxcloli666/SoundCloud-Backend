@@ -34,6 +34,7 @@ const LYRICS_LOOKUPS_IN_FLIGHT: &str = "jobs_lyrics_lookups_in_flight";
 const LYRICS_LOOKUP_CAP: &str = "jobs_lyrics_lookup_cap";
 const LYRICS_LOOKUP_OUTCOMES: &str = "jobs_lyrics_lookup_outcomes_total";
 const LYRICS_REFETCH_OUTCOMES: &str = "jobs_lyrics_refetch_outcomes_total";
+const LYRICS_REFETCH_PENDING: &str = "jobs_lyrics_refetch_pending";
 
 const CMD_BACKLOG: &str = "scd_cmd_backlog";
 const CMD_AGE: &str = "scd_cmd_age_seconds";
@@ -230,6 +231,7 @@ fn register_series_that_start_at_zero() {
     for outcome in LYRICS_REFETCH_OUTCOME_LABELS {
         metrics::counter!(LYRICS_REFETCH_OUTCOMES, "outcome" => outcome).increment(0);
     }
+    metrics::gauge!(LYRICS_REFETCH_PENDING).set(0.0);
 }
 
 pub fn record_repl_retention(
@@ -427,6 +429,10 @@ pub fn record_lyrics_lookup(path: LookupPath, outcome: &'static str, failure: Op
 
 pub fn record_lyrics_refetch(outcome: &'static str, count: u64) {
     metrics::counter!(LYRICS_REFETCH_OUTCOMES, "outcome" => outcome).increment(count);
+}
+
+pub fn set_lyrics_refetch_pending(pending: i64) {
+    metrics::gauge!(LYRICS_REFETCH_PENDING).set(pending as f64);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

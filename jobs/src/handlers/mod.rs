@@ -165,7 +165,9 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
     matches!(
         kind,
         JobKind::AdminCatalogRenormalize
+            | JobKind::AdminLyricsDescription
             | JobKind::AdminLyricsLookupQueue
+            | JobKind::AdminLyricsRefetch
             | JobKind::AdminMusicBrainzNames
             | JobKind::AdminTrackSearch
             | JobKind::AdminWantedAliases
@@ -494,9 +496,16 @@ impl JobHandlers {
                     .backfill_lyrics_lookup_queue(job, payload)
                     .await
             }
-            JobKind::AdminLyricsDescription | JobKind::AdminLyricsRefetch => Err(
-                JobError::permanent(anyhow::anyhow!("{} has no handler yet", job.kind)),
-            ),
+            JobKind::AdminLyricsDescription => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance
+                    .strip_lyrics_descriptions(job, payload)
+                    .await
+            }
+            JobKind::AdminLyricsRefetch => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance.refetch_lyrics(job, payload).await
+            }
             JobKind::AdminMusicBrainzNames => {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
                 self.admin_maintenance
