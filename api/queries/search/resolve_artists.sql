@@ -1,4 +1,9 @@
-WITH strict AS MATERIALIZED (
+WITH exact AS MATERIALIZED (
+    SELECT id FROM artists
+    WHERE normalized_name = $3
+      AND merged_into IS NULL
+),
+strict AS MATERIALIZED (
     SELECT id FROM artists
     WHERE to_tsvector('simple', coalesce(normalized_name, '')) @@ $1::text::tsquery
       AND merged_into IS NULL
@@ -22,7 +27,8 @@ stemmed AS MATERIALIZED (
 ),
 hits AS (
     SELECT id, min(tier) AS tier
-    FROM (SELECT id, 0 AS tier FROM strict
+    FROM (SELECT id, 0 AS tier FROM exact
+          UNION ALL SELECT id, 0 FROM strict
           UNION ALL SELECT id, 1 FROM stemmed
           UNION ALL SELECT id, 1 FROM loose) found
     GROUP BY id

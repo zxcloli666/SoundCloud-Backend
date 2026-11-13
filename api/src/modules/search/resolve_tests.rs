@@ -4,7 +4,7 @@ use futures::future::try_join_all;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
-use super::catalog_tests::{seed, service, song};
+use super::catalog_tests::{seed, seed_a_name_after_many_lookalikes, service, song};
 use super::lanes::IDLE_KEPT;
 use super::resolve::{Kind, Resolved, keep_on_timeout};
 use crate::error::AppError;
@@ -216,6 +216,17 @@ async fn a_known_name_found_exactly_ends_the_lookup_whatever_its_popularity(
     let found = artists_of_a_known_name(&pool, &["queen", "queens"]).await?;
     let ids: Vec<&str> = found.iter().map(|artist| artist.id.as_str()).collect();
     assert_eq!(ids, [WHOLE], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_name_is_found_exactly_among_more_lookalikes_than_a_lookup_takes(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_a_name_after_many_lookalikes(&pool, WHOLE).await?;
+    let found = artists_of_a_known_name(&pool, &["Jay-Z"]).await?;
+    let first = found.first().map(|artist| artist.id.as_str());
+    assert_eq!(first, Some(WHOLE), "{found:?}");
     Ok(())
 }
 
