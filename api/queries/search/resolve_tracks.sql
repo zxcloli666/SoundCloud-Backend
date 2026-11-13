@@ -1,13 +1,26 @@
-WITH strict AS MATERIALIZED (
+WITH exact AS MATERIALIZED (
     SELECT id, sc_track_id, title, title_normalized, metadata_artist, uploader_username, duration_ms, play_count_sc, variant
     FROM track_search
-    WHERE to_tsvector('simple', coalesce(title_normalized, '') || ' ' || coalesce(metadata_artist, '') || ' ' || coalesce(uploader_username, '')) @@ $1::text::tsquery
+    WHERE title_normalized = $3
+      AND play_count_sc >= 100000
+    ORDER BY play_count_sc DESC, id DESC
+    LIMIT 20
+),
+settled AS MATERIALIZED (
+    SELECT EXISTS (SELECT 1 FROM exact WHERE least(1, ln(1 + play_count_sc) / 18)::float8 >= $6) AS by_title
+),
+strict AS MATERIALIZED (
+    SELECT id, sc_track_id, title, title_normalized, metadata_artist, uploader_username, duration_ms, play_count_sc, variant
+    FROM track_search
+    WHERE NOT (SELECT by_title FROM settled)
+      AND to_tsvector('simple', coalesce(title_normalized, '') || ' ' || coalesce(metadata_artist, '') || ' ' || coalesce(uploader_username, '')) @@ $1::text::tsquery
     LIMIT 2000
 ),
 loose AS MATERIALIZED (
     SELECT id, sc_track_id, title, title_normalized, metadata_artist, uploader_username, duration_ms, play_count_sc, variant
     FROM track_search
     WHERE $2::text IS NOT NULL
+      AND NOT (SELECT by_title FROM settled)
       AND (SELECT count(*) FROM strict) < 50
       AND to_tsvector('simple', coalesce(title_normalized, '') || ' ' || coalesce(metadata_artist, '') || ' ' || coalesce(uploader_username, '')) @@ $2::text::tsquery
     LIMIT 2000
@@ -16,17 +29,10 @@ stemmed AS MATERIALIZED (
     SELECT id, sc_track_id, title, title_normalized, metadata_artist, uploader_username, duration_ms, play_count_sc, variant
     FROM track_search
     WHERE $4::text IS NOT NULL
+      AND NOT (SELECT by_title FROM settled)
       AND (SELECT count(*) FROM strict) < 50
       AND to_tsvector('simple', coalesce(title_normalized, '') || ' ' || coalesce(metadata_artist, '') || ' ' || coalesce(uploader_username, '')) @@ $4::text::tsquery
     LIMIT 2000
-),
-exact AS MATERIALIZED (
-    SELECT id, sc_track_id, title, title_normalized, metadata_artist, uploader_username, duration_ms, play_count_sc, variant
-    FROM track_search
-    WHERE title_normalized = $3
-      AND play_count_sc >= 100000
-    ORDER BY play_count_sc DESC, id DESC
-    LIMIT 20
 ),
 hits AS MATERIALIZED (
     SELECT DISTINCT ON (id) id, sc_track_id, tier, title, variant, duration_ms, play_count_sc,
@@ -48,7 +54,7 @@ scored AS (
     FROM hits
 ),
 ranked AS (
-    SELECT *, row_number() OVER (PARTITION BY doc, duration_ms / 5000 ORDER BY tier, match_score DESC, id DESC) AS copy
+    SELECT *, row_number() OVER (PARTITION BY doc, duration_ms / 5000 ORDER BY tier, match_score DESC, popularity DESC, id DESC) AS copy
     FROM scored
 )
 SELECT ('soundcloud:tracks:' || sc_track_id) AS "id!",

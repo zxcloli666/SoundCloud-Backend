@@ -377,6 +377,40 @@ async fn a_title_said_exactly_comes_before_a_longer_title(pool: PgPool) -> anyho
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_well_known_title_is_answered_without_the_titles_that_share_its_words(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let songs = [
+        song(1, "Mama", "Sol", 5_000_000),
+        song(2, "Mama Said", "Other Band", 6_000_000),
+    ];
+    seed(&pool, &songs).await?;
+    let found = found_of(&pool, &[Kind::Track], &["mama"]).await?;
+    let ids: Vec<&str> = found.iter().map(|track| track.id.as_str()).collect();
+    assert_eq!(ids, ["soundcloud:tracks:1"], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn of_two_copies_of_a_track_the_most_played_one_is_kept(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO tracks (id, sc_track_id, urn, title, title_normalized, metadata_artist,
+                             uploader_username, uploader_sc_user_id, duration_ms, play_count_sc, sharing)
+         VALUES ('00000000-0000-0000-0000-000000000001', '1', 'soundcloud:tracks:1', 'In The End',
+                 'in the end', 'Linkin Park', 'Linkin Park', '77', 216921, 39000000, 'public'),
+                ('ffffffff-0000-0000-0000-000000000002', '2', 'soundcloud:tracks:2', 'In The End',
+                 'in the end', 'Linkin Park', 'Linkin Park', '78', 216346, 215000, 'public')",
+    )
+    .execute(&pool)
+    .await?;
+    super::lexicon_refresh::refresh(&pool).await?;
+    let found = found_of(&pool, &[Kind::Track], &["in the end"]).await?;
+    let ids: Vec<&str> = found.iter().map(|track| track.id.as_str()).collect();
+    assert_eq!(ids, ["soundcloud:tracks:1"], "{found:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_well_known_title_is_found_among_thousands_that_share_its_word(
     pool: PgPool,
 ) -> anyhow::Result<()> {

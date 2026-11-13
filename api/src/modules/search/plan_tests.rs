@@ -161,7 +161,8 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
         None::<String>,
         "love song 4242",
         None::<String>,
-        30_i64
+        30_i64,
+        0.75_f64
     );
     assert_bounded(&plan, "a title said exactly");
     assert!(plan.contains("track_search_title_popular"), "{plan}");
