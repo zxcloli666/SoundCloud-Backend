@@ -391,6 +391,10 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
     assert_eq!(page.status, StatusCode::OK);
     let html = page.text();
     assert!(html.contains("шесть цифр"), "{html}");
+    assert!(
+        html.contains("Голос → Алиса и Салют → Алиса → Подключить"),
+        "{html}"
+    );
     assert!(html.contains("prefers-color-scheme: dark"));
     assert!(html.contains("value=\"xyz\""));
 
