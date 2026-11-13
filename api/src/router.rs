@@ -219,6 +219,10 @@ mod router_identity_tests;
 mod router_diag_tests;
 
 #[cfg(test)]
+#[path = "router_maintenance_tests.rs"]
+mod router_maintenance_tests;
+
+#[cfg(test)]
 #[path = "router_projection_tests.rs"]
 mod router_projection_tests;
 

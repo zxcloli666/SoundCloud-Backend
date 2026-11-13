@@ -11,7 +11,9 @@ use crate::error::AppResult;
 use crate::state::AppState;
 
 const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
+const LYRICS_DESCRIPTION: &str = "lyrics_description";
 const LYRICS_LOOKUP_QUEUE: &str = "lyrics_lookup_queue";
+const LYRICS_REFETCH: &str = "lyrics_refetch";
 const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
 const TRACK_SEARCH: &str = "track_search";
 const WANTED_ALIASES: &str = "wanted_aliases";
@@ -75,6 +77,22 @@ pub async fn lyrics_lookup_queue(
     State(state): State<AppState>,
 ) -> AppResult<Json<MaintenanceAccepted>> {
     enqueue(&state, LYRICS_LOOKUP_QUEUE, JobKind::AdminLyricsLookupQueue).await
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn lyrics_refetch(
+    _: AdminAuth,
+    State(state): State<AppState>,
+) -> AppResult<Json<MaintenanceAccepted>> {
+    enqueue(&state, LYRICS_REFETCH, JobKind::AdminLyricsRefetch).await
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn lyrics_description(
+    _: AdminAuth,
+    State(state): State<AppState>,
+) -> AppResult<Json<MaintenanceAccepted>> {
+    enqueue(&state, LYRICS_DESCRIPTION, JobKind::AdminLyricsDescription).await
 }
 
 #[tracing::instrument(skip_all)]

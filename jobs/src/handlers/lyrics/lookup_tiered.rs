@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use super::LookupClaim;
+use super::refetch::RefetchClaim;
+use super::{LookupClaim, Work};
 use crate::handlers::star_priority::{LIKED_PRIORITY, Pass, Round, STAR_SCAN_WINDOW, Turn};
 use crate::queue::LeasedJob;
 
@@ -9,12 +10,27 @@ pub(super) async fn claim(
     pool: &PgPool,
     job: &LeasedJob,
     total: i64,
+    refetch_share_percent: i64,
     claim_seconds: i64,
     turn: Turn,
-) -> Result<Vec<LookupClaim>, sqlx::Error> {
+) -> Result<Vec<Work>, sqlx::Error> {
+    let mut round = Round::new("lyrics_lookup");
+    let refetch_room = total * refetch_share_percent.clamp(0, 100) / 100;
+    let refetches = if refetch_room > 0 {
+        let claimed = claim_refetches(pool, job, refetch_room, claim_seconds).await?;
+        round.record("refetch", claimed.len(), None);
+        claimed
+    } else {
+        Vec::new()
+    };
+    let total = total - i64::try_from(refetches.len()).unwrap_or(i64::MAX);
+    let mut works: Vec<Work> = refetches.into_iter().map(Work::Refetch).collect();
+    if total == 0 {
+        round.report();
+        return Ok(works);
+    }
     let oldest = (total / 4).max(1).min(total);
     let tiered = total - oldest;
-    let mut round = Round::new("lyrics_lookup");
     let mut claims = Vec::new();
     for tier in turn.tiers() {
         let left = tiered.saturating_sub(i64::try_from(claims.len()).unwrap_or(i64::MAX));
@@ -49,7 +65,27 @@ pub(super) async fn claim(
     round.record("oldest", oldest_claims.len(), next_oldest);
     round.report();
     claims.extend(oldest_claims);
-    Ok(claims)
+    works.extend(claims.into_iter().map(Work::Lookup));
+    Ok(works)
+}
+
+async fn claim_refetches(
+    pool: &PgPool,
+    job: &LeasedJob,
+    room: i64,
+    claim_seconds: i64,
+) -> Result<Vec<RefetchClaim>, sqlx::Error> {
+    sqlx::query_file_as!(
+        RefetchClaim,
+        "queries/lyrics/refetch_claim.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        room,
+        claim_seconds
+    )
+    .fetch_all(pool)
+    .await
 }
 
 async fn claim_pass(

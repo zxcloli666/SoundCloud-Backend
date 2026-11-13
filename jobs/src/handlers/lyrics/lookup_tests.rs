@@ -257,6 +257,7 @@ async fn clean_source_empty_persists_negative_without_worker_jobs(
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
     );
@@ -330,6 +331,7 @@ async fn source_outage_persists_retry_without_worker_jobs(pool: PgPool) -> anyho
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
     );
@@ -412,6 +414,7 @@ async fn lookup_through_proxy(pool: &PgPool, lrclib: &'static str) -> anyhow::Re
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
     );
@@ -721,6 +724,7 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
         &pool,
         &job,
         5,
+        0,
         900,
         crate::handlers::star_priority::Turn::led_by(
             crate::handlers::star_priority::Tier::StarLiked,
@@ -728,7 +732,7 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
     )
     .await?;
 
-    let claimed: Vec<String> = claims.into_iter().map(|claim| claim.sc_track_id).collect();
+    let claimed = super::refetch_tests::track_ids(&claims);
     assert_eq!(claimed, ["44", "42", "43", "41", "45"]);
     assert_eq!(state_versions(&pool).await?, versions);
     let held: i64 =
@@ -871,6 +875,7 @@ fn offline_handler(pool: &PgPool) -> anyhow::Result<super::LyricsLookupHandler> 
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
     ))
