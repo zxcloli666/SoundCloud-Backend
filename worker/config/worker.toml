@@ -246,11 +246,11 @@ path = "qwen-codec/1/qwen-tokenizer-12hz-Q8_0.gguf"
 sha256 = "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94"
 
 [tts.voices.loli]
-path = "qwen-loli/1/qwen-talker-1.7b-loli-Q4_K_M.gguf"
-sha256 = "dadc36ad7c33ffe2334a06f52cc8f7f498320e7b3834556703e2c0f8b33bc944"
+path = "qwen-loli-q8/1/qwen-talker-1.7b-loli-Q8_0.gguf"
+sha256 = "6df827daebcac238f938f8d4ffca863ef61827ed9e52c2df38ea4471ab042d2a"
 speaker = "loli"
 
 [tts.voices.moriarty]
-path = "qwen-moriarty/1/qwen-talker-1.7b-moriarty-Q4_K_M.gguf"
-sha256 = "f2edb2cfb74dc4b5952a249a057814f99bd7498cea04879befbe109cf623ecb2"
+path = "qwen-moriarty-q8/1/qwen-talker-1.7b-moriarty-Q8_0.gguf"
+sha256 = "9988fba437f0a569f0532421079a06c6727c9ca37771989268a7a534b85c178e"
 speaker = "moriarty"
