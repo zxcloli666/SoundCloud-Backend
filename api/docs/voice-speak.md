@@ -11,7 +11,7 @@ A worker needs up to 90 s for a line, longer than any request may wait, so the a
 2. For the phrase cache, create its bucket with an expiry rule and a quota (see Phrases below), add `[voice_speak.phrases]` and set the two variables its keys name. Voicing works without it.
 3. Restart the api. jobs creates the streams `SPEAK_RPC` and `SPEAK_REPLY` and the consumer `speak-workers` from the worker contract.
 
-No `[voice_speak]`: both routes answer 503 `voice_speak_unavailable`. No `[voice_speak.phrases]`: there is no phrase cache, every line goes to a worker, `keep` changes nothing and nothing about phrases is logged or counted. An unknown key, a table without one of its keys, an empty value or a key variable that is unset or empty stops the start.
+No `[voice_speak]`: both routes answer 503 `voice_speak_unavailable`. No `[voice_speak.phrases]`: there is no phrase cache, every line goes to a worker, `keep` changes nothing and nothing about phrases is logged or counted. An unknown key, a table without one of its keys, an empty value, a key variable that is unset or empty or a `revision` that is not a label stops the start.
 
 ## Config file
 
@@ -21,6 +21,7 @@ No `[voice_speak]`: both routes answer 503 `voice_speak_unavailable`. No `[voice
 | --- | --- |
 | `requests_per_minute` | `POST` per user, per host. Above zero |
 | `max_in_flight` | lines waiting for a worker or being voiced, counted on the lane for all hosts together, default 4. When `SPEAK_RPC` holds that many, a new line gets 503 `voice_speak_busy` |
+| `revision` | label of the voice models in use, default `"1"`: 1 to 16 of `a-z`, `0-9` and `-`, starting with a letter or a digit. Change it whenever a voice's model is replaced |
 
 `[voice_speak.phrases]`, optional: absent means no phrase cache
 
@@ -50,6 +51,8 @@ Header `x-session-id`. The user needs Star. The per-user limit and the Star chec
 
 The 202 comes only after JetStream has stored the request, and for a kept line the phrase key before it.
 
+The 200 and the 202 carry `X-Voice-Revision: <revision>`, with or without a phrase cache. The app keys its own copies of kept clips by this header: a new value means the copies saved under the old one are stale.
+
 ## GET /voice/speak/{ticket}
 
 Header `x-session-id`. No Star check, no rate limit. The request holds up to 20 s and looks for the reply twice a second.
@@ -59,6 +62,8 @@ Header `x-session-id`. No Star check, no rate limit. The request holds up to 20 
 | 200 | `audio/ogg` | the clip. The reply stays for 10 minutes, a second poll gets it again |
 | 204 | none | not ready yet, poll again |
 | 502 | `voice_speak_failed` | the worker refused the line or sent a broken clip, or no reply came within 95 s of the ticket |
+
+The 200 carries `X-Voice-Revision` too. No other answer of either route has it.
 
 A ticket belongs to the user who posted it: a poll by anyone else finds nothing and gets 204. The poll does not take a core permit of the load shedder, like `GET /remote/wait`.
 
@@ -99,10 +104,10 @@ The worker publishes its rpc reply to the `X-Reply-To` subject, `{"ok": true, "d
 
 Phrases: the S3 bucket of `[voice_speak.phrases]`, when the table is there.
 
-- Key `<voice>/<sha256>.ogg`, where `<sha256>` is the lowercase hex SHA-256 of the voice, a newline and the trimmed text. Content type `audio/ogg`.
+- Key `<voice>/<revision>/<sha256>.ogg`, where `<revision>` is the `revision` of the config when the line was posted and `<sha256>` is the lowercase hex SHA-256 of the voice, a newline and the trimmed text. Content type `audio/ogg`.
 - Only the api reads and writes it. A read waits at most 3 s; a slow or failing read is a miss and the line goes to a worker. The write happens inside the poll and waits at most 2 s.
 - The api never deletes phrases. Set the lifetime as an expiry rule and the total size as a quota on the bucket. A refused write, a full quota included, is counted and logged; the poll answers the clip all the same.
-- After a voice's model is replaced, delete the prefix `<voice>/`, or the old clips keep being served.
+- After a voice's model is replaced, change `revision`. Clips voiced before are no longer served and leave with the bucket's expiry rule.
 
 ## Metrics
 

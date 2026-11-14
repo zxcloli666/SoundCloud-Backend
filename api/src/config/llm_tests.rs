@@ -182,6 +182,38 @@ fn the_speak_section_names_its_rate_and_keeps_four_lines_in_flight_unless_told()
 }
 
 #[test]
+fn the_speak_revision_is_one_unless_told_and_only_a_short_lowercase_label_is_taken() {
+    let revision = |section: &str| {
+        LlmCfg::parse(&speak_file(&format!("requests_per_minute = 5\n{section}")))
+            .map(|config| config.voice_speak.unwrap().revision)
+            .map_err(|error| error.to_string())
+    };
+
+    assert_eq!(revision("").unwrap(), "1");
+    for taken in ["2026-11", "q3", "0", "a-", "abcdefghijklmnop"] {
+        assert_eq!(revision(&format!("revision = \"{taken}\"")).unwrap(), taken);
+    }
+    for wrong in [
+        "",
+        "-a",
+        "V2",
+        "a_b",
+        "a.b",
+        "a b",
+        "abcdefghijklmnopq",
+        "ё",
+    ] {
+        let refusal = revision(&format!("revision = \"{wrong}\"")).unwrap_err();
+        assert!(
+            refusal.contains("[voice_speak] revision must be 1 to 16 of a-z, 0-9 and -"),
+            "{wrong}: {refusal}"
+        );
+    }
+    let number = revision("revision = 2").unwrap_err();
+    assert!(number.contains("expected a string"), "{number}");
+}
+
+#[test]
 fn the_speak_section_reads_the_phrase_store_and_its_keys_from_the_environment() {
     let speak = LlmCfg::parse(&speak_file("requests_per_minute = 20"))
         .unwrap()
@@ -300,5 +332,5 @@ fn the_example_file_in_the_repository_is_a_valid_config() {
     assert!(example.ladders.ladders.contains_key(&chat.ladder));
     assert!(chat.personas.contains_key(DEFAULT_PERSONA));
     assert!(example.ladders.budget.is_some());
-    assert!(example.voice_speak.is_some());
+    assert_eq!(example.voice_speak.unwrap().revision, "1");
 }

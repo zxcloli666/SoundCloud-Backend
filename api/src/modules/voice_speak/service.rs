@@ -38,6 +38,7 @@ pub struct Hold {
 pub struct Live {
     hosting: Hosting,
     max_in_flight: u64,
+    revision: String,
     hold: Hold,
 }
 
@@ -76,13 +77,14 @@ impl VoiceSpeak {
             replies: streams,
             phrases,
         };
-        Self::hosted(config.max_in_flight, hosting, Hold::POLL)
+        Self::hosted(config.max_in_flight, &config.revision, hosting, Hold::POLL)
     }
 
-    pub fn hosted(max_in_flight: usize, hosting: Hosting, hold: Hold) -> Arc<Self> {
+    pub fn hosted(max_in_flight: usize, revision: &str, hosting: Hosting, hold: Hold) -> Arc<Self> {
         let live = Live {
             hosting,
             max_in_flight: u64::try_from(max_in_flight).unwrap_or(u64::MAX),
+            revision: revision.to_owned(),
             hold,
         };
         Arc::new(Self { live: Some(live) })
@@ -105,9 +107,13 @@ impl Hold {
 }
 
 impl Live {
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+
     pub async fn say(&self, user: &str, line: Line) -> Result<Said, Busy> {
         let keep = match &self.hosting.phrases {
-            Some(_) if line.keep => Some(line.phrase_key()),
+            Some(_) if line.keep => Some(line.phrase_key(&self.revision)),
             _ => None,
         };
         if let Some(key) = &keep

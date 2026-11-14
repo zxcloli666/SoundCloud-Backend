@@ -13,6 +13,7 @@ use super::service::{Hold, Hosting, Live, VoiceSpeak};
 use super::stores::{Ask, Lane, Objects, Replies, StoreError};
 
 pub const CLIP: &[u8] = b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00OpusHead";
+pub const REVISION: &str = "2026-11";
 pub const QUICK: Hold = Hold {
     length: Duration::from_millis(300),
     every: Duration::from_millis(5),
@@ -79,7 +80,7 @@ fn hosted(answer: Answer, lines: usize, cached: bool) -> Speaking {
         phrases: cached.then(|| phrases.clone() as Arc<dyn Objects>),
     };
     Speaking {
-        speak: VoiceSpeak::hosted(lines, hosting, QUICK),
+        speak: VoiceSpeak::hosted(lines, REVISION, hosting, QUICK),
         lane,
         replies,
         phrases,

@@ -17,6 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::modules::remote::handlers::{admission_error, require_star};
 use crate::state::AppState;
 
+pub const REVISION_HEADER: &str = "x-voice-revision";
 const UNAVAILABLE_RETRY_AFTER: i64 = 30;
 
 pub fn router() -> Router<AppState> {
@@ -49,7 +50,7 @@ async fn speak(
     let line = body.into_line().map_err(invalid)?;
     live.say(user, line)
         .await
-        .map(answer)
+        .map(|said| answer(said, live.revision()))
         .map_err(|Busy| busy())
 }
 
@@ -63,23 +64,24 @@ async fn fetch(
     if !names_a_subject(&ctx.sc_user_id) {
         return Err(not_found());
     }
-    reply(live.fetch(&ctx.sc_user_id, ticket).await)
+    reply(live.fetch(&ctx.sc_user_id, ticket).await, live.revision())
 }
 
-pub(super) fn answer(said: Said) -> Response {
+pub(super) fn answer(said: Said, revision: &str) -> Response {
     match said {
-        Said::Cached(clip) => ogg(clip),
+        Said::Cached(clip) => ogg(clip, revision),
         Said::Ticket(ticket) => (
             StatusCode::ACCEPTED,
+            [(REVISION_HEADER, revision)],
             Json(json!({ "id": ticket.to_string() })),
         )
             .into_response(),
     }
 }
 
-pub(super) fn reply(fetched: Fetched) -> AppResult<Response> {
+pub(super) fn reply(fetched: Fetched, revision: &str) -> AppResult<Response> {
     match fetched {
-        Fetched::Clip(clip) => Ok(ogg(clip)),
+        Fetched::Clip(clip) => Ok(ogg(clip, revision)),
         Fetched::Failed | Fetched::Expired => Err(AppError::coded(
             StatusCode::BAD_GATEWAY,
             "voice_speak_failed",
@@ -104,8 +106,13 @@ fn not_found() -> AppError {
     )
 }
 
-fn ogg(clip: Bytes) -> Response {
-    ([(CONTENT_TYPE, "audio/ogg")], clip).into_response()
+fn ogg(clip: Bytes, revision: &str) -> Response {
+    (
+        [(CONTENT_TYPE, "audio/ogg")],
+        [(REVISION_HEADER, revision)],
+        clip,
+    )
+        .into_response()
 }
 
 fn unreadable(rejection: JsonRejection) -> AppError {

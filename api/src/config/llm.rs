@@ -11,6 +11,8 @@ pub const DEFAULT_PERSONA: &str = "default";
 
 const MAX_PERSONA_ID_LEN: usize = 64;
 const SPEAK_IN_FLIGHT: usize = 4;
+const SPEAK_REVISION: &str = "1";
+const MAX_REVISION_LEN: usize = 16;
 
 #[derive(Clone, Debug, Default)]
 pub struct LlmCfg {
@@ -47,6 +49,8 @@ pub struct VoiceSpeakCfg {
     pub requests_per_minute: u32,
     #[serde(default = "speak_in_flight")]
     pub max_in_flight: usize,
+    #[serde(default = "speak_revision")]
+    pub revision: String,
     pub phrases: Option<PhrasesCfg>,
 }
 
@@ -158,6 +162,11 @@ impl VoiceSpeakCfg {
         if self.max_in_flight == 0 {
             return Err("max_in_flight must be above zero".to_owned());
         }
+        if !revision_label(&self.revision) {
+            return Err(format!(
+                "revision must be 1 to {MAX_REVISION_LEN} of a-z, 0-9 and -, starting with a letter or a digit"
+            ));
+        }
         self.phrases.as_ref().map_or(Ok(()), PhrasesCfg::validate)
     }
 }
@@ -193,6 +202,24 @@ fn resolved(field: &str, secret: &SecretRef) -> Result<Secret<String>, String> {
 
 fn speak_in_flight() -> usize {
     SPEAK_IN_FLIGHT
+}
+
+fn speak_revision() -> String {
+    SPEAK_REVISION.to_owned()
+}
+
+fn revision_label(revision: &str) -> bool {
+    let lower_or_digit = |symbol: &u8| symbol.is_ascii_lowercase() || symbol.is_ascii_digit();
+    match revision.as_bytes() {
+        [first, rest @ ..] => {
+            revision.len() <= MAX_REVISION_LEN
+                && lower_or_digit(first)
+                && rest
+                    .iter()
+                    .all(|symbol| lower_or_digit(symbol) || *symbol == b'-')
+        }
+        [] => false,
+    }
 }
 
 fn persona_id(id: &str) -> bool {

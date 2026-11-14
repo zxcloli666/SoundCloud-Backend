@@ -48,16 +48,24 @@ fn an_empty_a_too_long_or_an_unknown_voice_line_is_refused() {
 }
 
 #[test]
-fn the_phrase_key_is_the_voice_then_the_hex_sha256_of_the_voice_a_newline_and_the_text() {
-    let key = |body: Value| read(body).unwrap().phrase_key();
+fn the_phrase_key_is_the_voice_the_revision_then_the_hex_sha256_of_the_voice_a_newline_and_the_text()
+ {
+    let key = |body: Value, revision: &str| read(body).unwrap().phrase_key(revision);
 
     assert_eq!(
-        key(json!({"voice": "loli", "text": "hi"})),
-        "loli/09b3f19cab3697f9ad75cf8288a3cb9547060020aed35477b8564a4b3a201082.ogg"
+        key(json!({"voice": "loli", "text": "hi"}), "1"),
+        "loli/1/09b3f19cab3697f9ad75cf8288a3cb9547060020aed35477b8564a4b3a201082.ogg"
     );
     assert_eq!(
-        key(json!({"voice": "moriarty", "text": " hi ", "keep": true})),
-        "moriarty/e335a1430eaece14ff24340b90f22a4d70bbe5066583ec9543d688988432d412.ogg"
+        key(json!({"voice": "loli", "text": "hi"}), "2026-11"),
+        "loli/2026-11/09b3f19cab3697f9ad75cf8288a3cb9547060020aed35477b8564a4b3a201082.ogg"
+    );
+    assert_eq!(
+        key(
+            json!({"voice": "moriarty", "text": " hi ", "keep": true}),
+            "1"
+        ),
+        "moriarty/1/e335a1430eaece14ff24340b90f22a4d70bbe5066583ec9543d688988432d412.ogg"
     );
 }
 

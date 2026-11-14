@@ -4,11 +4,12 @@ use uuid::{NoContext, Timestamp};
 
 use super::*;
 use crate::modules::voice_speak::testing::{
-    Answer, CLIP, QUICK, Speaking, reply, speaking, uncached,
+    Answer, CLIP, QUICK, REVISION, Speaking, reply, speaking, uncached,
 };
 
 const USER: &str = "98765";
-const KEPT_KEY: &str = "loli/409e921e77f2c3acad538a6a236e7dbdff0cba38f0151f3a4e17fca05a6e7640.ogg";
+const KEPT_KEY: &str =
+    "loli/2026-11/409e921e77f2c3acad538a6a236e7dbdff0cba38f0151f3a4e17fca05a6e7640.ogg";
 
 fn line(text: &str, keep: bool) -> Line {
     Line {
@@ -43,7 +44,7 @@ fn ticket_from(ago: Duration) -> Uuid {
 async fn a_kept_line_found_in_the_phrase_cache_answers_the_clip_without_a_ticket() {
     let speaking = speaking(Answer::Clip, 4);
     let cached = line("Держи.", true);
-    speaking.phrases.put(&cached.phrase_key(), CLIP);
+    speaking.phrases.put(&cached.phrase_key(REVISION), CLIP);
 
     let said = speaking.live().say(USER, cached).await;
 
@@ -53,10 +54,27 @@ async fn a_kept_line_found_in_the_phrase_cache_answers_the_clip_without_a_ticket
 }
 
 #[tokio::test]
+async fn a_clip_kept_under_another_revision_is_a_miss_and_the_line_is_voiced_again() {
+    let speaking = speaking(Answer::Clip, 4);
+    let kept = line("Держи.", true);
+    speaking.phrases.put(&kept.phrase_key("1"), CLIP);
+
+    let ticket = ticket(&speaking, kept).await;
+
+    assert_eq!(speaking.phrases.reads(), 1);
+    assert_eq!(speaking.lane.asked().len(), 1);
+    assert_eq!(
+        speaking.live().fetch(USER, ticket).await,
+        Fetched::Clip(clip())
+    );
+    assert!(speaking.phrases.get(KEPT_KEY).is_some());
+}
+
+#[tokio::test]
 async fn a_plain_line_is_asked_with_the_reply_subject_of_its_user_and_ticket() {
     let speaking = speaking(Answer::Silent, 4);
     let plain = line("Привет.", false);
-    speaking.phrases.put(&plain.phrase_key(), CLIP);
+    speaking.phrases.put(&plain.phrase_key(REVISION), CLIP);
 
     let ticket = ticket(&speaking, plain).await;
 
@@ -239,7 +257,7 @@ async fn a_poll_never_finds_the_reply_of_another_user() {
 async fn without_a_phrase_cache_a_kept_line_is_neither_looked_up_nor_kept() {
     let speaking = uncached(Answer::Clip, 4);
     let kept = line("Держи.", true);
-    speaking.phrases.put(&kept.phrase_key(), CLIP);
+    speaking.phrases.put(&kept.phrase_key(REVISION), CLIP);
 
     let first = ticket(&speaking, kept.clone()).await;
     let second = ticket(&speaking, kept).await;

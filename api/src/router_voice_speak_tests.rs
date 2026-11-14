@@ -8,11 +8,14 @@ use uuid::Uuid;
 use super::super::router_search_tests::{soundcloud_hits, state_with};
 use super::{session_for, tuned};
 use crate::modules::subscriptions::SubscriptionsService;
-use crate::modules::voice_speak::testing::{Answer, CLIP, Speaking, speaking};
+use crate::modules::voice_speak::REVISION_HEADER;
+use crate::modules::voice_speak::testing::{Answer, CLIP, REVISION, Speaking, speaking};
 
 struct Heard {
     status: StatusCode,
     content_type: Option<String>,
+    revision: Option<String>,
+    exposed: Option<String>,
     body: Vec<u8>,
 }
 
@@ -50,6 +53,7 @@ async fn call(
     let mut request = Request::builder()
         .method(method)
         .uri(path)
+        .header(header::ORIGIN, "https://app.example")
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(session) = session {
         request = request.header("x-session-id", session.to_string());
@@ -59,15 +63,22 @@ async fn call(
         .oneshot(request.body(body.map_or_else(Body::empty, Body::from))?)
         .await?;
     let status = response.status();
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let named = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let content_type = named(header::CONTENT_TYPE.as_str());
+    let revision = named(REVISION_HEADER);
+    let exposed = named(header::ACCESS_CONTROL_EXPOSE_HEADERS.as_str());
     let body = to_bytes(response.into_body(), usize::MAX).await?.to_vec();
     Ok(Heard {
         status,
         content_type,
+        revision,
+        exposed,
         body,
     })
 }
@@ -84,6 +95,7 @@ async fn a_listener_without_star_is_refused_before_the_line_is_read(
         let heard = call(&app, "POST", "/voice/speak", Some(session), Some(body)).await?;
         assert_eq!(heard.status, StatusCode::FORBIDDEN);
         assert_eq!(heard.json()["code"], "star_required");
+        assert_eq!(heard.revision, None);
     }
     assert!(speaking.lane.asked().is_empty());
     Ok(())
@@ -116,10 +128,17 @@ async fn a_listener_with_star_gets_a_ticket_then_the_clip_then_the_kept_phrase(
     assert_eq!(cached.status, StatusCode::OK);
     assert_eq!(cached.content_type.as_deref(), Some("audio/ogg"));
     assert_eq!(cached.body, CLIP);
+    for answered in [&posted, &polled, &cached] {
+        assert_eq!(answered.revision.as_deref(), Some(REVISION));
+        let exposed = answered.exposed.as_deref().unwrap_or_default();
+        assert!(exposed.contains(REVISION_HEADER), "{exposed}");
+    }
     assert_eq!(speaking.lane.asked().len(), 1);
     let unknown = call(&app, "GET", "/voice/speak/nope", Some(session), None).await?;
     assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+    assert_eq!(unknown.revision, None);
     let anonymous = call(&app, "POST", "/voice/speak", None, Some(line())).await?;
     assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(anonymous.revision, None);
     Ok(())
 }

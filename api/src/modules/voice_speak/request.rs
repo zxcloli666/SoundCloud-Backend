@@ -52,12 +52,16 @@ pub fn names_a_subject(user: &str) -> bool {
 }
 
 impl Line {
-    pub fn phrase_key(&self) -> String {
+    pub fn phrase_key(&self, revision: &str) -> String {
         let mut hash = Sha256::new();
         hash.update(self.voice.as_bytes());
         hash.update(b"\n");
         hash.update(self.text.as_bytes());
-        format!("{}/{}.ogg", self.voice, hex::encode(hash.finalize()))
+        format!(
+            "{}/{revision}/{}.ogg",
+            self.voice,
+            hex::encode(hash.finalize())
+        )
     }
 }
 
