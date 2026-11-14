@@ -70,6 +70,8 @@ def test_a_line_is_spoken_by_a_voice_process_started_in_the_engine_folder(
     assert start["library_path"] == str(home / ENGINE)
     [line] = journal(home, "say")
     assert line["payload"] == f"1\n{slot.max_tokens(TEXT)}\nloli\nauto\n{TEXT}"
+    [manner] = journal(home, "tune")
+    assert (manner["id"], manner["payload"]) == (line["id"], "0.6\n0.9\n0.6")
 
 
 def test_the_next_line_of_the_same_voice_reuses_the_process(tts: TtsSlot, home: Path) -> None:

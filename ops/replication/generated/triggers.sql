@@ -69,6 +69,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_sync_stamps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_keys;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_transcription_sync_versions;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_transcription_wire_state;
@@ -5909,6 +5910,8 @@ ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_keys FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_keys', 'cmd', 'migration', 'repl');
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_tracks', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_tracks()
@@ -7931,6 +7934,7 @@ FROM (VALUES
     ('guard', 'track_storage_failures', 'scd_guard_track_storage_failures'),
     ('guard', 'track_sync_stamps', 'scd_guard_track_sync_stamps'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
+    ('guard', 'track_work_keys', 'scd_guard_track_work_keys'),
     ('guard', 'tracks', 'scd_guard_tracks'),
     ('guard', 'transcription_sync_versions', 'scd_guard_transcription_sync_versions'),
     ('guard', 'transcription_wire_state', 'scd_guard_transcription_wire_state'),
@@ -8234,6 +8238,7 @@ BEGIN
             ('track_sync_stamps', 'zz_owner'),
             ('track_sync_stamps', 'zzz_suppress'),
             ('track_work_aliases', 'zz_guard'),
+            ('track_work_keys', 'zz_guard'),
             ('tracks', 'zz_guard'),
             ('tracks', 'zz_owner'),
             ('tracks', 'zzz_suppress'),

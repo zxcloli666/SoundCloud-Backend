@@ -5,6 +5,7 @@ mod musicbrainz_names;
 mod renormalize;
 mod track_search;
 mod track_sync_stamps;
+mod track_work_keys;
 mod wanted_aliases;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ pub const LYRICS_REFETCH: &str = "lyrics_refetch";
 pub const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
 pub const TRACK_SEARCH: &str = "track_search";
 pub const TRACK_SYNC_STAMPS: &str = "track_sync_stamps";
+pub const TRACK_WORK_KEYS: &str = "track_work_keys";
 pub const WANTED_ALIASES: &str = "wanted_aliases";
 
 const SLICE_DEADLINE: Duration = Duration::from_secs(180);
@@ -66,6 +68,7 @@ pub struct AdminMaintenanceHandler {
     scan_batch: i64,
     track_search_batch: i64,
     track_sync_stamps_batch: i64,
+    track_work_keys_batch: i64,
 }
 
 impl AdminMaintenanceHandler {
@@ -77,6 +80,7 @@ impl AdminMaintenanceHandler {
             scan_batch: config.scan_batch,
             track_search_batch: config.track_search_batch,
             track_sync_stamps_batch: config.track_sync_stamps_batch,
+            track_work_keys_batch: config.track_work_keys_batch,
         }
     }
 
@@ -142,6 +146,14 @@ impl AdminMaintenanceHandler {
         payload: AdminMaintenancePayload,
     ) -> JobResult {
         self.run(job, payload, TRACK_SYNC_STAMPS).await
+    }
+
+    pub async fn backfill_track_work_keys(
+        &self,
+        job: &LeasedJob,
+        payload: AdminMaintenancePayload,
+    ) -> JobResult {
+        self.run(job, payload, TRACK_WORK_KEYS).await
     }
 
     async fn run(
@@ -213,6 +225,8 @@ impl AdminMaintenanceHandler {
             track_search::FIRST_PHASE
         } else if kind == TRACK_SYNC_STAMPS {
             track_sync_stamps::FIRST_PHASE
+        } else if kind == TRACK_WORK_KEYS {
+            track_work_keys::FIRST_PHASE
         } else if kind == LYRICS_REFETCH {
             lyrics_refetch::FIRST_PHASE
         } else if kind == LYRICS_DESCRIPTION {
@@ -233,6 +247,8 @@ impl AdminMaintenanceHandler {
             track_search::execute(self, state).await
         } else if kind == TRACK_SYNC_STAMPS {
             track_sync_stamps::execute(self, state).await
+        } else if kind == TRACK_WORK_KEYS {
+            track_work_keys::execute(self, state).await
         } else if kind == LYRICS_REFETCH {
             lyrics_refetch::execute(self, state).await
         } else if kind == LYRICS_DESCRIPTION {
@@ -333,6 +349,8 @@ fn continuation_kind(kind: &str) -> JobKind {
         JobKind::AdminTrackSearch
     } else if kind == TRACK_SYNC_STAMPS {
         JobKind::AdminTrackSyncStamps
+    } else if kind == TRACK_WORK_KEYS {
+        JobKind::AdminTrackWorkKeys
     } else if kind == LYRICS_REFETCH {
         JobKind::AdminLyricsRefetch
     } else if kind == LYRICS_DESCRIPTION {

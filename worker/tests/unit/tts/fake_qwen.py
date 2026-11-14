@@ -49,6 +49,8 @@ def main() -> None:
             answer(out, mode, number, frames)
         elif kind == "C":
             note("cancel", id=number)
+        elif kind == "T":
+            note("tune", id=number, payload=payload.decode())
     note("exit", ballast_bytes=len(ballast))
 
 
