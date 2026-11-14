@@ -18,7 +18,7 @@ fn by_symbol(document: &str) -> (Vec<Value>, String) {
         for piece in answer.push(&symbol.to_string()) {
             match piece {
                 Piece::Action(action) => actions.push(action),
-                Piece::Say(text) => said.push_str(&text),
+                Piece::Say(text) | Piece::Name { written: text, .. } => said.push_str(&text),
             }
         }
     }
@@ -38,7 +38,7 @@ fn sliced(document: &str, seed: u64) -> (Vec<Value>, String) {
         for piece in answer.push(&piece) {
             match piece {
                 Piece::Action(action) => actions.push(action),
-                Piece::Say(text) => said.push_str(&text),
+                Piece::Say(text) | Piece::Name { written: text, .. } => said.push_str(&text),
             }
         }
         at = end;
@@ -48,6 +48,46 @@ fn sliced(document: &str, seed: u64) -> (Vec<Value>, String) {
 
 fn said(document: &str) -> String {
     by_symbol(document).1
+}
+
+fn heard<'a>(deltas: impl IntoIterator<Item = &'a str>) -> Vec<Piece> {
+    let mut answer = Answer::default();
+    let mut pieces: Vec<Piece> = Vec::new();
+    for piece in deltas.into_iter().flat_map(|delta| answer.push(delta)) {
+        match (pieces.last_mut(), piece) {
+            (Some(Piece::Say(said)), Piece::Say(text)) => said.push_str(&text),
+            (_, piece) => pieces.push(piece),
+        }
+    }
+    pieces
+}
+
+fn heard_by_symbol(document: &str) -> Vec<Piece> {
+    let symbols: Vec<String> = document.chars().map(String::from).collect();
+    heard(symbols.iter().map(String::as_str))
+}
+
+fn heard_cut_at(document: &str, at: usize) -> Vec<Piece> {
+    let split = document
+        .char_indices()
+        .nth(at)
+        .map_or(document.len(), |(index, _)| index);
+    heard([&document[..split], &document[split..]])
+}
+
+fn spoken_answer(say: &str) -> String {
+    json!({"say": say}).to_string()
+}
+
+fn say(text: &str) -> Piece {
+    Piece::Say(text.to_owned())
+}
+
+fn name(written: &str, spoken: &str) -> Piece {
+    Piece::Name {
+        written: written.to_owned(),
+        spoken: spoken.to_owned(),
+    }
 }
 
 #[test]
@@ -226,5 +266,159 @@ fn an_answer_is_closed_by_the_brace_that_ends_its_object() {
     answer.push("{\"actions\":[],\"say\":\"\"");
     assert!(!answer.is_closed());
     answer.push(" }");
+    assert!(answer.is_closed());
+}
+
+#[test]
+fn a_marked_name_comes_out_as_the_name_and_its_reading() {
+    assert_eq!(
+        whole(r#"{"say":"Включаю [[Psychosis|Сайкозис]], слушай."}"#),
+        [
+            say("Включаю "),
+            name("Psychosis", "Сайкозис"),
+            say(", слушай.")
+        ]
+    );
+}
+
+#[test]
+fn an_answer_with_marks_reads_the_same_wherever_it_is_cut() {
+    let document = r#"{"actions":[{"name":"play","args":[{"name":"query","value":"[[a|b]]"}]}],"say":"Включаю [[Psychosis|Сайкозис]] и [[ $uicideboy$ | Суисайдбойз ]], потом [x]."}"#;
+    let expected = [
+        Piece::Action(json!({"name": "play", "args": [{"name": "query", "value": "[[a|b]]"}]})),
+        say("Включаю "),
+        name("Psychosis", "Сайкозис"),
+        say(" и "),
+        name("$uicideboy$", "Суисайдбойз"),
+        say(", потом [x]."),
+    ];
+    assert_eq!(whole(document), expected);
+    assert_eq!(heard_by_symbol(document), expected);
+    for at in 0..=document.chars().count() {
+        assert_eq!(heard_cut_at(document, at), expected, "cut at {at}");
+    }
+}
+
+#[test]
+fn two_marks_in_a_row_are_two_names() {
+    assert_eq!(
+        whole(r#"{"say":"[[$uicideboy$|Суисайдбойз]][[6ix9ine|Сикс Найн]]"}"#),
+        [
+            name("$uicideboy$", "Суисайдбойз"),
+            name("6ix9ine", "Сикс Найн")
+        ]
+    );
+}
+
+#[test]
+fn plain_text_is_not_held_back_by_a_mark_that_follows_it() {
+    let mut answer = Answer::default();
+    assert_eq!(answer.push(r#"{"say":"Включаю [[Psy"#), [say("Включаю ")]);
+    assert_eq!(answer.push("chosis|Сай"), []);
+    assert_eq!(answer.push("козис]"), []);
+    assert_eq!(
+        answer.push("], слу"),
+        [name("Psychosis", "Сайкозис"), say(", слу")]
+    );
+    assert_eq!(answer.push("шай ["), [say("шай ")]);
+    assert_eq!(answer.push("1]"), [say("[1]")]);
+    assert_eq!(answer.push(r#"."}"#), [say(".")]);
+    assert!(answer.is_closed());
+}
+
+#[test]
+fn a_name_and_a_reading_may_be_as_long_as_their_limits() {
+    let written = "N".repeat(80);
+    let spoken = "р".repeat(120);
+    assert_eq!(
+        whole(&spoken_answer(&format!("[[{written}|{spoken}]]"))),
+        [name(&written, &spoken)]
+    );
+}
+
+#[test]
+fn text_that_is_not_a_whole_mark_is_read_as_plain_text_and_loses_no_words() {
+    let longest = "N".repeat(80);
+    let too_long = "N".repeat(81);
+    let too_long_reading = "р".repeat(121);
+    let cases = [
+        ("a [b] c [d".to_owned(), "a [b] c [d".to_owned()),
+        (
+            "Включаю [[Psychosis]] громко".to_owned(),
+            "Включаю Psychosis громко".to_owned(),
+        ),
+        (
+            format!("[[{too_long}|Нэйм]] дальше"),
+            format!("{too_long}|Нэйм]] дальше"),
+        ),
+        (
+            format!("[[{longest}]x|Нэйм]]"),
+            format!("{longest}]x|Нэйм]]"),
+        ),
+        (
+            format!("[[Psychosis|{too_long_reading}]] дальше"),
+            "Psychosis]] дальше".to_owned(),
+        ),
+        (
+            "[[Psy\nchosis|Сайкозис]] дальше".to_owned(),
+            "Psy\nchosis|Сайкозис]] дальше".to_owned(),
+        ),
+        (
+            "[[Psychosis|Сай\nкозис]] дальше".to_owned(),
+            "Psychosis\nкозис]] дальше".to_owned(),
+        ),
+        ("Включаю [[Psycho".to_owned(), "Включаю Psycho".to_owned()),
+        (
+            "Включаю [[Psychosis|Сайкозис".to_owned(),
+            "Включаю Psychosis".to_owned(),
+        ),
+        (
+            "Включаю [[Psychosis|Сайкозис]".to_owned(),
+            "Включаю Psychosis".to_owned(),
+        ),
+        ("Включаю [".to_owned(), "Включаю [".to_owned()),
+        (
+            "[[Psychosis|]] и [[Psychosis| ]]".to_owned(),
+            "Psychosis и Psychosis".to_owned(),
+        ),
+        (
+            "[[ Psychosis | Psychosis ]]".to_owned(),
+            "Psychosis".to_owned(),
+        ),
+        (
+            "[[|Сайкозис]] и [[ | Сайкозис ]]".to_owned(),
+            "Сайкозис и Сайкозис".to_owned(),
+        ),
+    ];
+    for (spoken, expected) in cases {
+        let document = spoken_answer(&spoken);
+        assert_eq!(whole(&document), [say(&expected)], "{spoken}");
+        assert_eq!(heard_by_symbol(&document), [say(&expected)], "{spoken}");
+    }
+}
+
+#[test]
+fn escapes_inside_a_mark_are_decoded_before_the_mark_is_read() {
+    let document = r#"{"say":"\u005b[\"Psychosis\" \\ 2|\u0421\u0430\u0439\u043a\u043e\u0437\u0438\u0441 \u0434\u0432\u0430]\u005d!"}"#;
+    let expected = [name("\"Psychosis\" \\ 2", "Сайкозис два"), say("!")];
+    assert_eq!(whole(document), expected);
+    assert_eq!(heard_by_symbol(document), expected);
+    for at in 0..=document.chars().count() {
+        assert_eq!(heard_cut_at(document, at), expected, "cut at {at}");
+    }
+}
+
+#[test]
+fn a_mark_that_ends_the_speech_comes_out_whole() {
+    let document = r#"{"actions":[],"say":"Включаю [[Psychosis|Сайкозис]]"}"#;
+    let expected = [say("Включаю "), name("Psychosis", "Сайкозис")];
+    assert_eq!(whole(document), expected);
+    assert_eq!(heard_by_symbol(document), expected);
+    let mut answer = Answer::default();
+    assert_eq!(
+        answer.push(r#"{"say":"Включаю [[Psychosis|Сайкозис]"#),
+        [say("Включаю ")]
+    );
+    assert_eq!(answer.push(r#"]"}"#), [name("Psychosis", "Сайкозис")]);
     assert!(answer.is_closed());
 }

@@ -161,7 +161,8 @@ fn an_unknown_persona_and_a_bare_turn_use_the_default_voice_and_no_empty_section
     assert!(system.contains("Reply in the language of the user's latest message"));
     for absent in [
         "Tools:",
-        "actions",
+        "{\"actions\"",
+        "\"actions\" comes first",
         "language with the code",
         "asked you to remember",
         "App state",
@@ -261,7 +262,12 @@ fn the_plain_form_of_a_turn_is_the_same_turn_asked_without_its_tools() {
     assert!(rules.contains("{\"say\":\"<spoken reply>\"}"));
     assert!(rules.contains("No tools are available"));
     assert!(rules.contains("Whose words count."));
-    for absent in ["Tools:", "volume_set", "actions"] {
+    for absent in [
+        "Tools:",
+        "volume_set",
+        "{\"actions\"",
+        "\"actions\" comes first",
+    ] {
         assert!(!rules.contains(absent), "{absent}");
     }
     let said: Vec<String> = plain_messages(&turn)
@@ -298,4 +304,28 @@ fn the_rule_about_silence_is_given_only_for_a_phrase_that_may_be_overheard() {
     let rules = system(&limits(), &with_no_tools).sections.remove(0).text;
     assert!(rules.contains("No tools are available"));
     assert!(rules.contains("Staying silent."));
+}
+
+#[test]
+fn both_reply_formats_ask_to_write_a_hard_name_with_how_it_is_said() {
+    let turn = full();
+    let say =
+        "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.";
+    let earlier = "- Earlier replies in this conversation are shown without the actions they ran and without readings.";
+    for rules in [
+        system(&limits(), &turn).sections.remove(0).text,
+        plain_system(&limits(), &turn).sections.remove(0).text,
+    ] {
+        assert!(
+            rules.contains(&format!("{say}\n{NAME_READINGS}\n")),
+            "{rules}"
+        );
+        assert!(rules.contains(&format!("\n{earlier}\n\n")), "{rules}");
+        assert_eq!(rules.matches("[[name|reading]]").count(), 1);
+        assert!(rules.contains(
+            "Examples for a reply in Russian: [[Psychosis|Сайкозис]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]."
+        ));
+    }
+    assert!(NAME_READINGS.starts_with("- The voice reads \"say\" aloud exactly as it is spelled"));
+    assert!(NAME_READINGS.ends_with("Never use it inside \"actions\"."));
 }
