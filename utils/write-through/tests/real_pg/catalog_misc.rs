@@ -118,7 +118,7 @@ async fn marking_a_track_core_already_marked_hands_the_row_back() {
     on_core(
         &pair,
         "UPDATE public.tracks SET storage_state = 'too_long', index_state = 'too_long',
-                transcribe_state = 'disabled'
+                transcribe_state = 'disabled', title = 'Long mix (edit)'
          WHERE sc_track_id = '2002'",
     )
     .await;
@@ -173,7 +173,7 @@ async fn a_track_core_released_already_is_handed_back() {
     let pair = Pair::new(TRACKS).await;
     on_core(
         &pair,
-        "UPDATE public.tracks SET pipeline_held = false
+        "UPDATE public.tracks SET pipeline_held = false, title = 'Held (edit)'
          WHERE sc_track_id = '2001'",
     )
     .await;
