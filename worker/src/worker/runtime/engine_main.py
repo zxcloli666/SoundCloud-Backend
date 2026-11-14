@@ -250,7 +250,7 @@ class Engine:
 
     def _rss_mib(self) -> int:
         try:
-            return memory.rss_mib()
+            return memory.tree_rss_mib(os.getpid())
         except OSError as error:
             self._log.warning("engine_rss_unreadable", error=str(error))
             return 0

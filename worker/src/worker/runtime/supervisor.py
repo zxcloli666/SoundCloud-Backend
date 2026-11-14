@@ -59,6 +59,7 @@ class EnginePlan:
     slots: tuple[SlotSpec, ...]
     reserved: bool = False
     threads: int = 0
+    own_threads: bool = False
     nice: int = 0
     idle_unload_s: float = 0.0
     shares_budget: bool = False
@@ -169,6 +170,8 @@ def budget_plans(plans: Iterable[EnginePlan], cpus: int) -> tuple[EnginePlan, ..
 
 
 def planned_threads(plan: EnginePlan, cpus: int) -> int:
+    if plan.own_threads:
+        return plan.threads
     if plan.threads:
         return min(plan.threads, cpu_budget(cpus))
     if plan.inline:
@@ -483,7 +486,7 @@ class Supervisor:
         return plan.threads or self._policy.threads
 
     def _call_threads(self, plan: EnginePlan, urgent: bool) -> int:
-        if plan.inline or (urgent and plan.reserved):
+        if plan.inline or plan.own_threads or (urgent and plan.reserved):
             return plan.threads
         if self._policy.threads or not self._policy.cpu_budget:
             return self._policy.threads

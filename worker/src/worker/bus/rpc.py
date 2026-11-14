@@ -11,7 +11,7 @@ import nats.errors
 from nats.aio.msg import Msg
 
 from worker.bus.connection import Connection
-from worker.bus.lane_runner import Aborted
+from worker.bus.lane_runner import LANE_DONE, TASK_MS, Aborted
 from worker.bus.lease import Lease, Leases, Settled
 from worker.bus.outbox import encode
 from worker.contract import Contract, LaneSpec
@@ -61,6 +61,7 @@ class RpcHandler:
         self._prefix = lane.filter_subject.removesuffix(">")
 
     async def handle(self, msg: Msg, abort: asyncio.Event) -> None:
+        started = self._clock.now()
         method = msg.subject.removeprefix(self._prefix)
         seq = msg.metadata.sequence.stream
         attached = self._leases.attach(msg, {}, f"{self.lane.correlation_prefix}:{seq}")
@@ -80,6 +81,7 @@ class RpcHandler:
                 await self._reply(lease, method, reply_to, reply)
             await lease.ack()
             lease.settle(Settled.PUBLISHED)
+            self._count_done(started)
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
@@ -87,6 +89,11 @@ class RpcHandler:
                 self._counters.inc("lease_unsettled_total", lane=self.lane.name)
                 log.error("lease_left_unsettled", extra=lease.log_fields())
                 lease.settle(Settled.DROPPED)
+
+    def _count_done(self, started: float) -> None:
+        now = self._clock.now()
+        self._counters.mark(LANE_DONE, now, lane=self.lane.name)
+        self._counters.observe(TASK_MS, round((now - started) * 1000, 1), lane=self.lane.name)
 
     async def _answer(
         self, lease: Lease, msg: Msg, method: str, abort: asyncio.Event

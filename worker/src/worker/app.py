@@ -848,7 +848,17 @@ def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
 def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     if settings_module.TTS_SLOT not in plan.slot_names:
         return plan
-    return replace(plan, reserved=True, idle_unload_s=float(settings.tts.idle_unload_s))
+    return replace(
+        plan,
+        reserved=True,
+        threads=tts_threads(),
+        own_threads=True,
+        idle_unload_s=float(settings.tts.idle_unload_s),
+    )
+
+
+def tts_threads() -> int:
+    return max(1, (os.cpu_count() or 1) // 2)
 
 
 def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:
