@@ -2,19 +2,17 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use backend_contracts::pipeline::{
-    AI_COMPLETE, CompleteRequest, MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES,
-    MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS,
-    MAX_COMPLETE_TOKENS,
+    CompleteRequest, MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES,
+    MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS,
 };
-use llm_ladder::{Hosting, Observer, Section, StepReport, WORKER_LIMITS, WorkerLimits};
+use llm_ladder::{Hosting, Section, WORKER_LIMITS, WorkerLimits};
 use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
-use crate::config::LlmCfg;
 use crate::modules::voice_chat::VoiceChat;
 use crate::modules::voice_chat::request::ChatBody;
-use crate::modules::voice_chat::testing::{CHAT_SECTION, Heard, hear, lane, tools};
+use crate::modules::voice_chat::testing::{Asked, Heard, Unwatched, hear, lane, local_only, tools};
 
 const NOTE: &str = "зови меня Саша";
 const SPEECH: &str = "{\"actions\":[],\"say\":\"Привет.\"}";
@@ -23,34 +21,10 @@ const NOTHING: &str = "{\"actions\":[],\"say\":\"\"}";
 const NO_WORD: &str = "{\"say\":\" \"}";
 const PLAIN: &str = "plain = true\n";
 
-struct Asked {
-    answer: &'static str,
-    payloads: Mutex<Vec<Bytes>>,
-}
-
-struct Unwatched;
-
 struct Talk {
     heard: Heard,
     sections: Vec<Section>,
     sent: Value,
-}
-
-impl WorkerTransport for Asked {
-    fn call<'a>(
-        &'a self,
-        _: &'a str,
-        payload: Bytes,
-        _: Duration,
-    ) -> BoxFuture<'a, Result<Value, WorkerError>> {
-        self.payloads.lock().unwrap().push(payload);
-        let data = json!({"text": self.answer, "input_tokens": 40, "output_tokens": 9});
-        Box::pin(async move { Ok(data) })
-    }
-}
-
-impl Observer for Unwatched {
-    fn step(&self, _: &StepReport<'_>) {}
 }
 
 async fn talk(answer: &'static str, provider_keys: &str) -> Talk {
@@ -100,13 +74,6 @@ async fn told(body: Value, answer: &'static str, provider_keys: &str) -> Talk {
         sections,
         sent: serde_json::from_slice(&payloads[0]).expect("a JSON request"),
     }
-}
-
-fn local_only(provider_keys: &str) -> LlmCfg {
-    let ladder = format!(
-        "[providers.local]\nkind = \"worker\"\nsubject = \"{AI_COMPLETE}\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n{provider_keys}\n[ladders.chat]\nsteps = [\"local\"]\nhedge_after_ms = 2000\ndeadline_ms = 6000\nbreaker = {{ failures = 3, window_s = 30, open_s = 90 }}\n"
-    );
-    LlmCfg::parse(&format!("{ladder}{CHAT_SECTION}")).expect("a valid config")
 }
 
 fn of_the_contract(sent: &Value) -> CompleteRequest {

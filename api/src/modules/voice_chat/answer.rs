@@ -4,16 +4,29 @@ const ACTIONS: &str = "actions";
 const SAY: &str = "say";
 const REPLACEMENT: char = '\u{fffd}';
 const UNICODE_DIGITS: usize = 4;
+const MARK_OPEN: char = '[';
+const MARK_CLOSE: char = ']';
+const MARK_SPLIT: char = '|';
+const MOST_WRITTEN: usize = 80;
+const MOST_SPOKEN: usize = 120;
 
 #[derive(Debug, PartialEq)]
 pub enum Piece {
     Action(Value),
     Say(String),
+    Name { written: String, spoken: String },
 }
 
 #[derive(Default)]
 pub struct Answer {
     at: At,
+    marks: Marks,
+}
+
+#[derive(Default)]
+struct Pieces {
+    done: Vec<Piece>,
+    said: String,
 }
 
 #[derive(Default)]
@@ -71,38 +84,49 @@ enum Element {
     End,
 }
 
+#[derive(Default)]
+struct Marks {
+    at: Marked,
+}
+
+#[derive(Default)]
+enum Marked {
+    #[default]
+    Plain,
+    Opening,
+    Inside(Mark),
+}
+
+#[derive(Default)]
+struct Mark {
+    written: String,
+    spoken: Option<String>,
+    closing: bool,
+}
+
+enum Took {
+    Inside,
+    Closed,
+    Broken(Option<char>),
+}
+
 impl Answer {
     pub fn push(&mut self, delta: &str) -> Vec<Piece> {
-        let mut pieces = Vec::new();
-        let mut spoken = String::new();
+        let mut pieces = Pieces::default();
         for symbol in delta.chars() {
             let mut again = Some(symbol);
             while let Some(symbol) = again.take() {
-                if let Some(action) = self.read(symbol, &mut spoken, &mut again) {
-                    if !spoken.is_empty() {
-                        pieces.push(Piece::Say(std::mem::take(&mut spoken)));
-                    }
-                    pieces.push(Piece::Action(action));
-                }
+                self.read(symbol, &mut pieces, &mut again);
             }
         }
-        if !spoken.is_empty() {
-            pieces.push(Piece::Say(spoken));
-        }
-        pieces
+        pieces.into_vec()
     }
 
     pub fn is_closed(&self) -> bool {
         matches!(self.at, At::Closed)
     }
 
-    fn read(
-        &mut self,
-        symbol: char,
-        spoken: &mut String,
-        again: &mut Option<char>,
-    ) -> Option<Value> {
-        let mut action = None;
+    fn read(&mut self, symbol: char, pieces: &mut Pieces, again: &mut Option<char>) {
         let next = match &mut self.at {
             At::Before => (symbol == '{').then_some(At::Member),
             At::Member => match symbol {
@@ -123,15 +147,25 @@ impl Answer {
                     Some(At::Other(Scan::default()))
                 }
             },
-            At::Say(text) => text.read(symbol, spoken).then_some(At::Member),
+            At::Say(text) => {
+                let mut decoded = String::new();
+                let ended = text.read(symbol, &mut decoded);
+                for symbol in decoded.chars() {
+                    self.marks.read(symbol, pieces);
+                }
+                if ended {
+                    self.marks.end(pieces);
+                }
+                ended.then_some(At::Member)
+            }
             At::Actions(elements) => match elements.read(symbol) {
                 Element::Inside => None,
                 Element::Whole(whole) => {
-                    action = Some(whole);
+                    pieces.push(Piece::Action(whole));
                     None
                 }
                 Element::WholeBefore(whole) => {
-                    action = Some(whole);
+                    pieces.push(Piece::Action(whole));
                     *again = Some(symbol);
                     None
                 }
@@ -150,7 +184,112 @@ impl Answer {
         if let Some(next) = next {
             self.at = next;
         }
-        action
+    }
+}
+
+impl Pieces {
+    fn say(&mut self, symbol: char) {
+        self.said.push(symbol);
+    }
+
+    fn say_all(&mut self, text: &str) {
+        self.said.push_str(text);
+    }
+
+    fn push(&mut self, piece: Piece) {
+        self.flush();
+        self.done.push(piece);
+    }
+
+    fn into_vec(mut self) -> Vec<Piece> {
+        self.flush();
+        self.done
+    }
+
+    fn flush(&mut self) {
+        if !self.said.is_empty() {
+            self.done.push(Piece::Say(std::mem::take(&mut self.said)));
+        }
+    }
+}
+
+impl Marks {
+    fn read(&mut self, symbol: char, pieces: &mut Pieces) {
+        match std::mem::take(&mut self.at) {
+            Marked::Plain if symbol == MARK_OPEN => self.at = Marked::Opening,
+            Marked::Plain => pieces.say(symbol),
+            Marked::Opening if symbol == MARK_OPEN => self.at = Marked::Inside(Mark::default()),
+            Marked::Opening => {
+                pieces.say(MARK_OPEN);
+                self.read(symbol, pieces);
+            }
+            Marked::Inside(mut mark) => match mark.read(symbol) {
+                Took::Inside => self.at = Marked::Inside(mark),
+                Took::Closed => mark.close(pieces),
+                Took::Broken(rest) => {
+                    pieces.say_all(&mark.written);
+                    if let Some(symbol) = rest {
+                        self.read(symbol, pieces);
+                    }
+                }
+            },
+        }
+    }
+
+    fn end(&mut self, pieces: &mut Pieces) {
+        match std::mem::take(&mut self.at) {
+            Marked::Plain => {}
+            Marked::Opening => pieces.say(MARK_OPEN),
+            Marked::Inside(mark) => pieces.say_all(&mark.written),
+        }
+    }
+}
+
+impl Mark {
+    fn read(&mut self, symbol: char) -> Took {
+        if std::mem::take(&mut self.closing) {
+            if symbol == MARK_CLOSE {
+                return Took::Closed;
+            }
+            if !self.keep(MARK_CLOSE) {
+                return Took::Broken(Some(symbol));
+            }
+        }
+        match symbol {
+            MARK_CLOSE => {
+                self.closing = true;
+                Took::Inside
+            }
+            MARK_SPLIT if self.spoken.is_none() => {
+                self.spoken = Some(String::new());
+                Took::Inside
+            }
+            '\n' | '\r' => Took::Broken(Some(symbol)),
+            _ if self.keep(symbol) => Took::Inside,
+            _ => Took::Broken(None),
+        }
+    }
+
+    fn keep(&mut self, symbol: char) -> bool {
+        let (part, most) = match &mut self.spoken {
+            Some(spoken) => (spoken, MOST_SPOKEN),
+            None => (&mut self.written, MOST_WRITTEN),
+        };
+        part.push(symbol);
+        part.chars().count() <= most
+    }
+
+    fn close(self, pieces: &mut Pieces) {
+        let written = self.written.trim();
+        match self.spoken.as_deref().map(str::trim) {
+            None => pieces.say_all(&self.written),
+            Some(spoken) if spoken.is_empty() || spoken == written => pieces.say_all(written),
+            Some(spoken) if written.is_empty() => pieces.say_all(spoken),
+            Some(spoken) => pieces.push(Piece::Name {
+                written: written.to_owned(),
+                spoken: spoken.to_owned(),
+            }),
+        }
     }
 }
 

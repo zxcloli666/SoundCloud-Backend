@@ -1,11 +1,14 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_nats::jetstream::stream;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use backend_contracts::pipeline::REPLY_TO_HEADER;
+use backend_contracts::pipeline::{AI_COMPLETE, REPLY_TO_HEADER};
+use bytes::Bytes;
 use futures::StreamExt;
+use futures::future::BoxFuture;
+use llm_ladder::{Observer, StepReport, WorkerError, WorkerTransport};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -58,6 +61,37 @@ pub fn limits() -> VoiceChatCfg {
 
 pub fn body_limit() -> usize {
     super::request::body_limit(&limits())
+}
+
+pub fn local_only(provider_keys: &str) -> LlmCfg {
+    let ladder = format!(
+        "[providers.local]\nkind = \"worker\"\nsubject = \"{AI_COMPLETE}\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n{provider_keys}\n[ladders.chat]\nsteps = [\"local\"]\nhedge_after_ms = 2000\ndeadline_ms = 6000\nbreaker = {{ failures = 3, window_s = 30, open_s = 90 }}\n"
+    );
+    LlmCfg::parse(&format!("{ladder}{CHAT_SECTION}")).expect("a valid config")
+}
+
+pub struct Asked {
+    pub answer: &'static str,
+    pub payloads: Mutex<Vec<Bytes>>,
+}
+
+pub struct Unwatched;
+
+impl WorkerTransport for Asked {
+    fn call<'a>(
+        &'a self,
+        _: &'a str,
+        payload: Bytes,
+        _: Duration,
+    ) -> BoxFuture<'a, Result<Value, WorkerError>> {
+        self.payloads.lock().unwrap().push(payload);
+        let data = json!({"text": self.answer, "input_tokens": 40, "output_tokens": 9});
+        Box::pin(async move { Ok(data) })
+    }
+}
+
+impl Observer for Unwatched {
+    fn step(&self, _: &StepReport<'_>) {}
 }
 
 pub fn tools() -> Value {
