@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use repl_verify::{
-    Mode, Sweeper, Verifier, api_node, probe_once, repair_once, retain_once, sweep_once,
+    Mode, Sweeper, Verifier, api_node, backlog_once, probe_once, repair_once, retain_once,
+    sweep_once,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Connection, PgConnection, PgPool};
@@ -109,6 +110,41 @@ async fn legacy_node_sweeps_nothing() {
     );
     let probe = probe_once(&pool, 10, 500).await.unwrap();
     assert_eq!((probe.state.as_str(), probe.probes), ("idle", 0));
+}
+
+#[tokio::test]
+async fn the_probe_backlog_counts_the_api_slots_of_this_database_but_not_the_graph_slot() {
+    let pool = node("backlog", Some(("core", "core"))).await;
+    assert_eq!(backlog_once(&pool).await.unwrap(), 0);
+    let api = format!("rv_api_from_core_{}", std::process::id());
+    let graph = format!("rv_api_graph_from_core_{}", std::process::id());
+    for slot in [&api, &graph] {
+        sqlx::query("SELECT pg_create_logical_replication_slot($1, 'pgoutput')")
+            .bind(slot)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("SELECT pg_logical_emit_message(true, 'rv', repeat(md5(random()::text), 65536))")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let lagging = backlog_once(&pool).await.unwrap();
+    sqlx::query("SELECT pg_replication_slot_advance($1, pg_current_wal_lsn())")
+        .bind(&api)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let caught_up = backlog_once(&pool).await.unwrap();
+    for slot in [&api, &graph] {
+        sqlx::query("SELECT pg_drop_replication_slot($1)")
+            .bind(slot)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    assert!(lagging >= 2_000_000, "{lagging}");
+    assert!(caught_up < 1_000_000, "{caught_up}");
 }
 
 #[tokio::test]

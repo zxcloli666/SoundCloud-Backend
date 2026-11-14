@@ -6,6 +6,8 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::gate::Gate;
+
 pub const LAST_ATTEMPT: i32 = 3;
 
 const BUDGET: i32 = 10;
@@ -33,6 +35,12 @@ impl FromStr for Mode {
             _ => Err("expected off, dry or repair".to_owned()),
         }
     }
+}
+
+enum Step {
+    Idle,
+    Held,
+    Probed,
 }
 
 #[derive(Debug)]
@@ -68,6 +76,12 @@ impl Repair {
     pub fn stale_hash(&self) -> bool {
         self.action == "stale_hash"
     }
+}
+
+pub async fn backlog_once(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_file_scalar!("queries/backlog.sql")
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn probe_once(pool: &PgPool, budget: i32, chunk: i32) -> Result<Probe, sqlx::Error> {
@@ -107,19 +121,25 @@ impl Verifier {
 
     pub async fn run(self, stop: CancellationToken) -> Result<(), Infallible> {
         let mut backoff = self.pace;
+        let mut gate = Gate::default();
         loop {
-            let wait = match self.step().await {
-                Ok(true) => {
+            let wait = match self.step(&mut gate).await {
+                Ok(Step::Probed) => {
+                    backoff = self.pace;
+                    gate.after_probe(self.pace)
+                }
+                Ok(Step::Held) => {
                     backoff = self.pace;
                     self.pace
                 }
-                Ok(false) => IDLE_PACE,
+                Ok(Step::Idle) => IDLE_PACE,
                 Err(error) => {
                     warn!(%error, "scd verify step failed");
                     backoff = (backoff * 2).min(MAX_BACKOFF);
                     backoff
                 }
             };
+            metrics::gauge!("scd_repl_verify_behind_seconds").set(gate.behind().as_secs_f64());
             tokio::select! {
                 () = stop.cancelled() => return Ok(()),
                 () = tokio::time::sleep(wait) => {}
@@ -127,24 +147,34 @@ impl Verifier {
         }
     }
 
-    async fn step(&self) -> Result<bool, sqlx::Error> {
+    async fn step(&self, gate: &mut Gate) -> Result<Step, sqlx::Error> {
         if self.mode == Mode::Off {
-            return Ok(false);
+            return Ok(Step::Idle);
+        }
+        let dry = self.mode == Mode::Dry;
+        if gate.hold(backlog_once(&self.pool).await?, self.pace) {
+            metrics::counter!("scd_repl_verify_held_total").increment(1);
+            self.settle(dry).await?;
+            return Ok(Step::Held);
         }
         let probe = probe_once(&self.pool, BUDGET, CHUNK).await?;
         if probe.state == "idle" {
-            return Ok(false);
+            return Ok(Step::Idle);
         }
         metrics::counter!("scd_repl_verify_probes_total").increment(probe.probes as u64);
         if probe.wrapped {
             metrics::counter!("scd_repl_verify_cycles_total").increment(1);
             info!("scd verify probed every table once");
         }
-        let dry = self.mode == Mode::Dry;
+        self.settle(dry).await?;
+        Ok(Step::Probed)
+    }
+
+    async fn settle(&self, dry: bool) -> Result<(), sqlx::Error> {
         for repair in repair_once(&self.pool, dry, ANSWERS).await? {
             report(&repair, dry);
         }
-        Ok(true)
+        Ok(())
     }
 }
 
