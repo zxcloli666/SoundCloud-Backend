@@ -24,6 +24,8 @@ DROP INDEX IF EXISTS public.tracks_storage_failed_retry_idx;
 
 ALTER TABLE public.tracks DROP COLUMN updated_at;
 
+ALTER TABLE public.tracks SET (fillfactor = 90);
+
 DO $$
 BEGIN
     IF public.scd_role() IN ('core', 'api') THEN

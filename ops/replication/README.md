@@ -138,7 +138,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 71. `0346_tracks_updated_at_unpublish`: `scd_unpublish_column` for `tracks.updated_at`; on core the publication drops it in the same transaction.
 72. `0347_tracks_updated_at_writers`: the six command functions that wrote `tracks.updated_at` (observe_tracks, track_delete, track_edit, track_release_held, track_storage_lost, track_too_long) without it, bodies otherwise unchanged.
 73. `0348_scd_install`: the generated SQL again, on top of 0345: the tracks owner, row hash and publication list without `updated_at`, every trigger is kept.
-74. `0349_tracks_updated_at_drop`: takes the tracks lock the way 0291 does (SHARE UPDATE EXCLUSIVE, then ACCESS EXCLUSIVE in 200 ms tries for 2 min), drops `tracks_storage_failed_retry_idx` and `tracks.updated_at`, and clears the unpublish mark.
+74. `0349_tracks_updated_at_drop`: takes the tracks lock the way 0291 does (SHARE UPDATE EXCLUSIVE, then ACCESS EXCLUSIVE in 200 ms tries for 2 min), drops `tracks_storage_failed_retry_idx` and `tracks.updated_at`, sets fillfactor 90 (new pages keep room for a HOT update; 70-80% of tracks updates found the page full) and clears the unpublish mark.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
