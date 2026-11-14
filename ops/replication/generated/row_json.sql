@@ -1042,6 +1042,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.track_storage_failures t WHERE t.track_id = (k ->> 'track_id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_track_sync_stamps(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.track_sync_stamps t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_track_work_aliases(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1522,6 +1534,8 @@ BEGIN
             RETURN public.scd_row_json_track_search(k);
         WHEN 'track_storage_failures' THEN
             RETURN public.scd_row_json_track_storage_failures(k);
+        WHEN 'track_sync_stamps' THEN
+            RETURN public.scd_row_json_track_sync_stamps(k);
         WHEN 'track_work_aliases' THEN
             RETURN public.scd_row_json_track_work_aliases(k);
         WHEN 'tracks' THEN

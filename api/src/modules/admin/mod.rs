@@ -53,6 +53,10 @@ pub fn router() -> Router<AppState> {
             post(maintenance::track_search),
         )
         .route(
+            "/admin/maintenance/track-sync-stamps",
+            post(maintenance::track_sync_stamps),
+        )
+        .route(
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
         )

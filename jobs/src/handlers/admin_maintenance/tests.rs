@@ -90,6 +90,7 @@ pub(super) fn handler(pool: &PgPool) -> AdminMaintenanceHandler {
         crate::config::AdminMaintenanceConfig {
             scan_batch: 2_000,
             track_search_batch: 1_000,
+            track_sync_stamps_batch: 5_000,
         },
     )
 }

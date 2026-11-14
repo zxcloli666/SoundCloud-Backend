@@ -2320,6 +2320,23 @@
     {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_storage_failures_pkey", "primary": true, "where": null}
    ]
   },
+  "track_sync_stamps": {
+   "columns": [
+    {"default": null, "generated": false, "name": "sc_synced_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "track_sync_stamps_track_fk", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_track_sync_stamps", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_sync_stamps_pkey", "primary": true, "where": null}
+   ]
+  },
   "track_work_aliases": {
    "columns": [
     {"default": null, "generated": false, "name": "alias_key", "notnull": true, "type": "text"},

@@ -244,6 +244,10 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              storage_priority smallint NOT NULL DEFAULT 5,
              sc_synced_at timestamptz NOT NULL DEFAULT now(),
              updated_at timestamptz NOT NULL DEFAULT now()
+         );
+         CREATE TABLE track_sync_stamps (
+             track_id uuid PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+             sc_synced_at timestamptz NOT NULL
          );",
     )
     .execute(pool)

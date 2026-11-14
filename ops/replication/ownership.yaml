@@ -9,7 +9,7 @@ core_only_code:
   streaming/src/db/postgres/upgrade.rs: "HQ upgrade runs only where STREAMING_HQ_UPGRADE=on, on core (B8)"
 
 kinds:
-  observe.tracks: {touches: [tracks], from: "utils/catalog-ingest tracks upsert, insert_absent, bump_priority (api search, resolve, upload ingest)"}
+  observe.tracks: {touches: [tracks, track_sync_stamps], from: "utils/catalog-ingest tracks upsert, insert_absent, bump_priority (api search, resolve, upload ingest)"}
   observe.users: {touches: [users], from: "utils/catalog-ingest users upsert, insert_absent"}
   observe.playlists: {touches: [playlists, playlist_membership_state], from: "utils/catalog-ingest playlists upsert, insert_absent, ensure_membership_state"}
   observe.profile: {touches: [user_profiles], from: "utils/catalog-ingest upsert_profile (login)"}
@@ -83,6 +83,7 @@ tables:
   track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}}}
   track_comments: {class: C, reassert: always, note: "sc_comment_id filled by core"}
   track_search: {class: C, note: "narrow copy of the searchable tracks rows (public, not deleted, not superseded) for the full-text search, written on core only by the track_search triggers on tracks and the admin track_search backfill"}
+  track_sync_stamps: {class: C, note: "tracks.sc_synced_at in a narrow row, so a sync that changes nothing else stops rewriting the tracks row; written with the stamp by observe.tracks and the jobs playlist observe upsert, filled by the admin track_sync_stamps backfill"}
   tracks:
     class: C
     id: {ns: tracks, from: [urn]}

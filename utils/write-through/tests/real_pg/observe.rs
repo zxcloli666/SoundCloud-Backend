@@ -331,8 +331,9 @@ async fn a_backlog_observation_never_overwrites_newer_core_data() {
     assert_eq!(
         run.diverged[1..],
         [
+            "api and core differ: track_sync_stamps",
             "api and core differ: tracks",
-            "dispatch on core: Verdict { status: Some(\"ok\"), reasserted: 1, purged: 0, dead: 0 }",
+            "dispatch on core: Verdict { status: Some(\"ok\"), reasserted: 2, purged: 0, dead: 0 }",
         ]
     );
     let core_row: (String, i64, DateTime<Utc>) =
