@@ -93,8 +93,7 @@ WITH track AS MATERIALIZED (
 ), demoted AS (
     UPDATE tracks AS current
     SET index_state = 'pending',
-        indexed_at = NULL,
-        updated_at = now()
+        indexed_at = NULL
     FROM invalidating
     WHERE current.sc_track_id = invalidating.sc_track_id
     RETURNING current.sc_track_id

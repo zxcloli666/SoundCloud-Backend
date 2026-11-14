@@ -35,8 +35,7 @@ WITH doomed AS (SELECT credit.track_id,
                  enrich_confidence = NULL,
                  enrich_error = NULL,
                  enrich_attempts = 0,
-                 enrich_next_run_at = now() + random() * interval '30 minutes',
-                 updated_at = now()
+                 enrich_next_run_at = now() + random() * interval '30 minutes'
              FROM locked
              WHERE track.id = locked.id
              RETURNING track.id)

@@ -41,10 +41,6 @@ WITH members AS (SELECT track.id,
                  superseded_by = CASE
                                      WHEN track.id IN (SELECT id FROM losers) THEN (SELECT id FROM winner)
                                      ELSE track.superseded_by
-                     END,
-                 updated_at = CASE
-                                  WHEN track.id IN (SELECT id FROM losers) THEN now()
-                                  ELSE track.updated_at
                      END
              FROM locked
              WHERE track.id = locked.id

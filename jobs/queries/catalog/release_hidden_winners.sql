@@ -15,8 +15,7 @@ WITH hidden AS (SELECT loser.id
                              FOR NO KEY UPDATE OF track),
      released AS (
          UPDATE tracks
-             SET superseded_by = NULL,
-                 updated_at = now()
+             SET superseded_by = NULL
              FROM locked
              WHERE tracks.id = locked.id
              RETURNING tracks.id)

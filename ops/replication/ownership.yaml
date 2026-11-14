@@ -95,6 +95,7 @@ tables:
       star_due_mark_update: {rows: [star_due_marks]}
       track_search_row: {rows: [track_search]}
       track_search_update: {rows: [track_search]}
+      track_storage_failures_sync: {rows: [track_storage_failures]}
     note: "last_read_at has no writer since B5a, reads go to entity_reads; jobs-private columns go to narrow P tables in A7"
   user_followers: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_owned_playlists: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
@@ -147,6 +148,7 @@ tables:
   storage_event_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   subscription_snapshot_state: {class: P}
   taste_schedule: {class: P}
+  track_storage_failures: {class: P, note: "core-private time of the last write that left a tracks row in storage_state failed, kept by track_storage_failures_sync; the failed-storage retry waits 24 h from it"}
   track_work_aliases: {class: P}
   transcription_sync_versions: {class: P}
   transcription_wire_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}

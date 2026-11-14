@@ -112,8 +112,7 @@ WITH track AS MATERIALIZED (
         transcribe_at = CASE
             WHEN current.transcribe_state = 'pending' THEN current.transcribe_at
             ELSE now()
-        END,
-        updated_at = now()
+        END
     FROM claimed
     WHERE current.sc_track_id = claimed.sc_track_id
     RETURNING claimed.sc_track_id,

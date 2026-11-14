@@ -32,7 +32,7 @@ pub struct UpgradePick {
 }
 
 const PICK_STAR_LIKED: &str = r#"UPDATE tracks SET hq_upgrade_last_at = now(),
-       hq_upgrade_attempts = hq_upgrade_attempts + 1, updated_at = now()
+       hq_upgrade_attempts = hq_upgrade_attempts + 1
    WHERE id IN (
        SELECT track.id
        FROM (
@@ -77,7 +77,7 @@ const NEXT_STAR_LIKED: &str = r#"SELECT extract(epoch FROM now() - greatest(
    LIMIT 1"#;
 
 const PICK_LIKED: &str = r#"UPDATE tracks SET hq_upgrade_last_at = now(),
-       hq_upgrade_attempts = hq_upgrade_attempts + 1, updated_at = now()
+       hq_upgrade_attempts = hq_upgrade_attempts + 1
    WHERE id IN (
        SELECT id FROM tracks
        WHERE hq_upgrade_pending = true
@@ -106,7 +106,7 @@ const NEXT_LIKED: &str = r#"SELECT extract(epoch FROM now() - coalesce(
    LIMIT 1"#;
 
 const PICK_REST: &str = r#"UPDATE tracks SET hq_upgrade_last_at = now(),
-       hq_upgrade_attempts = hq_upgrade_attempts + 1, updated_at = now()
+       hq_upgrade_attempts = hq_upgrade_attempts + 1
    WHERE id IN (
        SELECT id FROM tracks
        WHERE hq_upgrade_pending = true
@@ -181,7 +181,7 @@ impl PgPool {
         let client = self.connection().await?;
         client
             .execute(
-                "UPDATE tracks SET hq_upgrade_last_at = now(), updated_at = now() \
+                "UPDATE tracks SET hq_upgrade_last_at = now() \
                  WHERE urn = $1",
                 &[&urn],
             )

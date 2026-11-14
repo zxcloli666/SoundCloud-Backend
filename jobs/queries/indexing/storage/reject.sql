@@ -35,8 +35,7 @@ WITH track AS MATERIALIZED (
                 THEN 'failed'
             ELSE storage_state
         END,
-        hq_upgrade_pending = false,
-        updated_at = now()
+        hq_upgrade_pending = false
     WHERE sc_track_id = $5
       AND EXISTS (SELECT 1 FROM advanced)
     RETURNING 1

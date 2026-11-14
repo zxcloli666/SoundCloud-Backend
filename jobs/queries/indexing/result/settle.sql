@@ -17,8 +17,7 @@ WITH settled AS (
               state.outcome_reason
 ), failed AS (
     UPDATE tracks AS track
-    SET index_state = 'failed',
-        updated_at = now()
+    SET index_state = 'failed'
     FROM settled
     JOIN storage_event_state AS storage
       ON storage.sc_track_id = settled.sc_track_id
