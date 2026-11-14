@@ -4,7 +4,9 @@ import asyncio
 import logging
 import random
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum, StrEnum
+from typing import Any
 
 import nats.errors
 import nats.js.errors
@@ -29,6 +31,7 @@ DEFAULT_MAX_ACK_PENDING = 1000
 DEFAULT_MAX_DELIVER = -1
 BROKER_MAX_DELIVER = 1
 JS_API_PREFIX = "$JS.API"
+PRIORITIZED = "prioritized"
 
 
 class LaneState(StrEnum):
@@ -49,6 +52,15 @@ class ConfigDrift(Exception):
         self.diff = dict(diff)
 
 
+@dataclass(frozen=True)
+class Priority:
+    groups: tuple[str, ...] = ()
+    policy: str = ""
+
+
+UNGROUPED = Priority()
+
+
 def served_lanes(settings: Settings, contract: Contract) -> tuple[LaneSpec, ...]:
     check_public_lanes(settings, contract.public_lanes)
     return tuple(contract.lane(name) for name in settings.lanes.enabled)
@@ -58,8 +70,18 @@ def expected_max_deliver(lane: LaneSpec, public: bool) -> int:
     return BROKER_MAX_DELIVER if public else lane.max_deliver
 
 
+def pull_priority(lane: LaneSpec, public: bool) -> dict[str, object]:
+    group = lane.priority_group
+    if group is None or public:
+        return {}
+    return {"group": group.name, "priority": group.workers}
+
+
 def consumer_diff(
-    lane: LaneSpec, actual: api.ConsumerConfig, public: bool = False
+    lane: LaneSpec,
+    actual: api.ConsumerConfig,
+    public: bool = False,
+    priority: Priority = UNGROUPED,
 ) -> dict[str, tuple[object, object]]:
     expected: dict[str, object] = {
         "filter_subject": lane.filter_subject,
@@ -77,9 +99,19 @@ def consumer_diff(
         "max_deliver": observed_max_deliver(actual),
         "max_ack_pending": actual.max_ack_pending or DEFAULT_MAX_ACK_PENDING,
     }
+    if lane.priority_group is not None and not public and priority.groups:
+        expected["priority_groups"] = (lane.priority_group.name,)
+        expected["priority_policy"] = PRIORITIZED
+        observed["priority_groups"] = priority.groups
+        observed["priority_policy"] = priority.policy
     return {
         key: (expected[key], observed[key]) for key in expected if expected[key] != observed[key]
     }
+
+
+def observed_priority(config: Mapping[str, Any]) -> Priority:
+    groups = config.get("priority_groups") or ()
+    return Priority(tuple(str(group) for group in groups), str(config.get("priority_policy") or ""))
 
 
 def observed_filter(config: api.ConsumerConfig) -> str:
@@ -117,6 +149,7 @@ class ConsumerWatch:
         self.required_grace_s = required_grace_s
         self.public = public
         self.max_deliver = expected_max_deliver(lane, public)
+        self.pull_priority = pull_priority(lane, public)
         self.drifted = asyncio.Event()
         self.diff: dict[str, tuple[object, object]] = {}
         self.last_error: str | None = None
@@ -169,8 +202,8 @@ class ConsumerWatch:
     async def check(self) -> LaneState:
         started = self._clock.now()
         try:
-            info = await self._js.consumer_info(
-                self.lane.stream, self.lane.durable, timeout=CONSUMER_INFO_TIMEOUT_S
+            raw = await self._js._api_request(
+                self.info_subject, b"", timeout=CONSUMER_INFO_TIMEOUT_S
             )
         except nats.js.errors.NotFoundError as error:
             self._observe(LaneState.NOT_PROVISIONED, CHECK_INTERVAL_S, str(error))
@@ -184,7 +217,8 @@ class ConsumerWatch:
             self._keep(UNAVAILABLE_RETRY_MIN_S, str(error) or type(error).__name__)
         else:
             self._connection.trust()
-            self._observe_config(info.config)
+            priority = observed_priority(raw.get("config") or {})
+            self._observe_config(api.ConsumerInfo.from_response(raw).config, priority)
         self._note_degraded()
         return self.state
 
@@ -196,8 +230,8 @@ class ConsumerWatch:
         else:
             self._keep(jittered_retry_s(), str(error) or "consumer_info timed out")
 
-    def _observe_config(self, config: api.ConsumerConfig) -> None:
-        diff = consumer_diff(self.lane, config, self.public)
+    def _observe_config(self, config: api.ConsumerConfig, priority: Priority) -> None:
+        diff = consumer_diff(self.lane, config, self.public, priority)
         if diff:
             self.diff = diff
             self.last_error = f"consumer_config_mismatch: {diff}"

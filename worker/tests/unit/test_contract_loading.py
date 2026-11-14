@@ -18,7 +18,7 @@ PRODUCER = {"worker_id": "w", "build": "b", "models": {}, "sync_version": None}
 
 
 def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
-    assert contract.version == 3
+    assert contract.version == 4
     assert set(contract.lanes) == {
         "audio",
         "lyrics",
@@ -29,7 +29,7 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "ai",
         "speak",
     }
-    assert contract.public_lanes == {"audio", "lyrics", "transcribe"}
+    assert contract.public_lanes == {"audio", "lyrics", "transcribe", "speak"}
     assert all(lane.durable == f"{name}-workers" for name, lane in contract.lanes.items())
     assert contract.dimensions == {
         "mert": 1024,
@@ -65,10 +65,63 @@ def test_a_contract_without_say_limits_is_refused() -> None:
         c.parse(raw)
 
 
-def test_wrong_version_is_rejected() -> None:
+@pytest.mark.parametrize("version", [1, 3])
+def test_wrong_version_is_rejected(version: int) -> None:
     raw = json.loads(CONTRACT_PATH.read_text())
-    raw["version"] = 1
+    raw["version"] = version
     with pytest.raises(c.ContractError, match="version"):
+        c.parse(raw)
+
+
+def test_only_speak_carries_a_priority_group(contract: c.Contract) -> None:
+    groups = {name: lane.priority_group for name, lane in contract.lanes.items()}
+    assert groups.pop("speak") == c.PriorityGroup(name="speak", bridge=0, workers=1)
+    assert set(groups.values()) == {None}
+
+
+def test_a_lane_without_a_priority_group_loads() -> None:
+    raw = json.loads(CONTRACT_PATH.read_text())
+    del raw["lanes"]["speak"]["priority_group"]
+    assert c.parse(raw).lane("speak").priority_group is None
+
+
+@pytest.mark.parametrize(
+    ("group", "complaint"),
+    [
+        ("speak", "must be an object"),
+        (["speak", 0, 1], "must be an object"),
+        ({"name": "", "bridge": 0, "workers": 1}, "group name"),
+        ({"name": "speak.voice", "bridge": 0, "workers": 1}, "group name"),
+        ({"name": "s" * 17, "bridge": 0, "workers": 1}, "group name"),
+        ({"name": 7, "bridge": 0, "workers": 1}, "group name"),
+        ({"bridge": 0, "workers": 1}, "group name"),
+        ({"name": "speak", "bridge": 0, "workers": 10}, "workers"),
+        ({"name": "speak", "bridge": -1, "workers": 1}, "bridge"),
+        ({"name": "speak", "bridge": 0, "workers": True}, "workers"),
+        ({"name": "speak", "bridge": 0, "workers": "1"}, "workers"),
+        ({"name": "speak", "bridge": 0, "workers": 1.0}, "workers"),
+        ({"name": "speak", "workers": 1}, "bridge"),
+    ],
+    ids=[
+        "string",
+        "list",
+        "empty_name",
+        "dotted_name",
+        "long_name",
+        "number_name",
+        "no_name",
+        "priority_ten",
+        "negative",
+        "bool",
+        "text_priority",
+        "float_priority",
+        "no_bridge",
+    ],
+)
+def test_a_malformed_priority_group_is_refused_at_start(group: object, complaint: str) -> None:
+    raw = json.loads(CONTRACT_PATH.read_text())
+    raw["lanes"]["speak"]["priority_group"] = group
+    with pytest.raises(c.ContractError, match=f"lane speak: priority_group.*{complaint}"):
         c.parse(raw)
 
 

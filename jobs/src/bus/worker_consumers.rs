@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use async_nats::jetstream::ErrorCode;
-use async_nats::jetstream::consumer::{self, AckPolicy, DeliverPolicy, ReplayPolicy, pull};
+use async_nats::jetstream::consumer::{
+    self, AckPolicy, DeliverPolicy, PriorityPolicy, ReplayPolicy, pull,
+};
 use async_nats::jetstream::context::ConsumerInfoErrorKind;
 use async_nats::jetstream::stream::{ConsumerUpdateErrorKind, Stream};
 use backend_contracts::pipeline::WORKER_STREAMS;
@@ -185,6 +187,10 @@ async fn recreate(
 }
 
 pub(super) fn worker_consumer_config(spec: &WorkerLaneSpec) -> anyhow::Result<pull::Config> {
+    let (priority_groups, priority_policy) = match spec.priority_group {
+        Some(group) => (vec![group.name.to_owned()], PriorityPolicy::Prioritized),
+        None => (Vec::new(), PriorityPolicy::None),
+    };
     Ok(pull::Config {
         durable_name: Some(spec.durable.to_owned()),
         name: Some(spec.durable.to_owned()),
@@ -197,6 +203,8 @@ pub(super) fn worker_consumer_config(spec: &WorkerLaneSpec) -> anyhow::Result<pu
             .context("worker max_deliver does not fit NATS")?,
         max_ack_pending: i64::try_from(spec.max_ack_pending)
             .context("worker max_ack_pending does not fit NATS")?,
+        priority_groups,
+        priority_policy,
         ..Default::default()
     })
 }
@@ -213,6 +221,8 @@ pub(super) fn with_contract_fields(
     current.ack_wait = desired.ack_wait;
     current.max_deliver = desired.max_deliver;
     current.max_ack_pending = desired.max_ack_pending;
+    current.priority_groups.clone_from(&desired.priority_groups);
+    current.priority_policy = desired.priority_policy.clone();
     current
 }
 

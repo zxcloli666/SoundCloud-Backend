@@ -7,6 +7,7 @@ import math
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import nats.errors
 import nats.js.errors
@@ -18,7 +19,9 @@ from tests.fakes.object_store import FakeObjectStore
 
 PERMISSIONS_VIOLATION = "nats: Permissions Violation for Publish to"
 PULL_PREFIX = "$JS.API.CONSUMER.MSG.NEXT."
+CONSUMER_INFO_PREFIX = "$JS.API.CONSUMER.INFO."
 NANOS_PER_S = 1_000_000_000
+PRIORITY_MAX = 9
 
 
 class ForbiddenCall(AssertionError):
@@ -104,6 +107,8 @@ class FakeConsumer:
     exhausted: set[int] = field(default_factory=set)
     advisories: list[dict[str, object]] = field(default_factory=list)
     consumer_seq: int = 0
+    priority_groups: tuple[str, ...] = ()
+    priority_policy: str = ""
 
     @property
     def durable(self) -> str:
@@ -376,6 +381,18 @@ class FakeJetStream:
     ) -> api.ConsumerInfo:
         return await self._bus.consumer_info(stream, consumer, timeout)
 
+    async def _api_request(
+        self, req_subject: str, req: bytes = b"", timeout: float = 5
+    ) -> dict[str, Any]:
+        stream, durable = req_subject.removeprefix(CONSUMER_INFO_PREFIX).split(".")
+        info = await self._bus.consumer_info(stream, durable, timeout)
+        raw: dict[str, Any] = json.loads(json.dumps(info.as_dict()))
+        consumer = self._bus.consumers[(stream, durable)]
+        if consumer.priority_groups:
+            raw["config"]["priority_groups"] = list(consumer.priority_groups)
+            raw["config"]["priority_policy"] = consumer.priority_policy
+        return raw
+
     async def account_info(self) -> api.AccountInfo:
         if self._bus.api_faults:
             raise self._bus.api_faults.popleft()
@@ -427,6 +444,7 @@ class FakeNats:
         self.bound: list[FakePullSubscription] = []
         self.open_pulls: list[OpenPull] = []
         self.pull_refusal: tuple[str, str] | None = None
+        self.pull_bodies: list[dict[str, object]] = []
         self.lost_pulls = 0
         self.changed = asyncio.Event()
         self.subscriptions: list[FakeCoreSubscription] = []
@@ -462,8 +480,19 @@ class FakeNats:
         self.streams[name] = stream
         return stream
 
-    def provision_consumer(self, stream: str, config: api.ConsumerConfig) -> FakeConsumer:
-        consumer = FakeConsumer(self.streams[stream], config)
+    def provision_consumer(
+        self,
+        stream: str,
+        config: api.ConsumerConfig,
+        priority_groups: tuple[str, ...] = (),
+        priority_policy: str = "",
+    ) -> FakeConsumer:
+        consumer = FakeConsumer(
+            self.streams[stream],
+            config,
+            priority_groups=priority_groups,
+            priority_policy=priority_policy,
+        )
         self.consumers[(stream, consumer.durable)] = consumer
         return consumer
 
@@ -685,6 +714,7 @@ class FakeNats:
         batch = int(request["batch"])
         expires_s = int(request["expires"]) / NANOS_PER_S
         subscription.fetches.append((batch, expires_s, None))
+        self.pull_bodies.append(request)
         if not self.is_connected or not subscription.active:
             return
         if self.lost_pulls > 0:
@@ -692,6 +722,10 @@ class FakeNats:
             return
         if self.pull_refusal is not None:
             self.linger_status(subscription, *self.pull_refusal)
+            return
+        refusal = priority_refusal(subscription._consumer, request)
+        if refusal is not None:
+            self.linger_status(subscription, "400", refusal)
             return
         self.open_pulls.append(OpenPull(subscription, batch, self.clock.now() + expires_s))
         self.serve_pulls()
@@ -756,6 +790,20 @@ class FakeNats:
 
     def acks(self, kind: str | None = None) -> list[SentAck]:
         return [sent for sent in self.sent if kind is None or sent.kind == kind]
+
+
+def priority_refusal(consumer: FakeConsumer, request: Mapping[str, object]) -> str | None:
+    if not consumer.priority_groups:
+        return None
+    group = request.get("group")
+    if group is None:
+        return "Bad Request - Priority Group missing"
+    if group not in consumer.priority_groups:
+        return "Invalid Priority Group"
+    priority = request.get("priority", 0)
+    if not isinstance(priority, int) or priority > PRIORITY_MAX:
+        return "Bad Request"
+    return None
 
 
 def subject_matches(pattern: str, subject: str) -> bool:

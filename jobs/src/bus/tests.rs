@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use async_nats::HeaderMap;
+use async_nats::jetstream::consumer::{Config as ConsumerConfig, PriorityPolicy};
+use backend_contracts::worker_contract::{AUDIO_LANE, SPEAK_LANE};
 use backend_contracts::{
     EmptyPayload, Impression, ImpressionBatch, JobCommand, JobKind, Versioned,
 };
@@ -136,6 +138,32 @@ fn jobs_owns_every_pipeline_stream_contract() {
             .iter()
             .all(|stream| stream.max_message_size == 900_000)
     );
+}
+
+#[test]
+fn a_lane_with_a_priority_group_gets_a_prioritized_consumer_and_any_other_group_is_drift()
+-> anyhow::Result<()> {
+    let speak = worker_consumers::worker_consumer_config(&SPEAK_LANE)?;
+    let audio = worker_consumers::worker_consumer_config(&AUDIO_LANE)?;
+    let follows = |groups: &[&str], policy: PriorityPolicy, desired: &pull::Config| {
+        let mut current =
+            worker_consumers::with_contract_fields(ConsumerConfig::default(), desired);
+        current.priority_groups = groups.iter().map(|group| (*group).to_owned()).collect();
+        current.priority_policy = policy;
+        worker_consumers::follows_contract(&current, desired)
+    };
+
+    assert_eq!(speak.priority_groups, ["speak"]);
+    assert_eq!(speak.priority_policy, PriorityPolicy::Prioritized);
+    assert!(audio.priority_groups.is_empty());
+    assert_eq!(audio.priority_policy, PriorityPolicy::None);
+    assert!(follows(&["speak"], PriorityPolicy::Prioritized, &speak));
+    assert!(!follows(&[], PriorityPolicy::None, &speak));
+    assert!(!follows(&["other"], PriorityPolicy::Prioritized, &speak));
+    assert!(!follows(&["speak"], PriorityPolicy::Overflow, &speak));
+    assert!(follows(&[], PriorityPolicy::None, &audio));
+    assert!(!follows(&["speak"], PriorityPolicy::Prioritized, &audio));
+    Ok(())
 }
 
 #[test]

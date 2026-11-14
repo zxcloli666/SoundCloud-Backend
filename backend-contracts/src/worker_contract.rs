@@ -27,7 +27,7 @@ use crate::vector_store::{
     TRACKS_LYRICS_DIMENSIONS, TRACKS_MERT_DIMENSIONS, TRACKS_TASTE_DIMENSIONS,
 };
 
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 pub const CONTRACT_PATH: &str = "contract/worker-contract.json";
 pub const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 pub const WORKER_MAX_DELIVER: u64 = 5;
@@ -121,6 +121,13 @@ impl NakBackoff {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PriorityGroup {
+    pub name: &'static str,
+    pub bridge: u8,
+    pub workers: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerLaneSpec {
     pub lane: WorkerLane,
     pub stream: PipelineStreamSpec,
@@ -137,6 +144,7 @@ pub struct WorkerLaneSpec {
     pub nak: Option<NakBackoff>,
     pub result_max_bytes: u64,
     pub public: bool,
+    pub priority_group: Option<PriorityGroup>,
 }
 
 impl WorkerLaneSpec {
@@ -176,7 +184,7 @@ impl WorkerLaneSpec {
     }
 
     pub const fn bridge_ttl_s(&self) -> Option<u64> {
-        if self.public {
+        if self.public && !self.is_rpc() {
             Some(self.deadline_s + BRIDGE_TTL_MARGIN_SECONDS)
         } else {
             None
@@ -215,6 +223,7 @@ pub const AUDIO_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
     result_max_bytes: 64 * 1024,
     public: true,
+    priority_group: None,
 };
 
 pub const LYRICS_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -236,6 +245,7 @@ pub const LYRICS_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
     result_max_bytes: 32 * 1024,
     public: true,
+    priority_group: None,
 };
 
 pub const TRANSCRIBE_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -262,6 +272,7 @@ pub const TRANSCRIBE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
     result_max_bytes: 512 * 1024,
     public: true,
+    priority_group: None,
 };
 
 pub const ENCODE_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -283,6 +294,7 @@ pub const ENCODE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
     result_max_bytes: 16 * 1024,
     public: false,
+    priority_group: None,
 };
 
 pub const COLLAB_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -304,6 +316,7 @@ pub const COLLAB_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
     result_max_bytes: 8 * 1024,
     public: false,
+    priority_group: None,
 };
 
 pub const TASTE_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -325,6 +338,7 @@ pub const TASTE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
     result_max_bytes: 8 * 1024,
     public: false,
+    priority_group: None,
 };
 
 pub const AI_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -343,6 +357,7 @@ pub const AI_LANE: WorkerLaneSpec = WorkerLaneSpec {
     nak: None,
     result_max_bytes: 16 * 1024,
     public: false,
+    priority_group: None,
 };
 
 pub const SPEAK_LANE: WorkerLaneSpec = WorkerLaneSpec {
@@ -360,7 +375,12 @@ pub const SPEAK_LANE: WorkerLaneSpec = WorkerLaneSpec {
     max_ack_pending: 8,
     nak: None,
     result_max_bytes: 512 * 1024,
-    public: false,
+    public: true,
+    priority_group: Some(PriorityGroup {
+        name: "speak",
+        bridge: 0,
+        workers: 1,
+    }),
 };
 
 pub const WORKER_LANES: [WorkerLaneSpec; 8] = [
@@ -539,7 +559,7 @@ fn lane(spec: &WorkerLaneSpec) -> Value {
         .collect();
     let result_object_template =
         (spec.lane == WorkerLane::Collab).then_some(COLLAB_VECTORS_OBJECT_TEMPLATE);
-    json!({
+    let mut lane = json!({
         "stream": spec.stream.name,
         "durable": spec.durable,
         "filter_subject": spec.filter_subject,
@@ -566,7 +586,12 @@ fn lane(spec: &WorkerLaneSpec) -> Value {
         "reopenable": reopenable,
         "rpc": spec.is_rpc(),
         "public": spec.public,
-    })
+    });
+    if let Some(group) = spec.priority_group {
+        lane["priority_group"] =
+            json!({ "name": group.name, "bridge": group.bridge, "workers": group.workers });
+    }
+    lane
 }
 
 fn reasons() -> Map<String, Value> {
@@ -896,7 +921,48 @@ mod tests {
             .map(|spec| spec.lane.as_str())
             .collect();
 
-        assert_eq!(public, ["audio", "lyrics", "transcribe"]);
+        assert_eq!(public, ["audio", "lyrics", "transcribe", "speak"]);
+    }
+
+    #[test]
+    fn a_request_reply_lane_has_no_bridge_ttl_even_when_public() {
+        let lanes = contract()["lanes"].clone();
+        for spec in WORKER_LANES.iter().filter(|spec| spec.is_rpc()) {
+            let lane = spec.lane.as_str();
+            assert_eq!(spec.bridge_ttl_s(), None, "{lane}");
+            assert_eq!(spec.delivery_s(), spec.deadline_s, "{lane}");
+            assert_eq!(lanes[lane]["bridge_ttl_s"], Value::Null, "{lane}");
+        }
+    }
+
+    #[test]
+    fn only_a_lane_with_a_priority_group_exports_one_and_the_bridge_outranks_the_workers() {
+        let lanes = contract()["lanes"].clone();
+        let lowest_priority = 9;
+        for spec in WORKER_LANES {
+            let exported = lanes[spec.lane.as_str()].get("priority_group");
+            let Some(group) = spec.priority_group else {
+                assert_eq!(exported, None, "{}", spec.lane.as_str());
+                continue;
+            };
+            assert_eq!(
+                exported,
+                Some(&json!({
+                    "name": group.name,
+                    "bridge": group.bridge,
+                    "workers": group.workers
+                }))
+            );
+            assert!(group.bridge < group.workers && group.workers <= lowest_priority);
+            assert!(
+                (1..=16).contains(&group.name.len())
+                    && group
+                        .name
+                        .chars()
+                        .all(|symbol| symbol.is_ascii_alphanumeric()
+                            || matches!(symbol, '-' | '_' | '/' | '='))
+            );
+        }
     }
 
     #[test]
@@ -1005,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn the_speak_lane_is_a_private_request_reply_lane_of_its_own_stream() {
+    fn the_speak_lane_is_a_public_request_reply_lane_that_gives_a_waiting_bridge_the_line_first() {
         let exported = contract();
         let lane = &exported["lanes"]["speak"];
 
@@ -1013,7 +1079,13 @@ mod tests {
         assert_eq!(lane["durable"], "speak-workers");
         assert_eq!(lane["filter_subject"], "speak.rpc.>");
         assert_eq!(lane["rpc"], true);
-        assert_eq!(lane["public"], false);
+        assert_eq!(exported["version"], 4);
+        assert_eq!(lane["public"], true);
+        assert_eq!(lane["bridge_ttl_s"], Value::Null);
+        assert_eq!(
+            lane["priority_group"],
+            json!({ "name": "speak", "bridge": 0, "workers": 1 })
+        );
         assert_eq!(
             (
                 &lane["deadline_s"],

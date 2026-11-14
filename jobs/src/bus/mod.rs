@@ -1,6 +1,8 @@
 pub mod advisory;
 mod consumer;
 #[cfg(test)]
+mod priority_tests;
+#[cfg(test)]
 mod reaper_tests;
 mod rpc;
 #[cfg(test)]

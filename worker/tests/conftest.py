@@ -13,6 +13,7 @@ from tests.fakes.jetstream import FakeNats
 from tests.fakes.object_store import FakeBlobStore
 from worker import contract as contract_module
 from worker import settings as settings_module
+from worker.bus.consumers import PRIORITIZED
 from worker.contract import Contract
 from worker.settings import Settings
 
@@ -117,6 +118,7 @@ def provision_like_jobs(bus: FakeNats, contract: Contract) -> None:
             duplicate_window_s=stream.duplicate_window_s,
         )
     for lane in contract.lanes.values():
+        group = lane.priority_group
         bus.provision_consumer(
             lane.stream,
             api.ConsumerConfig(
@@ -129,6 +131,8 @@ def provision_like_jobs(bus: FakeNats, contract: Contract) -> None:
                 max_deliver=lane.max_deliver,
                 max_ack_pending=lane.max_ack_pending,
             ),
+            priority_groups=(group.name,) if group else (),
+            priority_policy=PRIORITIZED if group else "",
         )
     for bucket in contract.object_stores:
         bus.provision_object_store(bucket)

@@ -137,5 +137,8 @@ async def test_the_engine_memory_counts_the_running_voice(running: Running) -> N
 
     await running.engines.say("loli", TEXT, Deadline.after(30))
 
-    assert running.supervisor.memory()[TTS_SLOT] - alone >= fake_qwen.BALLAST_MIB
-    assert running.supervisor.snapshot()[TTS_SLOT]["rss_mib"] - alone >= fake_qwen.BALLAST_MIB
+    grown = running.supervisor.memory()[TTS_SLOT]
+    report = running.supervisor.snapshot()[TTS_SLOT]
+    assert grown.resident_mib - alone.resident_mib >= fake_qwen.BALLAST_MIB
+    assert grown.charged_mib - alone.charged_mib >= fake_qwen.BALLAST_MIB
+    assert report["charged_mib"] - alone.charged_mib >= fake_qwen.BALLAST_MIB

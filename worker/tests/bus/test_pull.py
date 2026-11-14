@@ -68,6 +68,20 @@ async def test_a_pull_waits_on_the_server_without_no_wait_or_heartbeats() -> Non
     ]
 
 
+async def test_a_pull_carries_the_priority_group_and_priority_it_is_given() -> None:
+    request = OpenRequest(FakeClock())
+    request.status("408")
+    priority = {"group": "speak", "priority": 1}
+
+    taken = [msg async for msg in pulled(request, 8, EXPIRES_S, request.clock, priority)]
+
+    assert taken == []
+    expires = int(EXPIRES_S * NANOS_PER_S)
+    assert request.requests == [
+        (NEXT_SUBJECT, {"batch": 8, "expires": expires, "group": "speak", "priority": 1}, INBOX)
+    ]
+
+
 async def test_a_message_is_handed_over_before_the_request_closes() -> None:
     request = OpenRequest(FakeClock())
     request.deliver(b"first")

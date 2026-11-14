@@ -678,7 +678,13 @@ class Node:
                 **served.runner.throughput(),
             )
         engines = self.supervisor.memory()
-        self.log.info("engine_memory", total_mib=sum(engines.values()), rss_mib=engines)
+        self.log.info(
+            "engine_memory",
+            total_resident_mib=sum(usage.resident_mib for usage in engines.values()),
+            total_charged_mib=sum(usage.charged_mib for usage in engines.values()),
+            resident_mib={name: usage.resident_mib for name, usage in engines.items()},
+            charged_mib={name: usage.charged_mib for name, usage in engines.items()},
+        )
 
     def gate_lane(self, name: str, watch: ConsumerWatch) -> None:
         reserved = name == ENCODE_LANE and bool(self.priority_batchers)
