@@ -66,12 +66,24 @@ class Launch:
 
 
 @dataclass(frozen=True)
+class Manner:
+    temperature: float
+    top_p: float
+    sub_temperature: float
+
+    def payload(self) -> bytes:
+        fields = (self.temperature, self.top_p, self.sub_temperature)
+        return "\n".join(map(str, fields)).encode()
+
+
+@dataclass(frozen=True)
 class Line:
     seed: int
     max_tokens: int
     speaker: str
     lang: str
     text: str
+    manner: Manner
 
     def payload(self) -> bytes:
         fields = (str(self.seed), str(self.max_tokens), self.speaker, self.lang, self.text)
@@ -127,6 +139,7 @@ class VoiceProcess:
     def say(self, line: Line, expires_at: float) -> Samples:
         self._last += 1
         number = self._last
+        self._send(wire.Frame(wire.TUNE, number, line.manner.payload()))
         self._send(wire.Frame(wire.SAY, number, line.payload()))
         chunks: list[Samples] = []
         give_up_at = time.monotonic() + STALL_S

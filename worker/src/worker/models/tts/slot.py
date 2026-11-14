@@ -13,6 +13,7 @@ from worker.models.tts.process import (
     EngineRefused,
     Launch,
     Line,
+    Manner,
     SayCancelled,
     VoiceProcess,
 )
@@ -22,6 +23,7 @@ from worker.settings import TTS_DEVICES, TTS_METHOD, TTS_SLOT
 
 SEED = 1
 LANG = "auto"
+MANNER = Manner(temperature=0.6, top_p=0.9, sub_temperature=0.6)
 LEAD_S = 0.3
 CHARS_PER_S = 11.0
 FRAMES_PER_S = 12.5
@@ -117,7 +119,7 @@ class TtsSlot:
             raise BadInput(f"{TTS_SLOT} has no voice {name!r}")
         process, load_s = self._process_for(name, voice, self._options)
         CALL_GUARD.check()
-        line = Line(SEED, max_tokens(text), voice.speaker, LANG, text)
+        line = Line(SEED, max_tokens(text), voice.speaker, LANG, text, MANNER)
         try:
             audio = process.say(line, CALL_GUARD.expires_at)
         except SayCancelled as cancelled:
