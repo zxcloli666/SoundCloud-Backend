@@ -72,8 +72,7 @@ WITH newest AS MATERIALIZED (
 ), tracked AS (
     UPDATE tracks AS track
     SET transcribe_state = 'pending',
-        transcribe_at = now(),
-        updated_at = now()
+        transcribe_at = now()
     FROM reopened
     WHERE track.sc_track_id = reopened.sc_track_id
     RETURNING track.sc_track_id

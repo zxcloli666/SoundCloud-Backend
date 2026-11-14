@@ -66,6 +66,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_taste_schedule;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_comments;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_transcription_sync_versions;
@@ -5832,6 +5833,8 @@ ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zz_owner;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_search FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_storage_failures FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_storage_failures', 'cmd', 'migration', 'repl');
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_tracks', 'cmd', 'migration', 'repl');
@@ -7853,6 +7856,7 @@ FROM (VALUES
     ('guard', 'track_artists', 'scd_guard_track_artists'),
     ('guard', 'track_comments', 'scd_guard_track_comments'),
     ('guard', 'track_search', 'scd_guard_track_search'),
+    ('guard', 'track_storage_failures', 'scd_guard_track_storage_failures'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
     ('guard', 'tracks', 'scd_guard_tracks'),
     ('guard', 'transcription_sync_versions', 'scd_guard_transcription_sync_versions'),
@@ -8152,6 +8156,7 @@ BEGIN
             ('track_search', 'zz_guard'),
             ('track_search', 'zz_owner'),
             ('track_search', 'zzz_suppress'),
+            ('track_storage_failures', 'zz_guard'),
             ('track_work_aliases', 'zz_guard'),
             ('tracks', 'zz_guard'),
             ('tracks', 'zz_owner'),

@@ -110,8 +110,7 @@ WITH track AS MATERIALIZED (
 ), tracked AS (
     UPDATE tracks AS current
     SET transcribe_state = $9::text,
-        transcribe_at = now(),
-        updated_at = now()
+        transcribe_at = now()
     FROM settled
     WHERE current.sc_track_id = settled.sc_track_id
     RETURNING current.sc_track_id

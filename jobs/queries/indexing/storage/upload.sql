@@ -142,8 +142,7 @@ WITH track AS MATERIALIZED (
         transcribe_at = CASE
             WHEN decision.too_long OR EXISTS (SELECT 1 FROM quarantined) THEN now()
             ELSE current.transcribe_at
-        END,
-        updated_at = now()
+        END
     FROM decision
     WHERE current.sc_track_id = $5
     RETURNING decision.uploaded_generation,

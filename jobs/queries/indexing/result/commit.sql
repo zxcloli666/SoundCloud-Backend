@@ -53,8 +53,7 @@ WITH track AS MATERIALIZED (
     UPDATE tracks AS current
     SET index_state = 'indexed',
         indexed_at = now(),
-        index_attempts = 0,
-        updated_at = now()
+        index_attempts = 0
     FROM committed
     WHERE current.sc_track_id = committed.sc_track_id
     RETURNING current.sc_track_id
@@ -89,8 +88,7 @@ WITH track AS MATERIALIZED (
 ), demoted AS (
     UPDATE tracks AS current
     SET index_state = 'pending',
-        indexed_at = NULL,
-        updated_at = now()
+        indexed_at = NULL
     FROM invalidating
     WHERE current.sc_track_id = invalidating.sc_track_id
       AND current.index_state <> 'too_long'

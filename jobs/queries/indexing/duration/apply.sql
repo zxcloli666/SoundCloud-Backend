@@ -31,8 +31,7 @@ SET duration_ms = $2::integer,
              AND (storage_state = 'too_long'
                   OR (storage_state = 'failed' AND duration_ms <> $2::integer)) THEN 0
         ELSE storage_attempts
-    END,
-    updated_at = now()
+    END
 WHERE sc_track_id = $1
   AND needs_duration_resolve = true
 RETURNING storage_state

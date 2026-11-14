@@ -339,7 +339,10 @@ async fn is_due(pool: &PgPool, sc_track_id: &str) -> Result<bool, sqlx::Error> {
     {
         return Ok(false);
     }
-    Ok(row.storage_state != "failed" || row.updated_at < Utc::now() - chrono::Duration::hours(24))
+    Ok(row.storage_state != "failed"
+        || row
+            .storage_failed_at
+            .is_none_or(|failed_at| failed_at < Utc::now() - chrono::Duration::hours(24)))
 }
 
 fn stored_upload_message_id(sc_track_id: &str) -> String {
@@ -393,6 +396,7 @@ mod tests {
     async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
         sqlx::raw_sql(
             "CREATE TABLE tracks (
+                 id uuid NOT NULL DEFAULT gen_random_uuid(),
                  sc_track_id text PRIMARY KEY,
                  storage_state varchar(16) NOT NULL,
                  index_state varchar(16) NOT NULL,
@@ -402,8 +406,11 @@ mod tests {
                  pipeline_held boolean NOT NULL DEFAULT false,
                  s3_verified_at timestamptz,
                  indexed_at timestamptz,
-                 created_at timestamptz NOT NULL DEFAULT now() - interval '1 hour',
-                 updated_at timestamptz NOT NULL DEFAULT now()
+                 created_at timestamptz NOT NULL DEFAULT now() - interval '1 hour'
+             );
+             CREATE TABLE track_storage_failures (
+                 track_id uuid PRIMARY KEY,
+                 failed_at timestamptz NOT NULL
              );
              CREATE TABLE storage_event_state (
                  sc_track_id text PRIMARY KEY,

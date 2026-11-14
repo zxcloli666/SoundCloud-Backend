@@ -37,8 +37,7 @@ WITH candidates AS MATERIALIZED (
               candidates.current
 ), failed AS (
     UPDATE tracks AS track
-    SET index_state = 'failed',
-        updated_at = now()
+    SET index_state = 'failed'
     FROM quarantined
     WHERE track.sc_track_id = quarantined.sc_track_id
       AND quarantined.current

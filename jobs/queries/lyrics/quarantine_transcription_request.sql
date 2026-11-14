@@ -12,7 +12,6 @@ WITH quarantined AS (
 )
 UPDATE tracks AS track
 SET transcribe_state = 'quarantined',
-    transcribe_at = now(),
-    updated_at = now()
+    transcribe_at = now()
 FROM quarantined
 WHERE track.sc_track_id = quarantined.sc_track_id

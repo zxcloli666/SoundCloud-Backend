@@ -45,8 +45,7 @@ WITH due AS (
               wire.attempt
 ), revived AS (
     UPDATE tracks AS track
-    SET index_state = 'pending',
-        updated_at = now()
+    SET index_state = 'pending'
     FROM reopened
     WHERE track.sc_track_id = reopened.sc_track_id
       AND track.index_state = 'failed'

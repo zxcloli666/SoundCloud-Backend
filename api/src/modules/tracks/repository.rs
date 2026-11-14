@@ -81,7 +81,6 @@ pub struct TrackRow {
     pub last_read_at: Option<DateTime<Utc>>,
 
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Value {

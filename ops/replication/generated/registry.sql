@@ -138,6 +138,7 @@ SELECT v.cls FROM (VALUES
     ('track_artists', 'C'),
     ('track_comments', 'C'),
     ('track_search', 'C'),
+    ('track_storage_failures', 'P'),
     ('track_work_aliases', 'P'),
     ('tracks', 'C'),
     ('transcription_sync_versions', 'P'),
