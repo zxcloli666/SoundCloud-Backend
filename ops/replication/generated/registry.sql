@@ -141,6 +141,7 @@ SELECT v.cls FROM (VALUES
     ('track_storage_failures', 'P'),
     ('track_sync_stamps', 'C'),
     ('track_work_aliases', 'P'),
+    ('track_work_keys', 'P'),
     ('tracks', 'C'),
     ('transcription_sync_versions', 'P'),
     ('transcription_wire_state', 'P'),

@@ -17,6 +17,7 @@ const LYRICS_REFETCH: &str = "lyrics_refetch";
 const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
 const TRACK_SEARCH: &str = "track_search";
 const TRACK_SYNC_STAMPS: &str = "track_sync_stamps";
+const TRACK_WORK_KEYS: &str = "track_work_keys";
 const WANTED_ALIASES: &str = "wanted_aliases";
 const MAINTENANCE_PRIORITY: i16 = 20;
 const MAINTENANCE_MAX_ATTEMPTS: i16 = 8;
@@ -110,6 +111,14 @@ pub async fn track_sync_stamps(
     State(state): State<AppState>,
 ) -> AppResult<Json<MaintenanceAccepted>> {
     enqueue(&state, TRACK_SYNC_STAMPS, JobKind::AdminTrackSyncStamps).await
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn track_work_keys(
+    _: AdminAuth,
+    State(state): State<AppState>,
+) -> AppResult<Json<MaintenanceAccepted>> {
+    enqueue(&state, TRACK_WORK_KEYS, JobKind::AdminTrackWorkKeys).await
 }
 
 #[tracing::instrument(skip_all)]

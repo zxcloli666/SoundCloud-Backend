@@ -6,7 +6,12 @@ use wt::{Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers};
 
 use crate::harness::Pair;
 
-const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state", "track_search"];
+const DERIVED: &[&str] = &[
+    "lyrics_lookup_queue",
+    "lyrics_lookup_state",
+    "track_search",
+    "track_work_keys",
+];
 const PROD_TRACK_ID: &str = "6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94";
 const PROD_TRACK: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, sharing, artwork_url, permalink_url,

@@ -112,6 +112,7 @@ pub enum JobKind {
     AdminMusicBrainzNames,
     AdminTrackSearch,
     AdminTrackSyncStamps,
+    AdminTrackWorkKeys,
     AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
@@ -175,6 +176,7 @@ impl JobKind {
         Self::AdminMusicBrainzNames,
         Self::AdminTrackSearch,
         Self::AdminTrackSyncStamps,
+        Self::AdminTrackWorkKeys,
         Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
@@ -238,6 +240,7 @@ impl JobKind {
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
             Self::AdminTrackSearch => "admin.track_search",
             Self::AdminTrackSyncStamps => "admin.track_sync_stamps",
+            Self::AdminTrackWorkKeys => "admin.track_work_keys",
             Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
@@ -346,6 +349,7 @@ impl JobKind {
             | Self::AdminMusicBrainzNames
             | Self::AdminTrackSearch
             | Self::AdminTrackSyncStamps
+            | Self::AdminTrackWorkKeys
             | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
@@ -375,6 +379,7 @@ impl FromStr for JobKind {
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
             "admin.track_search" => Self::AdminTrackSearch,
             "admin.track_sync_stamps" => Self::AdminTrackSyncStamps,
+            "admin.track_work_keys" => Self::AdminTrackWorkKeys,
             "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
@@ -517,7 +522,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 59);
+        assert_eq!(kinds.len(), 60);
     }
 
     #[test]

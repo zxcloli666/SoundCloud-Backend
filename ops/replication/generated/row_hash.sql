@@ -1066,6 +1066,18 @@ AS $f$
 SELECT md5(ROW(t.alias_key, t.track_id)::text) FROM public.track_work_aliases t WHERE t.track_id = (k ->> 'track_id')::uuid AND t.alias_key = (k ->> 'alias_key')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_work_keys(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.primary_artist_id, t.recording_key, t.superseded, t.track_id, t.work_key, t.work_normalizer_version)::text) FROM public.track_work_keys t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_tracks(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1538,6 +1550,8 @@ BEGIN
             RETURN public.scd_row_hash_track_sync_stamps(k);
         WHEN 'track_work_aliases' THEN
             RETURN public.scd_row_hash_track_work_aliases(k);
+        WHEN 'track_work_keys' THEN
+            RETURN public.scd_row_hash_track_work_keys(k);
         WHEN 'tracks' THEN
             RETURN public.scd_row_hash_tracks(k);
         WHEN 'transcription_sync_versions' THEN
