@@ -73,8 +73,7 @@ WITH upserted AS (
             sc_synced_at = now(),
             sc_observation = GREATEST(tracks.sc_observation, EXCLUDED.sc_observation),
             sc_desired = '{}',
-            sc_write_confirmed = false,
-            updated_at = now()
+            sc_write_confirmed = false
          WHERE tracks.deleted_at IS NULL
             AND (
              EXCLUDED.sc_last_modified IS NULL
