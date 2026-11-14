@@ -47,6 +47,8 @@ fn is_open_path(path: &str) -> bool {
         || path.starts_with("/skills/")
         || path.starts_with("/remote/")
         || path == "/voice/chat"
+        || path == "/voice/speak"
+        || path.starts_with("/voice/speak/")
         || path.starts_with("/.well-known/")
         || path.starts_with("/diag/")
         || path.starts_with("/admin/diag/")
@@ -63,6 +65,8 @@ mod tests {
             "/remote/links",
             "/remote/links/1",
             "/voice/chat",
+            "/voice/speak",
+            "/voice/speak/0190f0c2-7a4e-7c1d-9b3e-5f2a8c6d4e1b",
             "/skills/salut/token",
             "/oauth/authorize/status",
         ] {
@@ -71,6 +75,7 @@ mod tests {
         assert!(!is_open_path("/search/resolve"));
         assert!(!is_open_path("/voice/other"));
         assert!(!is_open_path("/voice/chat/extra"));
+        assert!(!is_open_path("/voice/speaker"));
         assert!(!is_open_path("/me/likes"));
     }
 }

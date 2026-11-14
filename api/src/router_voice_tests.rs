@@ -2459,3 +2459,5 @@ async fn a_salut_turn_after_the_confirm_window_still_gets_the_approval(
 
 #[path = "router_voice_chat_tests.rs"]
 mod chat;
+#[path = "router_voice_speak_tests.rs"]
+mod speak;

@@ -11,8 +11,8 @@ use super::prompt;
 use super::reply::{self, Offered};
 use super::request::Turn;
 use super::tools::Tools;
-use super::worker::WorkerRpc;
 use crate::bus::nats::NatsService;
+use crate::bus::worker_rpc::WorkerRpc;
 use crate::config::{LlmCfg, VoiceChatCfg};
 
 pub struct VoiceChat {

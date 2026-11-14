@@ -46,7 +46,13 @@ pub fn skips_core(method: &Method, path: &str) -> bool {
 }
 
 fn is_voice_hold(method: &Method, path: &str) -> bool {
-    (method == Method::GET && path == "/remote/wait") || path.starts_with("/skills/")
+    (method == Method::GET && (path == "/remote/wait" || is_speak_poll(path)))
+        || path.starts_with("/skills/")
+}
+
+fn is_speak_poll(path: &str) -> bool {
+    path.strip_prefix("/voice/speak/")
+        .is_some_and(|ticket| !ticket.is_empty() && !ticket.contains('/'))
 }
 
 fn is_room_poll(method: &Method, path: &str) -> bool {

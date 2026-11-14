@@ -1,16 +1,20 @@
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use backend_contracts::pipeline::{
-    AI_COMPLETE, CompleteRequest, MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES,
-    MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS,
-    MAX_COMPLETE_TOKENS,
+    AI_COMPLETE, CompleteRequest, DEADLINE_HEADER, MAX_COMPLETE_MESSAGE_BYTES,
+    MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
+    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MSG_ID_HEADER, REPLY_TO_HEADER,
 };
-use llm_ladder::{Hosting, Observer, Section, StepReport, WORKER_LIMITS, WorkerLimits};
-use serde_json::json;
+use bytes::Bytes;
+use futures::future::BoxFuture;
+use llm_ladder::{
+    Hosting, Observer, Section, StepReport, WORKER_LIMITS, WorkerError, WorkerLimits,
+    WorkerTransport,
+};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::*;
 use crate::config::LlmCfg;
 use crate::modules::voice_chat::VoiceChat;
 use crate::modules::voice_chat::request::ChatBody;
@@ -245,31 +249,6 @@ fn the_ladder_measures_a_worker_request_by_the_limits_of_the_contract() {
             schema_bytes: sized(MAX_COMPLETE_SCHEMA_BYTES),
         }
     );
-}
-
-#[test]
-fn the_deadline_is_the_unix_millisecond_the_call_expires_at() {
-    let at = UNIX_EPOCH + Duration::from_millis(1_700_000_000_250);
-    assert_eq!(deadline(at, Duration::from_secs(30)), "1700000030250");
-}
-
-#[test]
-fn a_refusal_of_the_request_is_told_apart_from_a_fault_of_the_worker() {
-    assert_eq!(refusal("invalid_request"), WorkerError::Invalid);
-    assert_eq!(refusal("expired"), WorkerError::Timeout);
-    assert_eq!(refusal("internal"), WorkerError::Rejected);
-    assert_eq!(refusal("model not loaded"), WorkerError::Rejected);
-    assert_eq!(refusal(""), WorkerError::Rejected);
-}
-
-#[test]
-fn only_a_short_label_of_a_worker_error_is_logged() {
-    assert_eq!(
-        reason("model not loaded: slot llm-local"),
-        "model_not_loaded_slot_llm-local"
-    );
-    assert_eq!(reason("Ошибка: «текст фразы» \"quoted\""), "___quoted");
-    assert_eq!(reason(&"x".repeat(200)).len(), 48);
 }
 
 #[tokio::test]

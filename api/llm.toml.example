@@ -71,3 +71,13 @@ You are a friendly voice of a music player.
 prompt = """
 Your name is Nova. You are a cheerful voice of a music player.
 """
+
+[voice_speak]
+requests_per_minute = 30
+max_in_flight = 4
+
+[voice_speak.phrases]
+endpoint = "https://s3.example"
+bucket = "voice-phrases"
+access_key = "env:EXAMPLE_PHRASES_ACCESS_KEY"
+secret_key = "env:EXAMPLE_PHRASES_SECRET_KEY"

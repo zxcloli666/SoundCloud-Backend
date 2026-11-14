@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use llm_ladder::{ConfigError, Settings};
+use llm_ladder::{ConfigError, SecretRef, Settings};
+use redact::Secret;
 use serde::Deserialize;
 
 use super::env_opt;
@@ -9,11 +10,13 @@ use super::env_opt;
 pub const DEFAULT_PERSONA: &str = "default";
 
 const MAX_PERSONA_ID_LEN: usize = 64;
+const SPEAK_IN_FLIGHT: usize = 4;
 
 #[derive(Clone, Debug, Default)]
 pub struct LlmCfg {
     pub ladders: Settings,
     pub voice_chat: Option<VoiceChatCfg>,
+    pub voice_speak: Option<VoiceSpeakCfg>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -38,10 +41,34 @@ pub struct PersonaCfg {
     pub prompt: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceSpeakCfg {
+    pub requests_per_minute: u32,
+    #[serde(default = "speak_in_flight")]
+    pub max_in_flight: usize,
+    pub phrases: PhrasesCfg,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhrasesCfg {
+    pub endpoint: String,
+    pub bucket: String,
+    pub access_key: SecretRef,
+    pub secret_key: SecretRef,
+}
+
+pub struct PhraseKeys {
+    pub access_key: Secret<String>,
+    pub secret_key: Secret<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostSections {
     voice_chat: Option<VoiceChatCfg>,
+    voice_speak: Option<VoiceSpeakCfg>,
 }
 
 impl LlmCfg {
@@ -61,9 +88,15 @@ impl LlmCfg {
             chat.validate(&ladders)
                 .map_err(|reason| ConfigError::Invalid(format!("[voice_chat] {reason}")))?;
         }
+        if let Some(speak) = &host.voice_speak {
+            speak
+                .validate()
+                .map_err(|reason| ConfigError::Invalid(format!("[voice_speak] {reason}")))?;
+        }
         Ok(Self {
             ladders,
             voice_chat: host.voice_chat,
+            voice_speak: host.voice_speak,
         })
     }
 }
@@ -115,6 +148,51 @@ impl VoiceChatCfg {
             .find(|(_, persona)| persona.prompt.trim().is_empty())
             .map(|(id, _)| id.as_str())
     }
+}
+
+impl VoiceSpeakCfg {
+    fn validate(&self) -> Result<(), String> {
+        if self.requests_per_minute == 0 {
+            return Err("requests_per_minute must be above zero".to_owned());
+        }
+        if self.max_in_flight == 0 {
+            return Err("max_in_flight must be above zero".to_owned());
+        }
+        self.phrases.validate()
+    }
+}
+
+impl PhrasesCfg {
+    pub fn keys(&self) -> Result<PhraseKeys, String> {
+        Ok(PhraseKeys {
+            access_key: resolved("access_key", &self.access_key)?,
+            secret_key: resolved("secret_key", &self.secret_key)?,
+        })
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let endpoint = self.endpoint.trim();
+        if endpoint.is_empty() {
+            return Err("phrases.endpoint is empty".to_owned());
+        }
+        if !endpoint.starts_with("https://") && !endpoint.starts_with("http://") {
+            return Err("phrases.endpoint is not an http or https URL".to_owned());
+        }
+        if self.bucket.trim().is_empty() {
+            return Err("phrases.bucket is empty".to_owned());
+        }
+        self.keys().map(|_| ())
+    }
+}
+
+fn resolved(field: &str, secret: &SecretRef) -> Result<Secret<String>, String> {
+    secret
+        .resolve()
+        .ok_or_else(|| format!("phrases.{field} names a variable that is unset or empty"))
+}
+
+fn speak_in_flight() -> usize {
+    SPEAK_IN_FLIGHT
 }
 
 fn persona_id(id: &str) -> bool {

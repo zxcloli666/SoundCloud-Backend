@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::worker::WorkerRpc;
 use crate::bus::nats::NatsService;
+use crate::bus::worker_rpc::WorkerRpc;
 use crate::config::{LlmCfg, VoiceChatCfg};
 
 pub const CHAT_SECTION: &str = r#"

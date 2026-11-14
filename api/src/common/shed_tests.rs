@@ -141,6 +141,21 @@ fn the_voice_long_polls_skip_the_core_limit_and_the_rest_of_remote_does_not() {
     assert!(!skips_core(&Method::POST, "/oauth/token"));
 }
 
+#[test]
+fn the_speak_poll_skips_the_core_limit_and_the_speak_post_does_not() {
+    assert!(skips_core(
+        &Method::GET,
+        "/voice/speak/0190f0c2-7a4e-7c1d-9b3e-5f2a8c6d4e1b"
+    ));
+    assert!(skips_core(&Method::GET, "/voice/speak/not-a-ticket"));
+    assert!(!skips_core(&Method::POST, "/voice/speak"));
+    assert!(!skips_core(&Method::GET, "/voice/speak"));
+    assert!(!skips_core(&Method::GET, "/voice/speak/"));
+    assert!(!skips_core(&Method::GET, "/voice/speak/a/b"));
+    assert!(!skips_core(&Method::POST, "/voice/speak/0190f0c2"));
+    assert!(!skips_core(&Method::POST, "/voice/chat"));
+}
+
 #[tokio::test]
 async fn a_held_voice_wait_does_not_use_a_slot() {
     let app = Router::new()

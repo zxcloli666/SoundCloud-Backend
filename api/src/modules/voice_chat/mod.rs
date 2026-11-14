@@ -9,7 +9,8 @@ mod service;
 #[cfg(test)]
 pub(crate) mod testing;
 mod tools;
-mod worker;
+#[cfg(test)]
+mod worker_tests;
 
 pub use handlers::router;
 pub use service::VoiceChat;

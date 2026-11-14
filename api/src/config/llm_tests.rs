@@ -33,6 +33,14 @@ prompt = "A friendly voice."
 prompt = "A cheerful voice."
 "#;
 
+const PHRASES: &str = r#"
+[voice_speak.phrases]
+endpoint = "https://s3.example"
+bucket = "voice-phrases"
+access_key = "env:CARGO_PKG_NAME"
+secret_key = "env:CARGO_PKG_NAME"
+"#;
+
 fn refused(text: &str) -> String {
     LlmCfg::parse(text)
         .expect_err("the config is refused")
@@ -134,11 +142,152 @@ fn the_chat_rate_from_the_file_becomes_the_per_user_admission_limit() {
     );
 }
 
+fn speak_file(section: &str) -> String {
+    format!("{EXAMPLE}\n[voice_speak]\n{section}\n{PHRASES}")
+}
+
+fn phrases_file(phrases: &str) -> String {
+    format!("{EXAMPLE}\n[voice_speak]\nrequests_per_minute = 5\n\n[voice_speak.phrases]\n{phrases}")
+}
+
+#[test]
+fn the_speak_section_names_its_rate_and_keeps_four_lines_in_flight_unless_told() {
+    let parsed = |section: &str| {
+        LlmCfg::parse(&speak_file(section))
+            .unwrap()
+            .voice_speak
+            .unwrap()
+    };
+
+    let default = parsed("requests_per_minute = 20");
+    let wider = parsed("requests_per_minute = 20\nmax_in_flight = 6");
+
+    assert_eq!(
+        (default.requests_per_minute, default.max_in_flight),
+        (20, 4)
+    );
+    assert_eq!(wider.max_in_flight, 6);
+    assert!(LlmCfg::parse(EXAMPLE).unwrap().voice_speak.is_none());
+    let silent = refused(&speak_file("requests_per_minute = 0"));
+    assert!(
+        silent.contains("[voice_speak] requests_per_minute must be above zero"),
+        "{silent}"
+    );
+    let stuck = refused(&speak_file("requests_per_minute = 5\nmax_in_flight = 0"));
+    assert!(
+        stuck.contains("max_in_flight must be above zero"),
+        "{stuck}"
+    );
+    assert!(refused(&speak_file("max_in_flight = 2")).contains("requests_per_minute"));
+}
+
+#[test]
+fn the_speak_section_reads_the_phrase_store_and_its_keys_from_the_environment() {
+    let speak = LlmCfg::parse(&speak_file("requests_per_minute = 20"))
+        .unwrap()
+        .voice_speak
+        .unwrap();
+    let keys = speak.phrases.keys().unwrap();
+
+    assert_eq!(speak.phrases.endpoint, "https://s3.example");
+    assert_eq!(speak.phrases.bucket, "voice-phrases");
+    assert_eq!(keys.access_key.expose(), env!("CARGO_PKG_NAME"));
+    assert_eq!(keys.secret_key.expose(), env!("CARGO_PKG_NAME"));
+}
+
+#[test]
+fn a_speak_section_without_a_whole_phrase_store_is_refused() {
+    let fields = [
+        ("endpoint", "\"https://s3.example\""),
+        ("bucket", "\"voice-phrases\""),
+        ("access_key", "\"env:CARGO_PKG_NAME\""),
+        ("secret_key", "\"env:CARGO_PKG_NAME\""),
+    ];
+    let table = |field: &str, value: &str| {
+        fields
+            .iter()
+            .map(|(name, kept)| {
+                let value = if *name == field { value } else { kept };
+                format!("{name} = {value}\n")
+            })
+            .collect::<String>()
+    };
+    let without = |field: &str| {
+        fields
+            .iter()
+            .filter(|(name, _)| *name != field)
+            .map(|(name, value)| format!("{name} = {value}\n"))
+            .collect::<String>()
+    };
+
+    let missing = refused(&format!(
+        "{EXAMPLE}\n[voice_speak]\nrequests_per_minute = 5\n"
+    ));
+    assert!(missing.contains("phrases"), "{missing}");
+    for (field, _) in fields {
+        let lacking = refused(&phrases_file(&without(field)));
+        assert!(lacking.contains(field), "{lacking}");
+    }
+    let refusals = [
+        (
+            table("endpoint", "\" \""),
+            "[voice_speak] phrases.endpoint is empty",
+        ),
+        (
+            table("endpoint", "\"s3.example\""),
+            "[voice_speak] phrases.endpoint is not an http or https URL",
+        ),
+        (
+            table("bucket", "\"\""),
+            "[voice_speak] phrases.bucket is empty",
+        ),
+        (
+            table("access_key", "\"env:VOICE_SPEAK_TEST_UNSET_KEY\""),
+            "[voice_speak] phrases.access_key names a variable that is unset or empty",
+        ),
+        (
+            table("secret_key", "\"env:VOICE_SPEAK_TEST_UNSET_KEY\""),
+            "[voice_speak] phrases.secret_key names a variable that is unset or empty",
+        ),
+        (
+            table("secret_key", "\"plain-secret\""),
+            "a secret is written as env:NAME",
+        ),
+    ];
+    for (phrases, reason) in refusals {
+        let refusal = refused(&phrases_file(&phrases));
+        assert!(refusal.contains(reason), "{refusal}");
+        assert!(!refusal.contains("plain-secret"), "{refusal}");
+    }
+}
+
+#[test]
+fn the_speak_rate_from_the_file_becomes_the_per_user_admission_limit() {
+    let speak = LlmCfg::parse(&speak_file("requests_per_minute = 20"))
+        .unwrap()
+        .voice_speak
+        .unwrap();
+    let closed = crate::config::AdmissionCfg::from_env();
+    assert_eq!(
+        (closed.voice_speak.per_client, closed.voice_speak.global),
+        (0, 0)
+    );
+    let open = closed.with_voice_speak(Some(&speak));
+    assert_eq!(
+        (open.voice_speak.per_client, open.voice_speak.global),
+        (20, u32::MAX)
+    );
+}
+
 #[test]
 fn the_example_file_in_the_repository_is_a_valid_config() {
-    let example = LlmCfg::parse(include_str!("../../llm.toml.example")).unwrap();
+    let example = include_str!("../../llm.toml.example")
+        .replace("env:EXAMPLE_PHRASES_ACCESS_KEY", "env:CARGO_PKG_NAME")
+        .replace("env:EXAMPLE_PHRASES_SECRET_KEY", "env:CARGO_PKG_NAME");
+    let example = LlmCfg::parse(&example).unwrap();
     let chat = example.voice_chat.unwrap();
     assert!(example.ladders.ladders.contains_key(&chat.ladder));
     assert!(chat.personas.contains_key(DEFAULT_PERSONA));
     assert!(example.ladders.budget.is_some());
+    assert!(example.voice_speak.is_some());
 }

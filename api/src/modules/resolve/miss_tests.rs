@@ -42,6 +42,7 @@ fn admission(url: &str, per_session: u32) -> anyhow::Result<Arc<PublicAdmission>
             voice_utterance: limit,
             voice_resolve: limit,
             voice_chat: limit,
+            voice_speak: limit,
             voice_alice_ip: limit,
             voice_salut_ip: limit,
             diag_bundle: limit,
