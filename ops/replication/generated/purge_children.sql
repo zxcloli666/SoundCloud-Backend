@@ -986,6 +986,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_track_work_keys(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.track_id INTO p FROM public.track_work_keys t WHERE t.track_id = (k ->> 'track_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_work_keys t WHERE t.track_id = (k ->> 'track_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_tracks(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1011,6 +1026,7 @@ BEGIN
     DELETE FROM public.track_storage_failures c WHERE c.track_id = p.id;
     DELETE FROM public.track_sync_stamps c WHERE c.track_id = p.id;
     DELETE FROM public.track_work_aliases c WHERE c.track_id = p.id;
+    DELETE FROM public.track_work_keys c WHERE c.track_id = p.id;
     UPDATE public.tracks c SET superseded_by = NULL WHERE c.superseded_by = p.id;
     UPDATE public.wanted_tracks c SET track_id = NULL WHERE c.track_id = p.id;
     DELETE FROM public.tracks t WHERE t.id = (k ->> 'id')::uuid;
@@ -1363,6 +1379,8 @@ BEGIN
             PERFORM public.scd_purge_track_sync_stamps(k);
         WHEN 'track_work_aliases' THEN
             PERFORM public.scd_purge_track_work_aliases(k);
+        WHEN 'track_work_keys' THEN
+            PERFORM public.scd_purge_track_work_keys(k);
         WHEN 'tracks' THEN
             PERFORM public.scd_purge_tracks(k);
         WHEN 'transcription_sync_versions' THEN

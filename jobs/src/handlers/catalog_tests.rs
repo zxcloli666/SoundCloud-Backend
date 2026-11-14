@@ -27,6 +27,14 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              created_at timestamptz NOT NULL DEFAULT now(),
              updated_at timestamptz NOT NULL DEFAULT now()
          );
+         CREATE TABLE track_work_keys (
+             track_id uuid PRIMARY KEY,
+             primary_artist_id uuid,
+             superseded boolean NOT NULL DEFAULT false,
+             work_key text,
+             recording_key text,
+             work_normalizer_version smallint
+         );
          CREATE TABLE track_work_aliases (
              track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
              alias_key text NOT NULL,
@@ -241,6 +249,15 @@ async fn keys_are_written_once_and_aliases_follow_the_title(pool: PgPool) -> any
     assert_eq!(keys.0.as_deref(), Some("холод"));
     assert_eq!(keys.1.as_deref(), Some("холод"));
     assert_eq!(keys.2, Some(NORMALIZER_VERSION));
+
+    let mirrored = sqlx::query_as::<_, (Option<String>, Option<String>, Option<i16>)>(
+        "SELECT work_key, recording_key, work_normalizer_version
+         FROM track_work_keys WHERE track_id = $1",
+    )
+    .bind(track)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(mirrored, keys);
 
     let aliases = sqlx::query_scalar::<_, String>(
         "SELECT alias_key FROM track_work_aliases WHERE track_id = $1 ORDER BY alias_key",
