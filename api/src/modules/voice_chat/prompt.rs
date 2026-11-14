@@ -7,9 +7,14 @@ use crate::config::VoiceChatCfg;
 
 const SETTING: &str = "You are the voice of a music player app. The user talks to you out loud and your reply is spoken aloud.";
 
-const NAME_READINGS: &str = "- The voice reads \"say\" aloud exactly as it is spelled and stumbles on names it cannot read: a name written in the letters of another language than your reply, a stylized spelling, digits or signs inside a name, an abbreviation. Write such a name as [[name|reading]]: first the name exactly as it is written, then how people say it, spelled in the letters of the language you are replying in. Examples for a reply in Russian: [[Psychosis|Сайкозис]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]. The user sees the name and hears the reading. Use it only for names of artists, tracks, albums and playlists and only when you know how the name is said; ordinary words and names that already read correctly stay as they are. Never use it inside \"actions\".";
+const NAME_READINGS: &str = "- The voice reads \"say\" aloud exactly as it is spelled and stumbles on names it cannot read: a name written in the letters of another language than your reply, a stylized spelling, digits or signs inside a name, an abbreviation. Write such a name as [[name|reading]]: first the name exactly as it is written, then how people say it, spelled in the letters of the language you are replying in. Examples for a reply in Russian: [[Psychosis|Сайкозис]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]. The user sees the name and hears the reading. Use it only for names of artists, tracks, albums and playlists and only when you know how the name is said; ordinary words and names that already read correctly stay as they are.";
 
-const EARLIER_REPLIES: &str = "- Earlier replies in this conversation are shown without the actions they ran and without readings.";
+const NAMES_IN_ACTIONS: &str =
+    "- Inside \"actions\" a name stays exactly as it is written, without a reading.";
+
+const EARLIER_ACTIONS_AND_READINGS: &str = "- Earlier replies in this conversation are shown without the actions they ran and without readings.";
+
+const EARLIER_READINGS: &str = "- Earlier replies in this conversation are shown without readings.";
 
 const FORMAT_WITH_TOOLS: &[&str] = &[
     "Reply format. Answer with exactly one JSON object and nothing else, no markdown and no text around it:",
@@ -19,9 +24,10 @@ const FORMAT_WITH_TOOLS: &[&str] = &[
     "- Use only the tools listed below, with their exact names and argument names. Never invent a tool.",
     "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.",
     NAME_READINGS,
+    NAMES_IN_ACTIONS,
     "- A tool marked \"returns a result\" gives you data in the next message. When you call one, keep \"say\" short or empty until you have the result.",
     "- A user message can end with a <tool_results> block: the tools you already called for that message and what each returned. They have run: answer from the results and do not call a tool again with the same arguments.",
-    EARLIER_REPLIES,
+    EARLIER_ACTIONS_AND_READINGS,
 ];
 
 const FORMAT_WITHOUT_TOOLS: &[&str] = &[
@@ -31,7 +37,7 @@ const FORMAT_WITHOUT_TOOLS: &[&str] = &[
     NAME_READINGS,
     "- No tools are available for this reply: do not promise to do anything in the app.",
     "- A user message can end with a <tool_results> block: the tools you already called for that message and what each returned. Answer from the results.",
-    EARLIER_REPLIES,
+    EARLIER_READINGS,
 ];
 
 const SILENCE: &str = "Staying silent. The latest message was picked up by a microphone, so it may not be meant for you. When all of it was clearly said to someone else (another person, a child, a pet, someone on the phone) or it is speech from a TV, a radio, a video or a navigator, do not answer at all: reply with no actions and an empty \"say\". This is the one case where an empty reply is right, whatever the other rules say about always saying something. Do not stay silent when the user speaks to you, asks you for anything, even something you cannot do, or names music: answer those as usual. When only a part of the message is for someone else and the rest asks you for something, do what is asked.";

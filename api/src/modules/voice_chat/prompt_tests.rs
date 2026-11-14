@@ -161,8 +161,7 @@ fn an_unknown_persona_and_a_bare_turn_use_the_default_voice_and_no_empty_section
     assert!(system.contains("Reply in the language of the user's latest message"));
     for absent in [
         "Tools:",
-        "{\"actions\"",
-        "\"actions\" comes first",
+        "actions",
         "language with the code",
         "asked you to remember",
         "App state",
@@ -262,12 +261,7 @@ fn the_plain_form_of_a_turn_is_the_same_turn_asked_without_its_tools() {
     assert!(rules.contains("{\"say\":\"<spoken reply>\"}"));
     assert!(rules.contains("No tools are available"));
     assert!(rules.contains("Whose words count."));
-    for absent in [
-        "Tools:",
-        "volume_set",
-        "{\"actions\"",
-        "\"actions\" comes first",
-    ] {
+    for absent in ["Tools:", "volume_set", "actions"] {
         assert!(!rules.contains(absent), "{absent}");
     }
     let said: Vec<String> = plain_messages(&turn)
@@ -311,21 +305,24 @@ fn both_reply_formats_ask_to_write_a_hard_name_with_how_it_is_said() {
     let turn = full();
     let say =
         "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.";
-    let earlier = "- Earlier replies in this conversation are shown without the actions they ran and without readings.";
-    for rules in [
-        system(&limits(), &turn).sections.remove(0).text,
-        plain_system(&limits(), &turn).sections.remove(0).text,
-    ] {
+    let with_tools = system(&limits(), &turn).sections.remove(0).text;
+    let without_tools = plain_system(&limits(), &turn).sections.remove(0).text;
+    for rules in [&with_tools, &without_tools] {
         assert!(
             rules.contains(&format!("{say}\n{NAME_READINGS}\n")),
             "{rules}"
         );
-        assert!(rules.contains(&format!("\n{earlier}\n\n")), "{rules}");
         assert_eq!(rules.matches("[[name|reading]]").count(), 1);
         assert!(rules.contains(
             "Examples for a reply in Russian: [[Psychosis|Сайкозис]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]."
         ));
     }
+    assert!(
+        with_tools.contains(&format!("{NAME_READINGS}\n{NAMES_IN_ACTIONS}\n")),
+        "{with_tools}"
+    );
+    assert!(with_tools.contains(&format!("\n{EARLIER_ACTIONS_AND_READINGS}\n\n")));
+    assert!(without_tools.contains(&format!("\n{EARLIER_READINGS}\n\n")));
     assert!(NAME_READINGS.starts_with("- The voice reads \"say\" aloud exactly as it is spelled"));
-    assert!(NAME_READINGS.ends_with("Never use it inside \"actions\"."));
+    assert!(NAME_READINGS.ends_with("names that already read correctly stay as they are."));
 }
