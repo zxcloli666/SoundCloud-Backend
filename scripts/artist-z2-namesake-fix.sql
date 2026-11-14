@@ -17,7 +17,7 @@ SELECT artist.sc_user_id,
         FROM tracks AS track
         WHERE track.uploader_sc_user_id = '1211580634'
           AND track.uploader_avatar_url LIKE '%/avatars-%'
-        ORDER BY track.updated_at DESC
+        ORDER BY track.sc_synced_at DESC
         LIMIT 1) AS latest_home_upload_avatar
 FROM artists AS artist
 WHERE artist.id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc';
@@ -108,8 +108,7 @@ SET enrich_state       = 'pending',
     enrich_confidence  = NULL,
     enrich_error       = NULL,
     enrich_attempts    = 0,
-    enrich_next_run_at = now() + random() * interval '15 minutes',
-    updated_at         = now()
+    enrich_next_run_at = now() + random() * interval '15 minutes'
 FROM uploader_credits AS namesake
 WHERE namesake.name_only
   AND track.id = namesake.track_id;

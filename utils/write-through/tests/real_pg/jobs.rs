@@ -272,9 +272,9 @@ async fn a_deleted_playlist_is_not_claimed() {
     pair.finish().await;
 }
 
-const LYRICS_FIXTURE: &str = "INSERT INTO public.tracks (id, sc_track_id, urn, title, title_normalized, duration_ms, created_at, updated_at)
+const LYRICS_FIXTURE: &str = "INSERT INTO public.tracks (id, sc_track_id, urn, title, title_normalized, duration_ms, created_at)
     VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '1874620031', 'soundcloud:tracks:1874620031',
-        'Night Drive', 'night drive', 213000, '2026-01-15 12:00:05+00', '2026-10-28 08:00:00+00');
+        'Night Drive', 'night drive', 213000, '2026-01-15 12:00:05+00');
     DELETE FROM public.lyrics_lookup_state";
 
 fn wake(stamp: &str) -> LyricsWake {

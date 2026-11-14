@@ -15,9 +15,9 @@ const ALBUM_B: &str = "8d7c6b5a-4938-4726-8b5c-4d3e2f1a0b9c";
 const CATALOG: &str = "INSERT INTO public.artists (id, name, normalized_name, source, created_at, updated_at)
     VALUES ('0b7e5c3a-1d2f-4a6b-8c9d-3e4f5a6b7c8d', 'Kavinsky Fan', 'kavinsky fan', 'genius',
         '2026-03-01 10:00:00+00', '2026-03-01 10:00:00+00');
-    INSERT INTO public.tracks (id, sc_track_id, urn, title, title_normalized, duration_ms, created_at, updated_at)
+    INSERT INTO public.tracks (id, sc_track_id, urn, title, title_normalized, duration_ms, created_at)
     VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '1874620031', 'soundcloud:tracks:1874620031',
-        'Night Drive', 'night drive', 213000, '2026-01-15 12:00:05+00', '2026-10-28 08:00:00+00');
+        'Night Drive', 'night drive', 213000, '2026-01-15 12:00:05+00');
     INSERT INTO public.albums (id, title, normalized_title, source, created_at, updated_at)
     VALUES ('7c6b5a49-3827-4615-9a4b-3c2d1e0f9a8b', 'Outrun', 'outrun', 'genius', '2026-03-01 10:00:00+00', '2026-03-01 10:00:00+00'),
            ('8d7c6b5a-4938-4726-8b5c-4d3e2f1a0b9c', 'Outrun Deluxe', 'outrun deluxe', 'genius', '2026-03-01 10:00:00+00', '2026-03-01 10:00:00+00');

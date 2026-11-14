@@ -125,7 +125,7 @@ DECLARE
         'UPDATE public.tracks SET sc_desired = ''[]'' WHERE id = $1',
         'UPDATE public.tracks SET tags = ARRAY[tags] WHERE id = $1',
         'UPDATE public.tracks SET tags[2] = ''Deep house'' WHERE id = $1',
-        'UPDATE public.tracks SET updated_at = updated_at + interval ''1 microsecond'' WHERE id = $1',
+        'UPDATE public.tracks SET sc_synced_at = sc_synced_at + interval ''1 microsecond'' WHERE id = $1',
         'UPDATE public.tracks SET description = '''' WHERE id = $1',
         'UPDATE public.tracks SET enrich_confidence = 0 WHERE id = $1',
         'UPDATE public.tracks SET title = title_normalized, title_normalized = title WHERE id = $1',

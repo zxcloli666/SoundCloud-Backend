@@ -75,7 +75,7 @@ async fn a_lost_track_and_its_cdn_row_leave_the_api_node_in_one_transaction() {
             .sql
             .query_one(
                 "SELECT storage_state, storage_quality, s3_verified_at IS NULL,
-                        s3_missing_at = updated_at
+                        s3_missing_at IS NOT NULL
                  FROM tracks WHERE urn = $1",
                 &[&URN],
             )
