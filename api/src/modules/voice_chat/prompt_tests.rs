@@ -299,3 +299,30 @@ fn the_rule_about_silence_is_given_only_for_a_phrase_that_may_be_overheard() {
     assert!(rules.contains("No tools are available"));
     assert!(rules.contains("Staying silent."));
 }
+
+#[test]
+fn both_reply_formats_ask_to_write_a_hard_name_with_how_it_is_said() {
+    let turn = full();
+    let say =
+        "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.";
+    let with_tools = system(&limits(), &turn).sections.remove(0).text;
+    let without_tools = plain_system(&limits(), &turn).sections.remove(0).text;
+    for rules in [&with_tools, &without_tools] {
+        assert!(
+            rules.contains(&format!("{say}\n{NAME_READINGS}\n")),
+            "{rules}"
+        );
+        assert_eq!(rules.matches("[[name|reading]]").count(), 1);
+        assert!(rules.contains(
+            "Examples for a reply in Russian: [[Psychosis|Сайкозис]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]."
+        ));
+    }
+    assert!(
+        with_tools.contains(&format!("{NAME_READINGS}\n{NAMES_IN_ACTIONS}\n")),
+        "{with_tools}"
+    );
+    assert!(with_tools.contains(&format!("\n{EARLIER_ACTIONS_AND_READINGS}\n\n")));
+    assert!(without_tools.contains(&format!("\n{EARLIER_READINGS}\n\n")));
+    assert!(NAME_READINGS.starts_with("- The voice reads \"say\" aloud exactly as it is spelled"));
+    assert!(NAME_READINGS.ends_with("names that already read correctly stay as they are."));
+}

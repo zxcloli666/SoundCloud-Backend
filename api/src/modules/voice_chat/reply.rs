@@ -73,6 +73,7 @@ impl Offered {
             Form::Full if self.quiet && answer.is_closed() && pieces.iter().all(blank) => true,
             Form::Full => pieces.into_iter().any(|piece| match piece {
                 Piece::Say(text) => !text.trim().is_empty(),
+                Piece::Name { .. } => true,
                 Piece::Action(raw) => self.tools.fit(raw).is_some(),
             }),
             Form::Plain => only_speaks(pieces),
@@ -102,6 +103,7 @@ fn only_speaks(pieces: Vec<Piece>) -> bool {
         match piece {
             Piece::Action(_) => return false,
             Piece::Say(text) => speaks |= !text.trim().is_empty(),
+            Piece::Name { .. } => speaks = true,
         }
     }
     speaks
@@ -141,6 +143,10 @@ impl Reply {
                 Piece::Say(text) => {
                     self.spoke = true;
                     self.send("say", json!({"text": text}));
+                }
+                Piece::Name { written, spoken } => {
+                    self.spoke = true;
+                    self.send("say", json!({"text": written, "spoken": spoken}));
                 }
                 Piece::Action(raw) => match self.offered.fit(raw) {
                     Some(action) => {
