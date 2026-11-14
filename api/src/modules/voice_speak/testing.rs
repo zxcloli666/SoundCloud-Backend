@@ -58,14 +58,18 @@ pub struct Speaking {
 }
 
 pub fn speaking(answer: Answer, lines: usize) -> Speaking {
-    hosted(answer, lines, Semaphore::MAX_PERMITS)
+    hosted(answer, lines, Semaphore::MAX_PERMITS, true)
 }
 
 pub fn held(answer: Answer, lines: usize) -> Speaking {
-    hosted(answer, lines, 0)
+    hosted(answer, lines, 0, true)
 }
 
-fn hosted(answer: Answer, lines: usize, passes: usize) -> Speaking {
+pub fn uncached(answer: Answer, lines: usize) -> Speaking {
+    hosted(answer, lines, Semaphore::MAX_PERMITS, false)
+}
+
+fn hosted(answer: Answer, lines: usize, passes: usize, cached: bool) -> Speaking {
     let clips = Arc::new(Shelf::default());
     let phrases = Arc::new(Shelf::default());
     let voice = Arc::new(Voice {
@@ -76,7 +80,7 @@ fn hosted(answer: Answer, lines: usize, passes: usize) -> Speaking {
     let hosting = Hosting {
         worker: voice.clone(),
         clips: clips.clone(),
-        phrases: phrases.clone(),
+        phrases: cached.then(|| phrases.clone() as Arc<dyn Objects>),
     };
     Speaking {
         speak: VoiceSpeak::hosted(lines, hosting, QUICK),

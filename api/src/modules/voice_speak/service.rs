@@ -22,7 +22,7 @@ pub struct VoiceSpeak {
 pub struct Hosting {
     pub worker: Arc<dyn WorkerTransport>,
     pub clips: Arc<dyn Objects>,
-    pub phrases: Arc<dyn Objects>,
+    pub phrases: Option<Arc<dyn Objects>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -58,8 +58,8 @@ impl VoiceSpeak {
         let Some(config) = config else {
             return Self::off();
         };
-        let phrases = match S3Phrases::connect(&config.phrases) {
-            Ok(phrases) => phrases,
+        let phrases = match config.phrases.as_ref().map(S3Phrases::connect).transpose() {
+            Ok(phrases) => phrases.map(|phrases| phrases as Arc<dyn Objects>),
             Err(reason) => {
                 tracing::error!(reason, "server voicing is off: the phrase cache is refused");
                 return Self::off();
@@ -100,7 +100,10 @@ impl Hold {
 
 impl Live {
     pub async fn say(self: &Arc<Self>, user: &str, line: Line) -> Result<Said, Busy> {
-        let keep = line.keep.then(|| line.phrase_key());
+        let keep = match &self.hosting.phrases {
+            Some(_) if line.keep => Some(line.phrase_key()),
+            _ => None,
+        };
         if let Some(key) = &keep
             && let Some(clip) = self.cached(key).await
         {
@@ -135,7 +138,8 @@ impl Live {
     }
 
     async fn cached(&self, key: &str) -> Option<Bytes> {
-        match self.hosting.phrases.read(key).await {
+        let phrases = self.hosting.phrases.as_ref()?;
+        match phrases.read(key).await {
             Ok(Some(clip)) if !clip.is_empty() => Some(clip),
             Ok(_) => None,
             Err(error) => {

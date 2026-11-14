@@ -5,7 +5,9 @@ use llm_ladder::WorkerError;
 use serde_json::json;
 
 use super::*;
-use crate::modules::voice_speak::testing::{Answer, CLIP, QUICK, Speaking, held, speaking};
+use crate::modules::voice_speak::testing::{
+    Answer, CLIP, QUICK, Speaking, held, speaking, uncached,
+};
 
 const USER: &str = "98765";
 
@@ -217,4 +219,27 @@ async fn a_broken_phrase_cache_is_a_miss_and_the_line_is_still_voiced() {
         Fetched::Clip(clip())
     );
     assert_eq!(speaking.voice.asked().len(), 1);
+}
+
+#[tokio::test]
+async fn without_a_phrase_cache_a_kept_line_goes_to_the_worker_and_nothing_is_kept() {
+    let speaking = uncached(Answer::Clip, 4);
+    let kept = line("Держи.", true);
+
+    let first = ticket(&speaking, kept.clone()).await;
+    let second = ticket(&speaking, kept).await;
+    speaking.settled().await;
+
+    assert_eq!(speaking.voice.asked().len(), 2);
+    assert_eq!(
+        speaking.live().fetch(USER, first).await,
+        Fetched::Clip(clip())
+    );
+    assert_eq!(
+        speaking.live().fetch(USER, second).await,
+        Fetched::Clip(clip())
+    );
+    assert_eq!(speaking.clips.names().len(), 2);
+    assert_eq!(speaking.phrases.reads(), 0);
+    assert!(speaking.phrases.names().is_empty());
 }

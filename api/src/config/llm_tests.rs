@@ -187,16 +187,30 @@ fn the_speak_section_reads_the_phrase_store_and_its_keys_from_the_environment() 
         .unwrap()
         .voice_speak
         .unwrap();
-    let keys = speak.phrases.keys().unwrap();
+    let phrases = speak.phrases.unwrap();
+    let keys = phrases.keys().unwrap();
 
-    assert_eq!(speak.phrases.endpoint, "https://s3.example");
-    assert_eq!(speak.phrases.bucket, "voice-phrases");
+    assert_eq!(phrases.endpoint, "https://s3.example");
+    assert_eq!(phrases.bucket, "voice-phrases");
     assert_eq!(keys.access_key.expose(), env!("CARGO_PKG_NAME"));
     assert_eq!(keys.secret_key.expose(), env!("CARGO_PKG_NAME"));
 }
 
 #[test]
-fn a_speak_section_without_a_whole_phrase_store_is_refused() {
+fn a_speak_section_without_a_phrase_table_runs_without_a_cache() {
+    let speak = LlmCfg::parse(&format!(
+        "{EXAMPLE}\n[voice_speak]\nrequests_per_minute = 5\n"
+    ))
+    .unwrap()
+    .voice_speak
+    .unwrap();
+
+    assert!(speak.phrases.is_none());
+    assert_eq!(speak.requests_per_minute, 5);
+}
+
+#[test]
+fn a_phrase_table_without_every_field_is_refused() {
     let fields = [
         ("endpoint", "\"https://s3.example\""),
         ("bucket", "\"voice-phrases\""),
@@ -220,10 +234,7 @@ fn a_speak_section_without_a_whole_phrase_store_is_refused() {
             .collect::<String>()
     };
 
-    let missing = refused(&format!(
-        "{EXAMPLE}\n[voice_speak]\nrequests_per_minute = 5\n"
-    ));
-    assert!(missing.contains("phrases"), "{missing}");
+    assert!(refused(&phrases_file("")).contains("endpoint"));
     for (field, _) in fields {
         let lacking = refused(&phrases_file(&without(field)));
         assert!(lacking.contains(field), "{lacking}");

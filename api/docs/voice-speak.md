@@ -7,11 +7,11 @@ A worker needs up to 90 s for a line, longer than any request may wait, so the a
 
 ## Turn it on
 
-1. Add `[voice_speak]` and `[voice_speak.phrases]` to the file `LLM_CONFIG` points at (see `api/llm.toml.example`) and set the two variables the keys name.
-2. Create the phrase bucket with an expiry rule and a quota (see Phrases below).
+1. Add `[voice_speak]` to the file `LLM_CONFIG` points at (see `api/llm.toml.example`).
+2. For the phrase cache, create its bucket with an expiry rule and a quota (see Phrases below), add `[voice_speak.phrases]` and set the two variables its keys name. Voicing works without it.
 3. Restart the api. jobs creates the stream `SPEAK_RPC`, the consumer `speak-workers` and the store `SPEAK_CLIPS` from the worker contract.
 
-No `[voice_speak]`: both routes answer 503 `voice_speak_unavailable`. An unknown key, an empty value or a key variable that is unset or empty stops the start.
+No `[voice_speak]`: both routes answer 503 `voice_speak_unavailable`. No `[voice_speak.phrases]`: there is no phrase cache, every line goes to a worker, `keep` changes nothing and nothing about phrases is logged or counted. An unknown key, a table without one of its keys, an empty value or a key variable that is unset or empty stops the start.
 
 ## Config file
 
@@ -22,7 +22,7 @@ No `[voice_speak]`: both routes answer 503 `voice_speak_unavailable`. An unknown
 | `requests_per_minute` | `POST` per user, per host. Above zero |
 | `max_in_flight` | lines one api process has with the workers at once, default 4. A line over it gets 503 `voice_speak_busy` |
 
-`[voice_speak.phrases]`, required
+`[voice_speak.phrases]`, optional: absent means no phrase cache
 
 | Key | Meaning |
 | --- | --- |
@@ -40,12 +40,12 @@ Header `x-session-id`. The user needs Star. The per-user limit and the Star chec
 
 - `voice`: `loli` or `moriarty`.
 - `text`: trimmed, 1 to 300 characters.
-- `keep`: default `false`. `true` for a line said again word for word, such as a greeting: it is looked up in the phrase cache first and stored there once voiced. A line with `keep: false` never touches the cache.
+- `keep`: default `false`. `true` for a line said again word for word, such as a greeting: it is looked up in the phrase cache first and stored there once voiced. A line with `keep: false`, or any line when there is no cache, never touches it.
 - The body is at most 5 296 bytes, a larger one gets 413.
 
 | Status | Body | Meaning |
 | --- | --- | --- |
-| 200 | `audio/ogg` | the clip from the phrase cache, only for `keep: true` |
+| 200 | `audio/ogg` | the clip from the phrase cache, only for `keep: true` and only with a cache |
 | 202 | `{"id": "0190f0c2-7a4e-7c1d-9b3e-5f2a8c6d4e1b"}` | the line went to a worker. The ticket is a UUID in its hyphenated form; poll it |
 
 ## GET /voice/speak/{ticket}
@@ -86,7 +86,7 @@ Subject `speak.rpc.say`, request `{"voice": "loli", "text": "Hello!"}`, reply da
 
 `SPEAK_CLIPS`: a NATS object store in memory, objects live 10 minutes, at most 256 MiB. Only the api uses it, as the hand-over between the process that asked the worker and the process that answers the poll, which may run on another host. The asking process writes the clip under `<user id>.<ticket>`, or an empty object as the failure mark. Nothing deletes clips by hand.
 
-Phrases: the S3 bucket of `[voice_speak.phrases]`.
+Phrases: the S3 bucket of `[voice_speak.phrases]`, when the table is there.
 
 - Key `<voice>/<sha256>.ogg`, where `<sha256>` is the lowercase hex SHA-256 of the voice, a newline and the trimmed text. Content type `audio/ogg`.
 - Only the api reads and writes it. A read waits at most 3 s; a slow or failing read is a miss and the line goes to a worker. A write waits at most 10 s.

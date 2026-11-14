@@ -47,7 +47,7 @@ pub struct VoiceSpeakCfg {
     pub requests_per_minute: u32,
     #[serde(default = "speak_in_flight")]
     pub max_in_flight: usize,
-    pub phrases: PhrasesCfg,
+    pub phrases: Option<PhrasesCfg>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -158,7 +158,7 @@ impl VoiceSpeakCfg {
         if self.max_in_flight == 0 {
             return Err("max_in_flight must be above zero".to_owned());
         }
-        self.phrases.validate()
+        self.phrases.as_ref().map_or(Ok(()), PhrasesCfg::validate)
     }
 }
 

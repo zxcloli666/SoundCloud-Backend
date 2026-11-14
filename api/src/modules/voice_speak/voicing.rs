@@ -79,7 +79,8 @@ impl Live {
             self.mark_failed(&errand.clip).await;
         }
         if let Some(key) = errand.keep
-            && let Err(error) = self.hosting.phrases.write(&key, clip).await
+            && let Some(phrases) = &self.hosting.phrases
+            && let Err(error) = phrases.write(&key, clip).await
         {
             crate::metrics::record_speak_store_error("phrases", "write", error.as_str());
             tracing::warn!(
