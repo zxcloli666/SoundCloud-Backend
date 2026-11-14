@@ -12,13 +12,14 @@ use crate::pipeline::{
     EncodeResult, HEADERS, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
     LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_COMPLETE_MESSAGE_BYTES,
     MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
-    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MatchTrackData,
-    MatchTrackRequest, PipelineStreamSpec, REPLY_TO_HEADER, RESOLVE_ARTIST_WINDOW_SECONDS,
-    ResolveArtistData, ResolveArtistRequest, RpcError, TRAIN_COLLAB, TRAIN_COLLAB_STREAM,
-    TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest,
-    TasteTrainResult, TranscriptionRequest, TranscriptionResult, WORKER_HEALTH_SUBJECT,
-    WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS,
-    collab_vectors_suffix,
+    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
+    MatchTrackData, MatchTrackRequest, ObjectStoreSpec, PipelineStreamSpec, REPLY_TO_HEADER,
+    RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData, ResolveArtistRequest, RpcError,
+    SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB,
+    TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
+    TasteTrainRequest, TasteTrainResult, TranscriptionRequest, TranscriptionResult,
+    WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT,
+    WORKER_STREAMS, collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -26,7 +27,7 @@ use crate::vector_store::{
     TRACKS_LYRICS_DIMENSIONS, TRACKS_MERT_DIMENSIONS, TRACKS_TASTE_DIMENSIONS,
 };
 
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 pub const CONTRACT_PATH: &str = "contract/worker-contract.json";
 pub const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 pub const WORKER_MAX_DELIVER: u64 = 5;
@@ -54,10 +55,11 @@ pub enum WorkerLane {
     Collab,
     Taste,
     Ai,
+    Speak,
 }
 
 impl WorkerLane {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Audio,
         Self::Lyrics,
         Self::Transcribe,
@@ -65,6 +67,7 @@ impl WorkerLane {
         Self::Collab,
         Self::Taste,
         Self::Ai,
+        Self::Speak,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -76,6 +79,7 @@ impl WorkerLane {
             Self::Collab => "collab",
             Self::Taste => "taste",
             Self::Ai => "ai",
+            Self::Speak => "speak",
         }
     }
 
@@ -88,6 +92,7 @@ impl WorkerLane {
             Self::Collab => &COLLAB_LANE,
             Self::Taste => &TASTE_LANE,
             Self::Ai => &AI_LANE,
+            Self::Speak => &SPEAK_LANE,
         }
     }
 }
@@ -127,6 +132,7 @@ pub struct WorkerLaneSpec {
     pub echo: &'static [(&'static str, &'static str)],
     pub deadline_s: u64,
     pub ack_wait_s: u64,
+    pub max_deliver: u64,
     pub max_ack_pending: u64,
     pub nak: Option<NakBackoff>,
     pub result_max_bytes: u64,
@@ -134,10 +140,6 @@ pub struct WorkerLaneSpec {
 }
 
 impl WorkerLaneSpec {
-    pub const fn max_deliver(&self) -> u64 {
-        WORKER_MAX_DELIVER
-    }
-
     pub const fn heartbeat_s(&self) -> u64 {
         self.ack_wait_s / HEARTBEATS_PER_ACK_WAIT
     }
@@ -157,9 +159,9 @@ impl WorkerLaneSpec {
         let Some(nak) = self.nak else {
             return None;
         };
-        let mut window = self.max_deliver() * self.delivery_s();
+        let mut window = self.max_deliver * self.delivery_s();
         let mut delivery = 1;
-        while delivery < self.max_deliver() {
+        while delivery < self.max_deliver {
             window += nak.delay_s(delivery);
             delivery += 1;
         }
@@ -205,6 +207,7 @@ pub const AUDIO_LANE: WorkerLaneSpec = WorkerLaneSpec {
     ],
     deadline_s: 180,
     ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 256,
     nak: Some(NakBackoff {
         base_s: 30,
@@ -225,6 +228,7 @@ pub const LYRICS_LANE: WorkerLaneSpec = WorkerLaneSpec {
     echo: &[("sc_track_id", "sc_track_id"), ("request_id", "request_id")],
     deadline_s: 60,
     ack_wait_s: 30,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 512,
     nak: Some(NakBackoff {
         base_s: 15,
@@ -250,6 +254,7 @@ pub const TRANSCRIBE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     ],
     deadline_s: 900,
     ack_wait_s: 120,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 64,
     nak: Some(NakBackoff {
         base_s: 60,
@@ -270,6 +275,7 @@ pub const ENCODE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     echo: &[("model", "model"), ("hash", "hash")],
     deadline_s: 30,
     ack_wait_s: 30,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 256,
     nak: Some(NakBackoff {
         base_s: 5,
@@ -290,6 +296,7 @@ pub const COLLAB_LANE: WorkerLaneSpec = WorkerLaneSpec {
     echo: &[("object", "input_object")],
     deadline_s: 3600,
     ack_wait_s: 300,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 1,
     nak: Some(NakBackoff {
         base_s: 120,
@@ -310,6 +317,7 @@ pub const TASTE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     echo: &[("object", "input_object")],
     deadline_s: 7200,
     ack_wait_s: 300,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 1,
     nak: Some(NakBackoff {
         base_s: 300,
@@ -328,15 +336,34 @@ pub const AI_LANE: WorkerLaneSpec = WorkerLaneSpec {
     correlation_prefix: "ai",
     correlation: &[],
     echo: &[],
-    deadline_s: widest_rpc_window_seconds(),
+    deadline_s: widest_window_seconds(&AI_RPC_WINDOWS),
     ack_wait_s: 30,
+    max_deliver: WORKER_MAX_DELIVER,
     max_ack_pending: 128,
     nak: None,
     result_max_bytes: 16 * 1024,
     public: false,
 };
 
-pub const WORKER_LANES: [WorkerLaneSpec; 7] = [
+pub const SPEAK_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::Speak,
+    stream: SPEAK_RPC_STREAM,
+    durable: "speak-workers",
+    filter_subject: "speak.rpc.>",
+    done_subject: None,
+    correlation_prefix: "speak",
+    correlation: &[],
+    echo: &[],
+    deadline_s: widest_window_seconds(&SPEAK_RPC_WINDOWS),
+    ack_wait_s: 30,
+    max_deliver: 1,
+    max_ack_pending: 8,
+    nak: None,
+    result_max_bytes: 512 * 1024,
+    public: false,
+};
+
+pub const WORKER_LANES: [WorkerLaneSpec; 8] = [
     AUDIO_LANE,
     LYRICS_LANE,
     TRANSCRIBE_LANE,
@@ -344,6 +371,7 @@ pub const WORKER_LANES: [WorkerLaneSpec; 7] = [
     COLLAB_LANE,
     TASTE_LANE,
     AI_LANE,
+    SPEAK_LANE,
 ];
 
 pub const fn done_duplicate_window_seconds() -> u64 {
@@ -360,20 +388,23 @@ pub const fn done_duplicate_window_seconds() -> u64 {
     widest.div_ceil(HOUR) * HOUR
 }
 
-pub const RPC_WINDOWS: [(&str, u64); 3] = [
+pub const AI_RPC_WINDOWS: [(&str, u64); 3] = [
     ("resolve_artist", RESOLVE_ARTIST_WINDOW_SECONDS),
     ("match_track", MATCH_TRACK_WINDOW_SECONDS),
     ("complete", COMPLETE_WINDOW_SECONDS),
 ];
 
-const _: () = assert!(widest_rpc_window_seconds() < AI_RPC_STREAM.max_age_seconds);
+pub const SPEAK_RPC_WINDOWS: [(&str, u64); 1] = [("say", SAY_WINDOW_SECONDS)];
 
-const fn widest_rpc_window_seconds() -> u64 {
+const _: () = assert!(AI_LANE.deadline_s < AI_RPC_STREAM.max_age_seconds);
+const _: () = assert!(SPEAK_LANE.deadline_s < SPEAK_RPC_STREAM.max_age_seconds);
+
+const fn widest_window_seconds(windows: &[(&str, u64)]) -> u64 {
     let mut widest = 0;
     let mut index = 0;
-    while index < RPC_WINDOWS.len() {
-        if RPC_WINDOWS[index].1 > widest {
-            widest = RPC_WINDOWS[index].1;
+    while index < windows.len() {
+        if windows[index].1 > widest {
+            widest = windows[index].1;
         }
         index += 1;
     }
@@ -425,13 +456,17 @@ pub fn worker_contract() -> Value {
                 "schema_bytes": MAX_COMPLETE_SCHEMA_BYTES,
                 "max_tokens": MAX_COMPLETE_TOKENS,
             },
+            "say": {
+                "text_chars": MAX_SAY_TEXT_CHARS,
+            },
         },
     })
 }
 
 fn rpc_windows() -> Map<String, Value> {
-    RPC_WINDOWS
+    AI_RPC_WINDOWS
         .iter()
+        .chain(&SPEAK_RPC_WINDOWS)
         .map(|(method, window_s)| ((*method).to_owned(), Value::from(*window_s)))
         .collect()
 }
@@ -463,11 +498,23 @@ fn streams() -> Map<String, Value> {
 fn object_stores() -> Map<String, Value> {
     WORKER_OBJECT_STORES
         .iter()
-        .map(|store| {
-            let spec = json!({ "max_age_s": store.max_age_seconds });
-            (store.bucket.to_owned(), spec)
-        })
+        .map(|store| (store.bucket.to_owned(), object_store(store)))
         .collect()
+}
+
+fn object_store(store: &ObjectStoreSpec) -> Value {
+    let mut spec = Map::new();
+    spec.insert("max_age_s".to_owned(), json!(store.max_age_seconds));
+    if let Some(max_bytes) = store.max_bytes {
+        spec.insert("max_bytes".to_owned(), json!(max_bytes));
+    }
+    if let Some(storage) = store.storage {
+        spec.insert("storage".to_owned(), json!(storage.as_str()));
+    }
+    if let Some(description) = store.description {
+        spec.insert("description".to_owned(), json!(description));
+    }
+    Value::Object(spec)
 }
 
 fn lanes() -> Map<String, Value> {
@@ -515,7 +562,7 @@ fn lane(spec: &WorkerLaneSpec) -> Value {
         "deadline_s": spec.deadline_s,
         "ack_wait_s": spec.ack_wait_s,
         "heartbeat_s": spec.heartbeat_s(),
-        "max_deliver": spec.max_deliver(),
+        "max_deliver": spec.max_deliver,
         "max_ack_pending": spec.max_ack_pending,
         "nak_base_s": spec.nak.map(|nak| nak.base_s),
         "nak_cap_s": spec.nak.map(|nak| nak.cap_s),
@@ -572,6 +619,8 @@ pub fn schemas() -> BTreeMap<String, Value> {
         rpc_reply::<ResolveArtistData>(AI_RESOLVE_ARTIST),
         rpc_reply::<MatchTrackData>(AI_MATCH_TRACK),
         rpc_reply::<CompleteData>(AI_COMPLETE),
+        request::<SayRequest>(SPEAK_SAY),
+        rpc_reply::<SayData>(SPEAK_SAY),
     ])
 }
 
@@ -725,7 +774,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::pipeline::DONE_STREAM;
+    use crate::pipeline::{DONE_STREAM, MAX_SAY_CLIP_CHARS, SPEAK_CLIPS_STORE};
     use crate::reasons::WorkerReason;
 
     fn contract() -> Value {
@@ -767,13 +816,27 @@ mod tests {
         }
         assert_eq!(AI_LANE.deadline_s, 30);
         assert_eq!(AI_LANE.attempt_window_s(), None);
+        assert_eq!((SPEAK_LANE.deadline_s, SPEAK_LANE.heartbeat_s()), (90, 6));
+        assert_eq!((SPEAK_LANE.max_deliver, SPEAK_LANE.max_ack_pending), (1, 8));
+        assert_eq!(SPEAK_LANE.attempt_window_s(), None);
+        for spec in WORKER_LANES
+            .iter()
+            .filter(|spec| spec.lane != WorkerLane::Speak)
+        {
+            assert_eq!(
+                spec.max_deliver,
+                WORKER_MAX_DELIVER,
+                "{}",
+                spec.lane.as_str()
+            );
+        }
     }
 
     #[test]
     fn a_public_delivery_is_held_for_the_whole_bridge_ttl() {
         for spec in WORKER_LANES.iter().filter(|spec| spec.nak.is_some()) {
             let nak = spec.nak.expect("filtered by nak");
-            let delays: u64 = (1..spec.max_deliver()).map(|n| nak.delay_s(n)).sum();
+            let delays: u64 = (1..spec.max_deliver).map(|n| nak.delay_s(n)).sum();
             let delivery = spec.bridge_ttl_s().unwrap_or(spec.deadline_s);
             let lane = spec.lane.as_str();
 
@@ -781,7 +844,7 @@ mod tests {
             assert_eq!(spec.delivery_s(), delivery, "{lane}");
             assert_eq!(
                 spec.attempt_window_s(),
-                Some(spec.max_deliver() * delivery + delays),
+                Some(spec.max_deliver * delivery + delays),
                 "{lane}"
             );
         }
@@ -868,7 +931,7 @@ mod tests {
             assert!(schemas.contains_key(spec.filter_subject));
             assert!(schemas.contains_key(spec.done_subject.unwrap_or_default()));
         }
-        for method in [AI_RESOLVE_ARTIST, AI_MATCH_TRACK, AI_COMPLETE] {
+        for method in [AI_RESOLVE_ARTIST, AI_MATCH_TRACK, AI_COMPLETE, SPEAK_SAY] {
             assert!(schemas.contains_key(method));
             assert!(schemas.contains_key(&rpc_reply_subject(method)));
         }
@@ -880,24 +943,132 @@ mod tests {
     #[test]
     fn every_rpc_method_has_a_window_under_its_subject_and_inside_the_lane() {
         let exported = contract();
-        let windows = exported["rpc"]["windows_s"]
-            .as_object()
-            .expect("rpc windows by method");
         let schemas = schemas();
-        let prefix = AI_LANE.filter_subject.trim_end_matches('>');
+        let lanes = [
+            (AI_LANE, AI_RPC_WINDOWS.as_slice()),
+            (SPEAK_LANE, SPEAK_RPC_WINDOWS.as_slice()),
+        ];
 
         assert_eq!(
             exported["rpc"]["windows_s"],
-            json!({ "resolve_artist": 20, "match_track": 10, "complete": 30 })
+            json!({ "resolve_artist": 20, "match_track": 10, "complete": 30, "say": 90 })
         );
-        for (method, window_s) in windows {
-            assert!(
-                schemas.contains_key(&format!("{prefix}{method}")),
-                "{method}"
-            );
-            assert!(window_s.as_u64().unwrap_or(u64::MAX) <= AI_LANE.deadline_s);
+        for (lane, windows) in lanes {
+            let prefix = lane.filter_subject.trim_end_matches('>');
+            for (method, window_s) in windows {
+                assert!(
+                    schemas.contains_key(&format!("{prefix}{method}")),
+                    "{method}"
+                );
+                assert!(*window_s <= lane.deadline_s, "{method}");
+                assert_eq!(exported["rpc"]["windows_s"][*method], *window_s);
+            }
         }
-        assert_eq!(AI_COMPLETE, format!("{prefix}complete"));
+        assert_eq!(
+            WORKER_LANES.iter().filter(|spec| spec.is_rpc()).count(),
+            lanes.len()
+        );
+        let prefix = |lane: WorkerLaneSpec| lane.filter_subject.trim_end_matches('>');
+        assert_eq!(AI_COMPLETE, format!("{}complete", prefix(AI_LANE)));
+        assert_eq!(SPEAK_SAY, format!("{}say", prefix(SPEAK_LANE)));
+    }
+
+    #[test]
+    fn a_say_request_names_the_voice_and_the_text_and_its_reply_carries_the_clip() {
+        let exported = contract();
+        let request = &schemas()[SPEAK_SAY];
+        let reply = &schemas()[&rpc_reply_subject(SPEAK_SAY)];
+        let data = &reply["$defs"]["SayData"];
+        let clip = &data["properties"]["clip"];
+
+        assert_eq!(exported["limits"]["say"], json!({ "text_chars": 300 }));
+        assert_eq!(request["title"], "speak.rpc.say");
+        assert_eq!(names(&request["required"]), ["voice", "text"]);
+        assert_eq!(request["properties"]["voice"]["minLength"], 1);
+        assert_eq!(request["properties"]["text"]["minLength"], 1);
+        assert_eq!(
+            request["properties"]["text"]["maxLength"],
+            exported["limits"]["say"]["text_chars"]
+        );
+        assert_eq!(reply["title"], "speak.rpc.say.reply");
+        assert_eq!(names(&data["required"]), ["seconds", "clip"]);
+        assert_eq!(data["properties"]["seconds"]["minimum"], 0.0);
+        assert_eq!(
+            (
+                &clip["type"],
+                &clip["contentEncoding"],
+                &clip["minLength"],
+                &clip["maxLength"]
+            ),
+            (
+                &json!("string"),
+                &json!("base64"),
+                &json!(1),
+                &json!(500_000)
+            )
+        );
+        assert!(u64::from(MAX_SAY_CLIP_CHARS) < SPEAK_LANE.result_max_bytes);
+        assert_eq!(
+            reply["oneOf"][1]["properties"]["error"]["$ref"],
+            "#/$defs/RpcError"
+        );
+    }
+
+    #[test]
+    fn the_speak_lane_is_a_private_request_reply_lane_of_its_own_stream() {
+        let exported = contract();
+        let lane = &exported["lanes"]["speak"];
+
+        assert_eq!(lane["stream"], "SPEAK_RPC");
+        assert_eq!(lane["durable"], "speak-workers");
+        assert_eq!(lane["filter_subject"], "speak.rpc.>");
+        assert_eq!(lane["rpc"], true);
+        assert_eq!(lane["public"], false);
+        assert_eq!(
+            (
+                &lane["deadline_s"],
+                &lane["ack_wait_s"],
+                &lane["heartbeat_s"]
+            ),
+            (&json!(90), &json!(30), &json!(6))
+        );
+        assert_eq!(
+            (&lane["max_deliver"], &lane["max_ack_pending"]),
+            (&json!(1), &json!(8))
+        );
+        assert_eq!(lane["result_max_bytes"], 524_288);
+        assert_eq!(lane["reasons"], json!([]));
+        assert_eq!(
+            exported["streams"]["SPEAK_RPC"],
+            json!({
+                "subjects": ["speak.rpc.>"],
+                "retention": "work_queue",
+                "max_age_s": 120,
+                "duplicate_window_s": 120,
+                "max_bytes": 16 * 1024 * 1024,
+                "discard": "new"
+            })
+        );
+    }
+
+    #[test]
+    fn only_the_speak_clips_name_a_size_cap_and_live_in_memory() {
+        let stores = contract()["object_stores"].clone();
+
+        assert_eq!(
+            stores,
+            json!({
+                "COLLAB_DATA": { "max_age_s": 86_400 },
+                "TASTE_DATA": { "max_age_s": 86_400 },
+                "TASTE_MODELS": { "max_age_s": null },
+                "SPEAK_CLIPS": {
+                    "max_age_s": 600,
+                    "max_bytes": 256_i64 * 1024 * 1024,
+                    "storage": "memory",
+                    "description": SPEAK_CLIPS_STORE.description
+                }
+            })
+        );
     }
 
     #[test]

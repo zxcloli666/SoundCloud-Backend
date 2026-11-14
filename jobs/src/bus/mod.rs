@@ -31,9 +31,10 @@ use backend_contracts::{
     pipeline::{
         DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_INDEX_AUDIO, DONE_STREAM,
         DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
-        MAX_MESSAGE_BYTES as CONTRACT_MAX_MESSAGE_BYTES, MSG_ID_HEADER, ObjectStoreSpec,
-        PIPELINE_STREAMS, PipelineStreamSpec, REPLY_TO_HEADER, STORAGE_EVENTS_STREAM,
-        STORAGE_TRACK_REJECTED, STORAGE_TRACK_UPLOADED, StreamDiscard, WORKER_OBJECT_STORES,
+        MAX_MESSAGE_BYTES as CONTRACT_MAX_MESSAGE_BYTES, MSG_ID_HEADER, ObjectStorage,
+        ObjectStoreSpec, PIPELINE_STREAMS, PipelineStreamSpec, REPLY_TO_HEADER,
+        STORAGE_EVENTS_STREAM, STORAGE_TRACK_REJECTED, STORAGE_TRACK_UPLOADED, StreamDiscard,
+        WORKER_OBJECT_STORES,
     },
 };
 use futures::StreamExt;
@@ -754,16 +755,11 @@ impl Bus {
             bucket = spec.bucket,
             "NATS object store is missing, creating it"
         );
-        let config = ObjectStoreConfig {
-            bucket: spec.bucket.to_owned(),
-            max_age: spec
-                .max_age_seconds
-                .map(Duration::from_secs)
-                .unwrap_or_default(),
-            storage: StorageType::File,
-            ..Default::default()
-        };
-        match self.jetstream.create_object_store(config).await {
+        match self
+            .jetstream
+            .create_object_store(object_store_config(spec))
+            .await
+        {
             Ok(_) => Ok(()),
             Err(create_error) => self
                 .jetstream
@@ -917,6 +913,22 @@ fn pipeline_stream_config(spec: &PipelineStreamSpec) -> StreamConfig {
         max_age: Duration::from_secs(spec.max_age_seconds),
         max_message_size: MAX_MESSAGE_BYTES,
         duplicate_window: Duration::from_secs(spec.duplicate_window_seconds),
+        ..Default::default()
+    }
+}
+
+fn object_store_config(spec: &ObjectStoreSpec) -> ObjectStoreConfig {
+    ObjectStoreConfig {
+        bucket: spec.bucket.to_owned(),
+        max_age: spec
+            .max_age_seconds
+            .map(Duration::from_secs)
+            .unwrap_or_default(),
+        max_bytes: spec.max_bytes.unwrap_or_default(),
+        storage: match spec.storage {
+            Some(ObjectStorage::Memory) => StorageType::Memory,
+            Some(ObjectStorage::File) | None => StorageType::File,
+        },
         ..Default::default()
     }
 }

@@ -92,6 +92,17 @@ fn jobs_owns_every_pipeline_stream_contract() {
             "{name}"
         );
     }
+    let speak = stream("SPEAK_RPC");
+    assert_eq!(speak.map(|speak| speak.discard), Some(DiscardPolicy::New));
+    assert_eq!(
+        speak.map(|speak| speak.retention),
+        Some(RetentionPolicy::WorkQueue)
+    );
+    assert_eq!(speak.map(|speak| speak.max_bytes), Some(16 * 1024 * 1024));
+    assert_eq!(
+        speak.map(|speak| speak.max_age),
+        Some(Duration::from_secs(2 * 60))
+    );
     assert_eq!(
         stream("WORKER_INVALID").map(|invalid| invalid.retention),
         Some(RetentionPolicy::Limits)
@@ -102,6 +113,36 @@ fn jobs_owns_every_pipeline_stream_contract() {
         streams
             .iter()
             .all(|stream| stream.max_message_size == 900_000)
+    );
+}
+
+#[test]
+fn jobs_creates_every_object_store_of_the_contract_with_its_limits_and_storage() {
+    let stores = WORKER_OBJECT_STORES
+        .iter()
+        .map(object_store_config)
+        .map(|store| (store.bucket, store.max_age, store.max_bytes, store.storage))
+        .collect::<Vec<_>>();
+    let day = Duration::from_secs(24 * 60 * 60);
+
+    assert_eq!(
+        stores,
+        vec![
+            ("COLLAB_DATA".to_owned(), day, 0, StorageType::File),
+            ("TASTE_DATA".to_owned(), day, 0, StorageType::File),
+            (
+                "TASTE_MODELS".to_owned(),
+                Duration::ZERO,
+                0,
+                StorageType::File
+            ),
+            (
+                "SPEAK_CLIPS".to_owned(),
+                Duration::from_secs(10 * 60),
+                256 * 1024 * 1024,
+                StorageType::Memory
+            ),
+        ]
     );
 }
 

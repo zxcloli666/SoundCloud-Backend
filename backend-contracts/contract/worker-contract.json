@@ -291,6 +291,34 @@
         "engine_restarted"
       ]
     },
+    "speak": {
+      "ack_wait_s": 30,
+      "attempt_window_s": null,
+      "bridge_ttl_s": null,
+      "correlation": [],
+      "correlation_prefix": "speak",
+      "correlation_separator": ":",
+      "deadline_s": 90,
+      "done_msg_id_template": null,
+      "done_subject": null,
+      "durable": "speak-workers",
+      "echo": {},
+      "filter_subject": "speak.rpc.>",
+      "heartbeat_s": 6,
+      "max_ack_pending": 8,
+      "max_deliver": 1,
+      "nak_base_s": null,
+      "nak_cap_s": null,
+      "public": false,
+      "quarantine_after_s": null,
+      "reasons": [],
+      "reopenable": [],
+      "result_max_bytes": 524288,
+      "result_object_template": null,
+      "rpc": true,
+      "stream": "SPEAK_RPC",
+      "worker_reasons": []
+    },
     "taste": {
       "ack_wait_s": 300,
       "attempt_window_s": 39900,
@@ -450,11 +478,20 @@
       "system_bytes": 48000,
       "system_marks": 4
     },
-    "max_message_bytes": 900000
+    "max_message_bytes": 900000,
+    "say": {
+      "text_chars": 300
+    }
   },
   "object_stores": {
     "COLLAB_DATA": {
       "max_age_s": 86400
+    },
+    "SPEAK_CLIPS": {
+      "description": "Only the api writes and reads it: it hands a finished clip from the api process that asked the worker to the api process that answers the poll. Workers never use it.",
+      "max_age_s": 600,
+      "max_bytes": 268435456,
+      "storage": "memory"
     },
     "TASTE_DATA": {
       "max_age_s": 86400
@@ -537,7 +574,8 @@
     "windows_s": {
       "complete": 30,
       "match_track": 10,
-      "resolve_artist": 20
+      "resolve_artist": 20,
+      "say": 90
     }
   },
   "schemas": {
@@ -2810,6 +2848,93 @@
       "title": "index.audio.new",
       "type": "object"
     },
+    "speak.rpc.say": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "text": {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        "voice": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "voice",
+        "text"
+      ],
+      "title": "speak.rpc.say",
+      "type": "object"
+    },
+    "speak.rpc.say.reply": {
+      "$defs": {
+        "RpcError": {
+          "enum": [
+            "expired",
+            "invalid_request",
+            "internal"
+          ],
+          "type": "string"
+        },
+        "SayData": {
+          "properties": {
+            "clip": {
+              "contentEncoding": "base64",
+              "description": "An Ogg Opus file, mono, in standard base64 with padding.",
+              "maxLength": 500000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "seconds": {
+              "format": "double",
+              "minimum": 0.0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "seconds",
+            "clip"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/SayData"
+            },
+            "ok": {
+              "const": true
+            }
+          },
+          "required": [
+            "ok",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/RpcError"
+            },
+            "ok": {
+              "const": false
+            }
+          },
+          "required": [
+            "ok",
+            "error"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "speak.rpc.say.reply"
+    },
     "train.collab.new": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -3037,6 +3162,16 @@
         "done.>"
       ]
     },
+    "SPEAK_RPC": {
+      "discard": "new",
+      "duplicate_window_s": 120,
+      "max_age_s": 120,
+      "max_bytes": 16777216,
+      "retention": "work_queue",
+      "subjects": [
+        "speak.rpc.>"
+      ]
+    },
     "TRAIN_COLLAB": {
       "discard": "new",
       "duplicate_window_s": 3600,
@@ -3083,5 +3218,5 @@
     "invalid": "worker.invalid.<lane>",
     "status": "worker.status.<worker_id>"
   },
-  "version": 2
+  "version": 3
 }
