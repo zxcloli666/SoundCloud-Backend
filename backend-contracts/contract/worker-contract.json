@@ -487,12 +487,6 @@
     "COLLAB_DATA": {
       "max_age_s": 86400
     },
-    "SPEAK_CLIPS": {
-      "description": "Only the api writes and reads it: it hands a finished clip from the api process that asked the worker to the api process that answers the poll. Workers never use it.",
-      "max_age_s": 600,
-      "max_bytes": 268435456,
-      "storage": "memory"
-    },
     "TASTE_DATA": {
       "max_age_s": 86400
     },
@@ -3113,101 +3107,134 @@
   },
   "streams": {
     "AI_RPC": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 120,
       "max_age_s": 120,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "ai.rpc.>"
       ]
     },
     "EMBED_LYRICS": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 86400,
       "max_age_s": 86400,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "embed.lyrics.>"
       ]
     },
     "ENCODE": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 900,
       "max_age_s": 86400,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "encode.>"
       ]
     },
     "INDEX_AUDIO": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 86400,
       "max_age_s": 86400,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "index.audio.>"
       ]
     },
     "PIPELINE_DONE": {
+      "allow_direct": false,
       "discard": "old",
       "duplicate_window_s": 43200,
       "max_age_s": 259200,
       "max_bytes": 25769803776,
       "retention": "limits",
+      "storage": "file",
       "subjects": [
         "done.>"
       ]
     },
+    "SPEAK_REPLY": {
+      "allow_direct": true,
+      "discard": "old",
+      "duplicate_window_s": 120,
+      "max_age_s": 600,
+      "max_bytes": 268435456,
+      "retention": "limits",
+      "storage": "memory",
+      "subjects": [
+        "speak.reply.>",
+        "speak.keep.>"
+      ]
+    },
     "SPEAK_RPC": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 120,
       "max_age_s": 120,
       "max_bytes": 16777216,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "speak.rpc.>"
       ]
     },
     "TRAIN_COLLAB": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 3600,
       "max_age_s": 21600,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "train.collab.>"
       ]
     },
     "TRAIN_TASTE": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 3600,
       "max_age_s": 86400,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "train.taste.>"
       ]
     },
     "TRANSCRIBE": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 86400,
       "max_age_s": 86400,
       "max_bytes": 1073741824,
       "retention": "work_queue",
+      "storage": "file",
       "subjects": [
         "transcribe.>"
       ]
     },
     "WORKER_INVALID": {
+      "allow_direct": false,
       "discard": "new",
       "duplicate_window_s": 120,
       "max_age_s": 604800,
       "max_bytes": 1073741824,
       "retention": "limits",
+      "storage": "file",
       "subjects": [
         "worker.invalid.>"
       ]

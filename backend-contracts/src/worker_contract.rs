@@ -13,7 +13,7 @@ use crate::pipeline::{
     LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_COMPLETE_MESSAGE_BYTES,
     MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
     MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
-    MatchTrackData, MatchTrackRequest, ObjectStoreSpec, PipelineStreamSpec, REPLY_TO_HEADER,
+    MatchTrackData, MatchTrackRequest, PipelineStreamSpec, REPLY_TO_HEADER,
     RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData, ResolveArtistRequest, RpcError,
     SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB,
     TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
@@ -489,6 +489,8 @@ fn streams() -> Map<String, Value> {
                 "duplicate_window_s": stream.duplicate_window_seconds,
                 "max_bytes": stream.max_bytes,
                 "discard": stream.discard.as_str(),
+                "storage": stream.storage.as_str(),
+                "allow_direct": stream.allow_direct,
             });
             (stream.name.to_owned(), spec)
         })
@@ -498,23 +500,11 @@ fn streams() -> Map<String, Value> {
 fn object_stores() -> Map<String, Value> {
     WORKER_OBJECT_STORES
         .iter()
-        .map(|store| (store.bucket.to_owned(), object_store(store)))
+        .map(|store| {
+            let spec = json!({ "max_age_s": store.max_age_seconds });
+            (store.bucket.to_owned(), spec)
+        })
         .collect()
-}
-
-fn object_store(store: &ObjectStoreSpec) -> Value {
-    let mut spec = Map::new();
-    spec.insert("max_age_s".to_owned(), json!(store.max_age_seconds));
-    if let Some(max_bytes) = store.max_bytes {
-        spec.insert("max_bytes".to_owned(), json!(max_bytes));
-    }
-    if let Some(storage) = store.storage {
-        spec.insert("storage".to_owned(), json!(storage.as_str()));
-    }
-    if let Some(description) = store.description {
-        spec.insert("description".to_owned(), json!(description));
-    }
-    Value::Object(spec)
 }
 
 fn lanes() -> Map<String, Value> {
@@ -774,7 +764,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::pipeline::{DONE_STREAM, MAX_SAY_CLIP_CHARS, SPEAK_CLIPS_STORE};
+    use crate::pipeline::{DONE_STREAM, MAX_SAY_CLIP_CHARS};
     use crate::reasons::WorkerReason;
 
     fn contract() -> Value {
@@ -1046,29 +1036,39 @@ mod tests {
                 "max_age_s": 120,
                 "duplicate_window_s": 120,
                 "max_bytes": 16 * 1024 * 1024,
-                "discard": "new"
+                "discard": "new",
+                "storage": "file",
+                "allow_direct": false
             })
         );
     }
 
     #[test]
-    fn only_the_speak_clips_name_a_size_cap_and_live_in_memory() {
-        let stores = contract()["object_stores"].clone();
+    fn speak_replies_land_in_a_stream_of_their_own_kept_in_memory_and_read_directly() {
+        let streams = contract()["streams"].clone();
 
         assert_eq!(
-            stores,
+            streams["SPEAK_REPLY"],
             json!({
-                "COLLAB_DATA": { "max_age_s": 86_400 },
-                "TASTE_DATA": { "max_age_s": 86_400 },
-                "TASTE_MODELS": { "max_age_s": null },
-                "SPEAK_CLIPS": {
-                    "max_age_s": 600,
-                    "max_bytes": 256_i64 * 1024 * 1024,
-                    "storage": "memory",
-                    "description": SPEAK_CLIPS_STORE.description
-                }
+                "subjects": ["speak.reply.>", "speak.keep.>"],
+                "retention": "limits",
+                "max_age_s": 600,
+                "duplicate_window_s": 120,
+                "max_bytes": 256_i64 * 1024 * 1024,
+                "discard": "old",
+                "storage": "memory",
+                "allow_direct": true
             })
         );
+        for (name, stream) in streams.as_object().into_iter().flatten() {
+            if name != "SPEAK_REPLY" {
+                assert_eq!(
+                    (&stream["storage"], &stream["allow_direct"]),
+                    (&json!("file"), &json!(false)),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]
