@@ -63,6 +63,7 @@ from worker.runtime.supervisor import (
     available_cpus,
     budget_plans,
     cpu_budget,
+    cpu_quota,
     cpus_within_pid_limit,
     pid_limit,
     plan_engines,
@@ -111,6 +112,7 @@ ENCODE_LANE = "encode"
 AI_LANE = "ai"
 SPEAK_LANE = "speak"
 LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
+TTS_THREADS_ENV = "SCD_QWEN_THREADS"
 ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
@@ -854,17 +856,20 @@ def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
 def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     if settings_module.TTS_SLOT not in plan.slot_names:
         return plan
+    threads = tts_threads(os.cpu_count(), available_cpus(), cpu_quota())
     return replace(
         plan,
         reserved=True,
-        threads=tts_threads(),
+        threads=threads,
         own_threads=True,
         idle_unload_s=float(settings.tts.idle_unload_s),
+        env={TTS_THREADS_ENV: str(threads)},
     )
 
 
-def tts_threads() -> int:
-    return max(1, (os.cpu_count() or 1) // 2)
+def tts_threads(logical_cpus: int | None, affinity_cpus: int, quota: int | None) -> int:
+    usable = min(affinity_cpus, quota) if quota else affinity_cpus
+    return max(1, min((logical_cpus or 1) // 2, usable))
 
 
 def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:
@@ -912,7 +917,7 @@ def slot_device(settings: Settings, name: str) -> str:
     if name == settings_module.LOCAL_LLM_SLOT:
         return settings_module.LOCAL_LLM_DEVICE
     if name == settings_module.TTS_SLOT:
-        return settings_module.TTS_DEVICE
+        return settings_module.TTS_DEVICES[settings.tts.device]
     return "cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device
 
 

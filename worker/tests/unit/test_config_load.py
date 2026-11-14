@@ -126,21 +126,41 @@ def test_a_chunk_as_long_as_the_context_is_accepted(base_env: dict[str, str]) ->
     assert whole.llm.local.eval_chunk_tokens == whole.llm.local.context_tokens
 
 
-def test_the_speech_models_url_follows_the_host(base_env: dict[str, str]) -> None:
+def test_the_speech_models_addresses_follow_the_host_in_their_order(
+    base_env: dict[str, str],
+) -> None:
     shipped = s.load(CONFIG_DIR, base_env)
     moved = s.load(
-        CONFIG_DIR, {**base_env, "WORKER__TTS__BASE_URL": "https://models.example/voice"}
+        CONFIG_DIR,
+        {
+            **base_env,
+            "WORKER__TTS__BASE_URLS": '["https://models.example/voice", "https://mirror.example/v"]',
+        },
     )
 
-    assert shipped.tts.base_url == "https://storage.scnative.dev/voice-models"
-    assert moved.tts.base_url == "https://models.example/voice"
+    assert shipped.tts.base_urls == ("https://storage.scnative.dev/voice-models",)
+    assert moved.tts.base_urls == ("https://models.example/voice", "https://mirror.example/v")
+
+
+def test_the_old_single_address_key_is_a_start_error(base_env: dict[str, str]) -> None:
+    with pytest.raises(s.SettingsError, match="base_url"):
+        s.load(CONFIG_DIR, {**base_env, "WORKER__TTS__BASE_URL": "https://models.example/voice"})
 
 
 @pytest.mark.parametrize(
     ("override", "problem"),
     [
-        ({"WORKER__TTS__BASE_URL": "http://models.example/voice"}, r"tts\.base_url must be"),
-        ({"WORKER__TTS__BASE_URL": "https://models.example/voice/"}, "trailing slash"),
+        ({"WORKER__TTS__BASE_URLS": '["http://models.example/voice"]'}, r"tts\.base_urls must be"),
+        ({"WORKER__TTS__BASE_URLS": '["https://models.example/voice/"]'}, "trailing slash"),
+        ({"WORKER__TTS__BASE_URLS": "[]"}, "at least one address"),
+        ({"WORKER__TTS__BASE_URLS": '["https://a.example/v", "https://a.example/v"]'}, "each once"),
+        ({"WORKER__TTS__DEVICE": "vulkan"}, r"tts\.device must be one of"),
+        ({"WORKER__TTS__DOWNLOAD_MIB_S": "-1"}, r"tts\.download_mib_s must be >= 0"),
+        (
+            {"WORKER__TTS__ENGINE__CUDA_FILES": '{ "../libggml-cuda.so" = "' + "0" * 64 + '" }'},
+            "not a plain relative path",
+        ),
+        ({"WORKER__TTS__ENGINE__CUDA_FILES": '{ "libggml-cuda.so" = "ABC" }'}, "tts sha256 values"),
         ({"WORKER__TTS__IDLE_UNLOAD_S": "-1"}, r"tts\.idle_unload_s must be >= 0"),
         ({"WORKER__TTS__ENGINE__PROGRAM": "qwen"}, r"tts\.engine\.program must be one of"),
         ({"WORKER__TTS__CODEC__PATH": "../codec.gguf"}, "not a plain relative path"),

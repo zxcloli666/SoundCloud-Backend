@@ -51,6 +51,8 @@ INLINE_SLOTS = frozenset({"vad", "lid", "fingerprint"})
 BULK_NICE = 10
 RESERVED_THREADS_MAX = 4
 PID_LIMIT_FILES = (Path("/sys/fs/cgroup/pids.max"), Path("/sys/fs/cgroup/pids/pids.max"))
+CGROUP = Path("/sys/fs/cgroup")
+CFS_FOLDERS = ("cpu", "cpu,cpuacct")
 OS_THREADS_PER_TORCH_THREAD = 3
 
 
@@ -146,6 +148,26 @@ def pid_limit() -> int | None:
             raw = path.read_text().strip()
             return int(raw) if raw.isdigit() else None
     return None
+
+
+def cpu_quota(cgroup: Path = CGROUP) -> int | None:
+    unified = cgroup / "cpu.max"
+    if unified.is_file():
+        quota, _, period = unified.read_text().partition(" ")
+        return quota_cpus(quota, period)
+    for folder in CFS_FOLDERS:
+        quota_file = cgroup / folder / "cpu.cfs_quota_us"
+        period_file = cgroup / folder / "cpu.cfs_period_us"
+        if quota_file.is_file() and period_file.is_file():
+            return quota_cpus(quota_file.read_text(), period_file.read_text())
+    return None
+
+
+def quota_cpus(quota: str, period: str) -> int | None:
+    quota, period = quota.strip(), period.strip()
+    if not quota.isdigit() or not period.isdigit() or int(period) == 0:
+        return None
+    return max(1, int(quota) // int(period))
 
 
 def cpus_within_pid_limit(cpus: int, engines: int, limit: int | None) -> int:

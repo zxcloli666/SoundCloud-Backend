@@ -19,7 +19,6 @@ from worker.observability.logging import JsonLog
 from worker.settings import TTS_SLOT
 
 RATE = 24_000
-DEVICE = "cpu"
 STALL_S = 20.0
 CANCEL_S = 5.0
 EXIT_S = 2.0
@@ -52,12 +51,18 @@ class Launch:
     program: Path
     talker: Path
     codec: Path
+    device: str
+    libraries: tuple[Path, ...] = ()
 
     def argv(self) -> list[str]:
-        return [str(self.program), str(self.talker), str(self.codec), DEVICE]
+        return [str(self.program), str(self.talker), str(self.codec), self.device]
 
     def env(self, environ: Mapping[str, str]) -> dict[str, str]:
-        return {**environ, LIBRARY_PATH: str(self.program.parent)}
+        folders = [str(self.program.parent), *map(str, self.libraries)]
+        inherited = environ.get(LIBRARY_PATH)
+        if inherited:
+            folders.append(inherited)
+        return {**environ, LIBRARY_PATH: os.pathsep.join(folders)}
 
 
 @dataclass(frozen=True)

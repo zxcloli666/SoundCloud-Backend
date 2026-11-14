@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from worker.models.tts.process import (
 )
 from worker.observability.logging import JsonLog
 from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, CallExpired, SlotSpec
-from worker.settings import TTS_METHOD, TTS_SLOT
+from worker.settings import TTS_DEVICES, TTS_METHOD, TTS_SLOT
 
 SEED = 1
 LANG = "auto"
@@ -28,6 +29,8 @@ TOKEN_ROOM = 2.5
 TOKEN_SPARE = 40
 READY_S = 60.0
 AUDIO = "audio"
+ENGINE_DEVICES: Mapping[str, str] = {TTS_DEVICES["cpu"]: "cpu", TTS_DEVICES["cuda"]: "CUDA0"}
+CUDA_RUNTIME_PACKAGES = ("cuda_runtime", "cublas")
 
 log = JsonLog(component=TTS_SLOT)
 
@@ -43,6 +46,8 @@ class Options:
     program: Path
     codec: Path
     voices: Mapping[str, Voice]
+    device: str
+    libraries: tuple[Path, ...]
 
     @classmethod
     def of(cls, spec: SlotSpec, home: Path) -> Options:
@@ -52,17 +57,22 @@ class Options:
             isinstance(program, str) and isinstance(codec, str) and isinstance(voices, Mapping)
         ):
             raise RuntimeError(f"{TTS_SLOT} needs the options program, codec and voices")
+        device = ENGINE_DEVICES.get(spec.device)
+        if device is None:
+            raise RuntimeError(f"{TTS_SLOT} cannot run on device {spec.device!r}")
         return cls(
             home / program,
             home / codec,
             {str(name): voice_option(home, name, voice) for name, voice in voices.items()},
+            device,
+            cuda_libraries(sys.path) if spec.device == TTS_DEVICES["cuda"] else (),
         )
 
     def files(self) -> list[Path]:
         return [self.program, self.codec, *(voice.talker for voice in self.voices.values())]
 
     def launch(self, voice: Voice) -> Launch:
-        return Launch(self.program, voice.talker, self.codec)
+        return Launch(self.program, voice.talker, self.codec, self.device, self.libraries)
 
 
 @dataclass(frozen=True)
@@ -162,6 +172,15 @@ def failure_of(lost: EngineLost) -> Exception:
     if time.monotonic() >= CALL_GUARD.expires_at:
         return CallExpired(f"the speech engine was {lost.why} at the deadline")
     return RuntimeError(f"the speech engine {lost.why}: {lost.detail}")
+
+
+def cuda_libraries(paths: Iterable[str]) -> tuple[Path, ...]:
+    places = [Path(entry) / "nvidia" for entry in paths if entry]
+    found: list[Path] = []
+    for package in CUDA_RUNTIME_PACKAGES:
+        folders = [place / package / "lib" for place in places]
+        found += [folder for folder in folders if folder.is_dir()][:1]
+    return tuple(found)
 
 
 def models_home(environ: Mapping[str, str]) -> Path:

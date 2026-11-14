@@ -167,8 +167,8 @@ def test_the_tts_profile_fetches_the_engine_the_codec_and_every_voice(
         tts.codec.path,
         *(voice.path for voice in tts.voices.values()),
     ]
-    assert [(d.url, d.target) for d in downloads] == [
-        (f"{tts.base_url}/{path}", home / path) for path in paths
+    assert [(d.urls, d.target) for d in downloads] == [
+        ((f"{tts.base_urls[0]}/{path}",), home / path) for path in paths
     ]
     assert [d.sha256 for d in downloads] == [
         *tts.engine.files.values(),
@@ -177,21 +177,47 @@ def test_the_tts_profile_fetches_the_engine_the_codec_and_every_voice(
     ]
     assert len(downloads) == 20
     assert [d.target.name for d in downloads if d.executable] == ["scd-qwen"]
-    assert not any("vulkan" in d.url for d in downloads)
-    assert all(d.url.startswith("https://storage.scnative.dev/voice-models/") for d in downloads)
+    assert not any("vulkan" in url or "cuda" in url for d in downloads for url in d.urls)
+    assert all(
+        d.urls[0].startswith("https://storage.scnative.dev/voice-models/") for d in downloads
+    )
 
 
-def test_speech_files_come_from_the_host_models_url(env: dict[str, str]) -> None:
-    moved = {**env, "WORKER__TTS__BASE_URL": "https://models.example/voice"}
-    urls = [item.artifact.describe() for item in plan_for("cpu-tts", moved)]
-    assert len(urls) == 20
-    assert all(url.startswith("https://models.example/voice/qwen-") for url in urls)
+def test_the_gpu_speech_profile_also_fetches_the_cuda_backend_next_to_the_engine(
+    env: dict[str, str],
+) -> None:
+    tts = s.load(CONFIG_DIR, {**env, s.PROFILE_ENV: "gpu-tts"}).tts
+    on_cpu = [item.artifact for item in plan_for("cpu-tts", env)]
+    on_gpu = [item.artifact for item in plan_for("gpu-tts", env)]
+    home = Path(env[fm.TTS_HOME_ENV])
+
+    added = [download for download in on_gpu if download not in on_cpu]
+    assert [(d.target, d.sha256, d.executable) for d in added] == [
+        (home / tts.engine.path("libggml-cuda.so"), tts.engine.cuda_files["libggml-cuda.so"], False)
+    ]
+    assert added[0].target.parent == (home / tts.engine.path(tts.engine.program)).parent
+    assert len(on_gpu) == len(on_cpu) + 1
+
+
+def test_speech_files_are_tried_from_every_host_address_in_order(env: dict[str, str]) -> None:
+    moved = {
+        **env,
+        "WORKER__TTS__BASE_URLS": '["https://models.example/voice", "https://mirror.example/v"]',
+    }
+    downloads = [item.artifact for item in plan_for("cpu-tts", moved)]
+    assert len(downloads) == 20
+    for download in downloads:
+        assert isinstance(download, fm.VerifiedDownload)
+        first, second = download.urls
+        assert first.startswith("https://models.example/voice/qwen-")
+        assert second == first.replace("https://models.example/voice", "https://mirror.example/v")
+        assert download.describe() == first
 
 
 def test_other_profiles_fetch_no_speech_files(env: dict[str, str]) -> None:
     for profile in PROFILES:
         slots = {item.slot for item in plan_for(profile, env)}
-        assert (s.TTS_SLOT in slots) is (profile == "cpu-tts"), profile
+        assert (s.TTS_SLOT in slots) is (profile in ("cpu-tts", "gpu-tts")), profile
 
 
 @pytest.mark.parametrize(
@@ -210,12 +236,12 @@ def test_download_keeps_only_a_verified_file(tmp_path: Path) -> None:
     good = hashlib.sha256(b"weights").hexdigest()
     target = tmp_path / "models" / "lid.bin"
     with pytest.raises(fm.FetchError, match="sha256"):
-        fm.fetch_download(fm.VerifiedDownload(source.as_uri(), "0" * 64, target))
+        fm.fetch_download(fm.VerifiedDownload((source.as_uri(),), "0" * 64, target))
     assert list(target.parent.iterdir()) == []
-    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target))
+    fm.fetch_download(fm.VerifiedDownload((source.as_uri(),), good, target))
     assert target.read_bytes() == b"weights"
     source.unlink()
-    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target))
+    fm.fetch_download(fm.VerifiedDownload((source.as_uri(),), good, target))
 
 
 def test_an_executable_download_is_made_executable_even_when_already_there(
@@ -226,13 +252,13 @@ def test_an_executable_download_is_made_executable_even_when_already_there(
     good = hashlib.sha256(b"#!engine").hexdigest()
     target = tmp_path / "models" / "scd-qwen"
     library = tmp_path / "models" / "libggml.so"
-    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target, executable=True))
-    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, library))
+    fm.fetch_download(fm.VerifiedDownload((source.as_uri(),), good, target, executable=True))
+    fm.fetch_download(fm.VerifiedDownload((source.as_uri(),), good, library))
     assert target.stat().st_mode & 0o777 == fm.EXECUTABLE_MODE
     assert library.stat().st_mode & 0o111 == 0
     target.chmod(0o644)
     source.unlink()
-    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target, executable=True))
+    fm.fetch_download(fm.VerifiedDownload((source.as_uri(),), good, target, executable=True))
     assert target.stat().st_mode & 0o777 == fm.EXECUTABLE_MODE
 
 
@@ -307,11 +333,15 @@ def test_main_exit_codes(
 ) -> None:
     config = ["--config-dir", str(CONFIG_DIR)]
     fetched: list[fm.Artifact] = []
-    monkeypatch.setattr(fm, "fetch", fetched.append)
+
+    def recorded(artifact: fm.Artifact, throttle: fm.Throttle) -> None:
+        fetched.append(artifact)
+
+    monkeypatch.setattr(fm, "fetch", recorded)
     assert fm.main(["--profile", "gpu-12-audio", *config], env) == fm.EXIT_OK
     assert fetched
 
-    def broken(artifact: fm.Artifact) -> None:
+    def broken(artifact: fm.Artifact, throttle: fm.Throttle) -> None:
         raise fm.FetchError("sha256 mismatch")
 
     monkeypatch.setattr(fm, "fetch", broken)
@@ -321,3 +351,40 @@ def test_main_exit_codes(
     assert fm.main(["--profile", "gpu-24", *config], env) == fm.EXIT_CONFIG
     last = orjson.loads(capsys.readouterr().out.splitlines()[-1])
     assert last["event"] == "fetch_models_config_error" and "HF_HUB_OFFLINE" in last["error"]
+
+
+@pytest.mark.parametrize(
+    ("override", "mib_per_s"),
+    [
+        ({}, 4.0),
+        ({"WORKER__TTS__DOWNLOAD_MIB_S": "0"}, 0.0),
+        ({"WORKER__TTS__DOWNLOAD_MIB_S": "0.5"}, 0.5),
+    ],
+)
+def test_one_download_ceiling_from_the_settings_covers_the_whole_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    env: dict[str, str],
+    override: dict[str, str],
+    mib_per_s: float,
+) -> None:
+    throttles: list[fm.Throttle] = []
+
+    def recorded(artifact: fm.Artifact, throttle: fm.Throttle) -> None:
+        throttles.append(throttle)
+
+    monkeypatch.setattr(fm, "fetch", recorded)
+    config = ["--config-dir", str(CONFIG_DIR)]
+    assert fm.main(["--profile", "cpu-tts", *config], {**env, **override}) == fm.EXIT_OK
+
+    assert len(throttles) == 20
+    assert len({id(throttle) for throttle in throttles}) == 1
+    assert throttles[0].bytes_per_s == mib_per_s * fm.MIB
+
+
+def test_only_speech_files_are_throttled(env: dict[str, str]) -> None:
+    speech = [item.artifact for item in plan_for("gpu-tts", env)]
+    others = [item.artifact for item in plan_for("gpu-16", env)]
+
+    assert all(isinstance(a, fm.VerifiedDownload) and a.throttled for a in speech)
+    by_url = [a for a in others if isinstance(a, fm.VerifiedDownload)]
+    assert by_url and not any(a.throttled for a in by_url)

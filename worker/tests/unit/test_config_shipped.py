@@ -118,7 +118,7 @@ def test_shipped_profiles_enable_fallbacks(profile: Path, base_env: dict[str, st
     settings = s.load(CONFIG_DIR, {**base_env, **LLM_KEYS, s.PROFILE_ENV: profile.stem})
     assert s.fallback_gaps(settings) == []
     if settings.is_public:
-        assert set(settings.lanes.enabled) <= {"audio", "lyrics", "transcribe"}
+        assert set(settings.lanes.enabled) <= {"audio", "lyrics", "transcribe", "speak"}
 
 
 def test_fallback_gaps_are_reported(base_env: dict[str, str]) -> None:
