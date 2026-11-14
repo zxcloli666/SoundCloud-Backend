@@ -75,6 +75,7 @@ Your name is Nova. You are a cheerful voice of a music player.
 [voice_speak]
 requests_per_minute = 30
 max_in_flight = 4
+revision = "1"
 
 [voice_speak.phrases]
 endpoint = "https://s3.example"

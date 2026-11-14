@@ -39,6 +39,7 @@ pub fn build(state: AppState) -> Router {
             HeaderName::from_static("x-session-id"),
             HeaderName::from_static("retry-after"),
             HeaderName::from_static(crate::common::request_id::HEADER),
+            HeaderName::from_static(crate::modules::voice_speak::REVISION_HEADER),
         ])
         .allow_credentials(false)
         .max_age(Duration::from_secs(3600));

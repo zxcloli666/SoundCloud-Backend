@@ -8,5 +8,5 @@ mod streams;
 #[cfg(test)]
 pub(crate) mod testing;
 
-pub use handlers::router;
+pub use handlers::{REVISION_HEADER, router};
 pub use service::VoiceSpeak;
