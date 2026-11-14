@@ -48,8 +48,8 @@ pub(crate) async fn replicate_track_search(pool: &PgPool) -> anyhow::Result<()> 
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 339,
-    description: "track search title popular",
+    version: 353,
+    description: "track sync stamps synced at idx",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,

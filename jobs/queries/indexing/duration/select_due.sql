@@ -1,6 +1,7 @@
-SELECT sc_track_id
-FROM tracks
-WHERE needs_duration_resolve = true
-  AND (duration_resolve_retry_at IS NULL OR duration_resolve_retry_at <= now())
-ORDER BY COALESCE(duration_resolve_retry_at, sc_synced_at), sc_track_id
+SELECT track.sc_track_id
+FROM tracks AS track
+LEFT JOIN track_sync_stamps AS stamp ON stamp.track_id = track.id
+WHERE track.needs_duration_resolve = true
+  AND (track.duration_resolve_retry_at IS NULL OR track.duration_resolve_retry_at <= now())
+ORDER BY COALESCE(track.duration_resolve_retry_at, GREATEST(track.sc_synced_at, stamp.sc_synced_at)), track.sc_track_id
 LIMIT $1

@@ -967,6 +967,11 @@ mod tests {
         )
         .execute(&pool)
         .await?;
+        sqlx::query(
+            "INSERT INTO track_sync_stamps (track_id, sc_synced_at) SELECT id, sc_synced_at FROM tracks",
+        )
+        .execute(&pool)
+        .await?;
         let variants = vec!["u1".to_owned()];
         for (limit, exclude) in [
             (24, Vec::new()),
