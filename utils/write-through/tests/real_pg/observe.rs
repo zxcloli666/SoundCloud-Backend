@@ -11,12 +11,12 @@ const PROD_TRACK_ID: &str = "6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94";
 const PROD_TRACK: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, sharing, artwork_url, permalink_url,
         uploader_sc_user_id, sc_created_at, sc_last_modified, sc_synced_at, sc_observation,
-        index_priority, storage_priority, storage_state, index_state, created_at, updated_at)
+        index_priority, storage_priority, storage_state, index_state, created_at)
     VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '1874620031', 'soundcloud:tracks:1874620031',
         'Night Drive', 'night drive', 213000, 'public',
         'https://i1.sndcdn.com/artworks-1874620031-t500x500.jpg', 'https://soundcloud.com/kavinsky-fan/night-drive',
         '204411307', '2026-01-15 12:00:00+00', '2026-09-01 10:00:00+00', '2026-10-28 08:00:00+00', 517000,
-        5, 5, 'ok', 'indexed', '2026-01-15 12:00:05+00', '2026-10-28 08:00:00+00')";
+        5, 5, 'ok', 'indexed', '2026-01-15 12:00:05+00')";
 const PROD_USER: &str = "INSERT INTO public.users (
         sc_user_id, urn, username, username_normalized, full_name, city, avatar_url, verified,
         followers_count, sc_last_modified, sc_synced_at, sc_observation, created_at, updated_at)
@@ -177,7 +177,7 @@ async fn a_new_track_gets_the_same_v5_id_on_api_and_core() {
     assert_eq!(v5.get_version_num(), 5);
     let stamps: bool = scalar(
         &pair.core,
-        "SELECT created_at = '2026-10-30T10:00:00.123456Z' AND updated_at = created_at
+        "SELECT created_at = '2026-10-30T10:00:00.123456Z'
                 AND sc_synced_at = created_at AND enrich_next_run_at = created_at
                 AND sc_observation = 28693349570866705 AND pipeline_held = false
          FROM public.tracks",

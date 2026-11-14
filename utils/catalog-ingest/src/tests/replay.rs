@@ -19,14 +19,14 @@ fn seed() -> String {
              id, sc_track_id, urn, title, title_normalized, duration_ms, sharing, artwork_url, permalink_url,
              waveform_url, uploader_sc_user_id, uploader_urn, uploader_username, sc_created_at, sc_last_modified,
              sc_synced_at, sc_observation, index_priority, storage_priority, storage_state, index_state,
-             play_count_sc, created_at, updated_at, enrich_next_run_at)
+             play_count_sc, created_at, enrich_next_run_at)
          VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '{SEEDED_TRACK}', 'soundcloud:tracks:{SEEDED_TRACK}',
              'Night Drive', 'night drive', 213000, 'public',
              'https://i1.sndcdn.com/artworks-{SEEDED_TRACK}-t500x500.jpg',
              'https://soundcloud.com/kavinsky-fan/track-{SEEDED_TRACK}',
              'https://wave.sndcdn.com/{SEEDED_TRACK}_m.json', '{OWNER}', 'soundcloud:users:{OWNER}', 'kavinsky-fan',
              '2026-01-15 12:00:00+00', '2026-09-01 10:00:00+00', '{synced}', 517000, 5, 5, 'ok', 'indexed',
-             11000, '2026-01-15 12:00:05+00', '{synced}', '{synced}');
+             11000, '2026-01-15 12:00:05+00', '{synced}');
          INSERT INTO public.users (
              sc_user_id, urn, username, username_normalized, full_name, city, country, avatar_url, verified,
              followers_count, kind, sc_last_modified, sc_synced_at, sc_observation, created_at, updated_at)

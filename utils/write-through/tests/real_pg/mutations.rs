@@ -17,12 +17,12 @@ const HLC_1: i64 = 28_693_349_570_866_705;
 const HLC_2: i64 = 28_693_349_670_866_705;
 const FIXTURE: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, sharing, uploader_sc_user_id,
-        sc_observation, created_at, updated_at)
+        sc_observation, created_at)
     VALUES
-        ('7a000000-0000-4000-8000-000000000501', '501', 'soundcloud:tracks:501', 'Night Drive', 'night drive', 213000, 'public', '204411307', 517000, '2026-01-15 12:00:00+00', '2026-10-28 08:00:00+00'),
-        ('7a000000-0000-4000-8000-000000000502', '502', 'soundcloud:tracks:502', 'Dawn', 'dawn', 180000, 'public', '204411307', 517000, '2026-01-15 12:00:00+00', '2026-10-28 08:00:00+00'),
-        ('7a000000-0000-4000-8000-000000000503', '503', 'soundcloud:tracks:503', 'Dusk', 'dusk', 190000, 'public', '99', 517000, '2026-01-15 12:00:00+00', '2026-10-28 08:00:00+00'),
-        ('7a000000-0000-4000-8000-000000000504', '504', 'soundcloud:tracks:504', 'Noon', 'noon', 200000, 'public', '99', 517000, '2026-01-15 12:00:00+00', '2026-10-28 08:00:00+00');
+        ('7a000000-0000-4000-8000-000000000501', '501', 'soundcloud:tracks:501', 'Night Drive', 'night drive', 213000, 'public', '204411307', 517000, '2026-01-15 12:00:00+00'),
+        ('7a000000-0000-4000-8000-000000000502', '502', 'soundcloud:tracks:502', 'Dawn', 'dawn', 180000, 'public', '204411307', 517000, '2026-01-15 12:00:00+00'),
+        ('7a000000-0000-4000-8000-000000000503', '503', 'soundcloud:tracks:503', 'Dusk', 'dusk', 190000, 'public', '99', 517000, '2026-01-15 12:00:00+00'),
+        ('7a000000-0000-4000-8000-000000000504', '504', 'soundcloud:tracks:504', 'Noon', 'noon', 200000, 'public', '99', 517000, '2026-01-15 12:00:00+00');
     INSERT INTO public.playlists (
         urn, sc_playlist_id, title, title_normalized, track_count, sharing, owner_sc_user_id,
         sc_observation, created_at, updated_at)

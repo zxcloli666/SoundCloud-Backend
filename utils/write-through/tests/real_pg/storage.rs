@@ -8,10 +8,10 @@ use crate::harness::Pair;
 const URN: &str = "soundcloud:tracks:1874620031";
 const STORED: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, storage_state, storage_quality,
-        s3_verified_at, created_at, updated_at)
+        s3_verified_at, created_at)
     VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '1874620031', 'soundcloud:tracks:1874620031',
         'Night Drive', 'night drive', 213000, 'ok', 'hq',
-        '2026-10-01 10:00:00+00', '2026-01-15 12:00:05+00', '2026-10-28 08:00:00+00')";
+        '2026-10-01 10:00:00+00', '2026-01-15 12:00:05+00')";
 
 fn at(stamp: &str) -> DateTime<Utc> {
     stamp.parse().unwrap()
@@ -50,8 +50,7 @@ async fn a_track_already_pending_on_core_is_handed_back_not_dead_lettered() {
     let pair = Pair::new(STORED).await;
     sqlx::query(
         "UPDATE public.tracks SET storage_state = 'pending', storage_quality = NULL,
-                s3_verified_at = NULL, s3_missing_at = '2026-10-30 09:00:00+00',
-                updated_at = '2026-10-30 09:00:00+00'
+                s3_verified_at = NULL, s3_missing_at = '2026-10-30 09:00:00+00'
          WHERE urn = $1",
     )
     .bind(URN)

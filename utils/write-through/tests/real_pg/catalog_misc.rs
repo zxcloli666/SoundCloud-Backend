@@ -10,23 +10,23 @@ const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state", "track_
 const TRACKS: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, pipeline_held,
         storage_state, storage_quality, index_state, s3_verified_at, s3_missing_at,
-        created_at, updated_at, transcribe_state)
+        created_at, transcribe_state)
     VALUES
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a01', '2001', 'soundcloud:tracks:2001',
          'Held', 'held', 213000, true, 'pending', NULL, 'pending', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
+         '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a02', '2002', 'soundcloud:tracks:2002',
          'Long mix', 'long mix', 3600000, false, 'pending', NULL, 'pending', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
+         '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a03', '2003', 'soundcloud:tracks:2003',
          'Stored', 'stored', 200000, false, 'ok', 'hq', 'indexed', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
+         '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a04', '2004', 'soundcloud:tracks:2004',
          'Lost', 'lost', 200000, false, 'missing', 'sq', 'indexed', NULL, '2026-10-20 10:00:00+00',
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
+         '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a05', '2005', 'soundcloud:tracks:2005',
          'Too long', 'too long', 9000000, false, 'too_long', NULL, 'too_long', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', 'disabled')";
+         '2026-10-01 10:00:00+00', 'disabled')";
 
 fn at(stamp: &str) -> DateTime<Utc> {
     stamp.parse().unwrap()
@@ -89,8 +89,8 @@ async fn a_too_long_track_is_marked_the_same_on_api_and_core() {
     let marked = pair.run(&too_long("2002"), &[]).await.assert_same();
 
     assert_eq!(marked, json!(true));
-    let states: (String, String, Option<String>, bool, DateTime<Utc>) = sqlx::query_as(
-        "SELECT storage_state, index_state, transcribe_state, hq_upgrade_pending, updated_at
+    let states: (String, String, Option<String>, bool) = sqlx::query_as(
+        "SELECT storage_state, index_state, transcribe_state, hq_upgrade_pending
          FROM public.tracks WHERE sc_track_id = '2002'",
     )
     .fetch_one(&pair.core)
@@ -102,8 +102,7 @@ async fn a_too_long_track_is_marked_the_same_on_api_and_core() {
             "too_long".to_owned(),
             "too_long".to_owned(),
             Some("disabled".to_owned()),
-            false,
-            at("2026-10-31T08:00:00Z")
+            false
         )
     );
     assert!(
@@ -119,7 +118,7 @@ async fn marking_a_track_core_already_marked_hands_the_row_back() {
     on_core(
         &pair,
         "UPDATE public.tracks SET storage_state = 'too_long', index_state = 'too_long',
-                transcribe_state = 'disabled', updated_at = '2026-10-30 08:00:00+00'
+                transcribe_state = 'disabled'
          WHERE sc_track_id = '2002'",
     )
     .await;
@@ -174,7 +173,7 @@ async fn a_track_core_released_already_is_handed_back() {
     let pair = Pair::new(TRACKS).await;
     on_core(
         &pair,
-        "UPDATE public.tracks SET pipeline_held = false, updated_at = '2026-10-30 08:00:00+00'
+        "UPDATE public.tracks SET pipeline_held = false
          WHERE sc_track_id = '2001'",
     )
     .await;
@@ -253,8 +252,7 @@ async fn a_verdict_on_a_track_core_marked_too_long_changes_nothing_anywhere() {
     let pair = Pair::new(TRACKS).await;
     on_core(
         &pair,
-        "UPDATE public.tracks SET storage_state = 'too_long', storage_quality = NULL,
-                updated_at = '2026-10-30 08:00:00+00'
+        "UPDATE public.tracks SET storage_state = 'too_long', storage_quality = NULL
          WHERE sc_track_id = '2003'",
     )
     .await;

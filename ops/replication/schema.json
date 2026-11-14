@@ -2409,7 +2409,6 @@
     {"default": null, "generated": false, "name": "title_normalized", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "transcribe_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "transcribe_state", "notnull": false, "type": "character varying(16)"},
-    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": "'unknown'::character varying", "generated": false, "name": "upload_kind", "notnull": true, "type": "character varying(16)"},
     {"default": null, "generated": false, "name": "uploader_avatar_url", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "uploader_sc_user_id", "notnull": false, "type": "text"},
