@@ -6,8 +6,9 @@ from dataclasses import dataclass
 import pytest
 
 from tests.conftest import BASE_ENV, CONFIG_DIR, LLM_KEYS
+from worker import app
 from worker import settings as s
-from worker.app import Blueprint, StartupError, tts_options
+from worker.app import TTS_THREADS_ENV, Blueprint, StartupError, tts_options
 from worker.contract import Contract
 from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
 from worker.runtime import devices
@@ -84,6 +85,7 @@ DESIGN = {
         local_llm=True,
     ),
     "cpu-tts": Profile("lane", "trusted", {"speak": 1}, {}),
+    "gpu-tts": Profile("lane", "public", {"speak": 1}, {}),
 }
 SPEAK_ONLY = {"speak"}
 
@@ -126,7 +128,8 @@ def test_profile_ships_every_fallback(name: str) -> None:
 def test_profile_passes_both_public_locks(contract: Contract, name: str) -> None:
     settings = load(name)
     s.check_public_lanes(settings, contract.public_lanes)
-    assert settings.is_public == bool(settings.small_card)
+    speaks_only = set(settings.lanes.enabled) == SPEAK_ONLY
+    assert settings.is_public == bool(settings.small_card) or speaks_only
     if settings.is_public:
         assert set(settings.lanes.enabled) <= contract.public_lanes
 
@@ -252,10 +255,10 @@ def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
     assert all(other.idle_unload_s == 0 for other in blueprint.plans if other is not plan)
 
 
-def test_only_the_tts_profile_serves_the_speak_lane() -> None:
+def test_only_the_speech_profiles_serve_the_speak_lane() -> None:
     for name in DESIGN:
         serves = "speak" in load(name).lanes.enabled
-        assert serves is (name == "cpu-tts"), name
+        assert serves is (name in ("cpu-tts", "gpu-tts")), name
 
 
 def test_the_tts_profile_runs_one_reserved_speech_engine(contract: Contract) -> None:
@@ -267,31 +270,63 @@ def test_the_tts_profile_runs_one_reserved_speech_engine(contract: Contract) -> 
     assert plan.reserved
     assert plan.idle_unload_s == settings.tts.idle_unload_s == 600
     [spec] = plan.slots
-    assert spec.device == s.TTS_DEVICE
+    assert spec.device == s.TTS_DEVICES["cpu"]
     assert not devices.uses_torch(spec.device)
     assert spec.options == tts_options(settings.tts)
-    assert spec.options["program"] == "qwen-engine-linux-x86_64/1/scd-qwen"
+    assert spec.options["program"] == "qwen-engine-linux-x86_64/2/scd-qwen"
     assert sorted(spec.options["voices"]) == ["loli", "moriarty"]
     assert blueprint.launch.env == {TTS_HOME_ENV: "/models/tts"}
 
 
 @pytest.mark.parametrize(
-    ("logical_cpus", "affinity_cpus", "engine_threads"),
-    [(12, 12, 6), (12, 4, 6), (12, 2, 6), (3, 3, 1), (1, 1, 1), (None, 4, 1)],
+    ("logical_cpus", "affinity_cpus", "quota", "engine_threads"),
+    [
+        (12, 12, None, 6),
+        (12, 4, None, 4),
+        (12, 2, None, 2),
+        (64, 64, 10, 10),
+        (32, 32, 15, 15),
+        (64, 8, 10, 8),
+        (12, 12, 1, 1),
+        (3, 3, None, 1),
+        (1, 1, None, 1),
+        (None, 4, None, 1),
+    ],
 )
-def test_the_tts_plan_states_the_threads_the_engine_runs_on_any_cpu_mask(
+def test_the_tts_plan_gives_the_engine_half_the_cpus_within_the_cpu_mask_and_quota(
     contract: Contract,
     monkeypatch: pytest.MonkeyPatch,
     logical_cpus: int | None,
     affinity_cpus: int,
+    quota: int | None,
     engine_threads: int,
 ) -> None:
     monkeypatch.setattr(os, "cpu_count", lambda: logical_cpus)
+    monkeypatch.setattr(app, "available_cpus", lambda: affinity_cpus)
+    monkeypatch.setattr(app, "cpu_quota", lambda: quota)
     env = {TTS_HOME_ENV: "/models/tts"}
-    [plan] = Blueprint.of(load("cpu-tts"), contract, env, cpus=affinity_cpus).plans
+    [plan] = Blueprint.of(load("cpu-tts"), contract, env, cpus=4).plans
 
     assert plan.own_threads
     assert plan.threads == engine_threads
+    assert plan.env == {TTS_THREADS_ENV: str(engine_threads)}
+
+
+def test_the_gpu_speech_profile_runs_the_voice_on_cuda_on_a_public_node(
+    contract: Contract,
+) -> None:
+    settings = load("gpu-tts")
+    blueprint = Blueprint.of(settings, contract, {TTS_HOME_ENV: "/models/tts"}, cpus=10)
+
+    assert settings.is_public and settings.runtime.device == settings.tts.device == "cuda"
+    assert [lane.name for lane in blueprint.lanes] == ["speak"]
+    [plan] = blueprint.plans
+    [spec] = plan.slots
+    assert spec.device == s.TTS_DEVICES["cuda"]
+    assert not devices.uses_torch(spec.device)
+    assert spec.options == tts_options(settings.tts)
+    assert plan.reserved and plan.own_threads
+    assert plan.env == {TTS_THREADS_ENV: str(plan.threads)}
 
 
 def test_the_tts_profile_needs_its_models_folder(contract: Contract) -> None:

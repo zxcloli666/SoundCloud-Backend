@@ -36,7 +36,7 @@ LOCAL_LLM_FILE_SUFFIX = ".gguf"
 LOCAL_LLM_MIN_CONTEXT_TOKENS = 1024
 TTS_SLOT = "tts"
 TTS_METHOD = "say"
-TTS_DEVICE = "qwen-cpu"
+TTS_DEVICES: Mapping[str, str] = MappingProxyType({"cpu": "qwen-cpu", "cuda": "qwen-cuda"})
 MAX_NICE = 19
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 PATH_PART = re.compile(r"[A-Za-z0-9._-]+")
@@ -305,9 +305,13 @@ class TtsEngine:
     directory: str
     program: str
     files: Mapping[str, str]
+    cuda_files: Mapping[str, str]
 
     def path(self, name: str) -> str:
         return f"{self.directory}/{name}"
+
+    def files_for(self, device: str) -> Mapping[str, str]:
+        return {**self.files, **self.cuda_files} if device == "cuda" else self.files
 
 
 @dataclass(frozen=True)
@@ -325,7 +329,9 @@ class TtsVoice:
 
 @dataclass(frozen=True)
 class TtsSection:
-    base_url: str
+    base_urls: tuple[str, ...]
+    download_mib_s: float
+    device: str
     idle_unload_s: int
     engine: TtsEngine
     codec: TtsFile
@@ -735,23 +741,30 @@ def validate_local_llm(settings: Settings) -> list[str]:
 def validate_tts(settings: Settings) -> list[str]:
     tts = settings.tts
     problems = []
-    if not tts.base_url.startswith("https://") or tts.base_url.endswith("/"):
-        problems.append("tts.base_url must be an https URL without a trailing slash")
+    if not tts.base_urls or len(set(tts.base_urls)) != len(tts.base_urls):
+        problems.append("tts.base_urls must list at least one address, each once")
+    if not all(url.startswith("https://") and not url.endswith("/") for url in tts.base_urls):
+        problems.append("tts.base_urls must be https URLs without a trailing slash")
+    if tts.download_mib_s < 0:
+        problems.append("tts.download_mib_s must be >= 0 (0 is no limit)")
+    if tts.device not in TTS_DEVICES:
+        problems.append(f"tts.device must be one of {tuple(TTS_DEVICES)}")
     if tts.idle_unload_s < 0:
         problems.append("tts.idle_unload_s must be >= 0")
     if tts.engine.program not in tts.engine.files:
         problems.append("tts.engine.program must be one of tts.engine.files")
     if not tts.voices:
         problems.append("tts.voices is empty")
+    engine_files = {**tts.engine.files, **tts.engine.cuda_files}
     paths = [
-        *(tts.engine.path(name) for name in tts.engine.files),
+        *(tts.engine.path(name) for name in engine_files),
         tts.codec.path,
         *(voice.path for voice in tts.voices.values()),
     ]
     problems += [
         f"tts path {path!r} is not a plain relative path" for path in paths if not plain(path)
     ]
-    hashes = [*tts.engine.files.values(), tts.codec.sha256]
+    hashes = [*engine_files.values(), tts.codec.sha256]
     hashes += [voice.sha256 for voice in tts.voices.values()]
     if not all(SHA256_HEX.fullmatch(sha256) for sha256 in hashes):
         problems.append("tts sha256 values must be 64 lowercase hex characters")

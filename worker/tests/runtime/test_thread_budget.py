@@ -4,8 +4,10 @@ import asyncio
 import os
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 from tests.runtime.support import TEST_POLICY, fake_spec, started_supervisor
 from worker.domain.deadline import Deadline
@@ -22,6 +24,7 @@ from worker.runtime.supervisor import (
     Supervisor,
     budget_plans,
     cpu_budget,
+    cpu_quota,
     cpus_within_pid_limit,
     fair_share,
     plan_engines,
@@ -34,6 +37,33 @@ PROMPT_S = 1.0
 
 def plans_of(*plans: EnginePlan) -> list[EnginePlan]:
     return list(budget_plans(plans, 8))
+
+
+@pytest.mark.parametrize(
+    ("files", "cpus"),
+    [
+        ({"cpu.max": "1024000 100000\n"}, 10),
+        ({"cpu.max": "1536000 100000\n"}, 15),
+        ({"cpu.max": "50000 100000\n"}, 1),
+        ({"cpu.max": "max 100000\n"}, None),
+        ({"cpu/cpu.cfs_quota_us": "400000\n", "cpu/cpu.cfs_period_us": "100000\n"}, 4),
+        (
+            {"cpu,cpuacct/cpu.cfs_quota_us": "-1\n", "cpu,cpuacct/cpu.cfs_period_us": "100000\n"},
+            None,
+        ),
+        ({"cpu/cpu.cfs_quota_us": "400000\n"}, None),
+        ({}, None),
+    ],
+    ids=["v2_10_24", "v2_15_36", "v2_half", "v2_none", "v1", "v1_none", "v1_no_period", "none"],
+)
+def test_the_cpu_quota_of_the_container_is_read_from_cgroup_v2_or_v1(
+    tmp_path: Path, files: dict[str, str], cpus: int | None
+) -> None:
+    for name, text in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
+
+    assert cpu_quota(tmp_path) == cpus
 
 
 def test_engines_take_at_most_half_of_the_container_pid_limit() -> None:

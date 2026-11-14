@@ -10,7 +10,7 @@ import pytest
 from tests.runtime.support import TEST_POLICY, launch, quiet_log, settled, wait_until
 from tests.unit.tts import fake_qwen
 from tests.unit.tts.engine_home import OPTIONS, SPOKEN, install, journal, voice
-from worker.app import SLOT_LOADERS
+from worker.app import SLOT_LOADERS, TTS_THREADS_ENV
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import Reason, TransientFailure
 from worker.engines import EngineSlots, RuntimeEngines
@@ -18,7 +18,7 @@ from worker.fetch_models import TTS_HOME_ENV
 from worker.observability.counters import Counters
 from worker.runtime.protocol import SlotSpec
 from worker.runtime.supervisor import EnginePlan, Supervisor, budget_plans
-from worker.settings import TTS_DEVICE, TTS_SLOT
+from worker.settings import TTS_DEVICES, TTS_SLOT
 
 TEXT = "Громкость на семьдесят."
 IDLE_S = 1.0
@@ -38,7 +38,7 @@ class Running:
 @pytest.fixture
 async def running(tmp_path: Path) -> AsyncIterator[Running]:
     home = install(tmp_path)
-    spec = SlotSpec(TTS_SLOT, SLOT_LOADERS[TTS_SLOT], "", "", TTS_DEVICE, 1, 0, OPTIONS)
+    spec = SlotSpec(TTS_SLOT, SLOT_LOADERS[TTS_SLOT], "", "", TTS_DEVICES["cpu"], 1, 0, OPTIONS)
     own = EnginePlan(
         TTS_SLOT,
         (spec,),
@@ -46,6 +46,7 @@ async def running(tmp_path: Path) -> AsyncIterator[Running]:
         threads=ENGINE_THREADS,
         own_threads=True,
         idle_unload_s=IDLE_S,
+        env={TTS_THREADS_ENV: str(ENGINE_THREADS)},
     )
     [plan] = budget_plans([own], CPUS_IN_THE_AFFINITY_MASK)
     counters = Counters()
@@ -72,6 +73,15 @@ async def test_a_line_and_a_voice_switch_go_through_the_engine_process(running: 
     assert [speech.loaded for speech in (first, again, other)] == [True, False, True]
     assert len(journal(running.home, "start")) == 2
     assert len(journal(running.home, "exit")) == 1
+
+
+async def test_the_voice_process_runs_on_the_threads_the_plan_gave_its_engine(
+    running: Running,
+) -> None:
+    await running.engines.say("loli", TEXT, Deadline.after(30))
+
+    [start] = journal(running.home, "start")
+    assert start["threads"] == str(running.plan.threads) == str(ENGINE_THREADS)
 
 
 async def test_the_deadline_cancels_the_line_and_keeps_the_engine(running: Running) -> None:

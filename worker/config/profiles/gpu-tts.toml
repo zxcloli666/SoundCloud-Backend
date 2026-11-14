@@ -1,0 +1,14 @@
+[worker]
+trust = "public"
+
+[runtime]
+mode = "lane"
+device = "cuda"
+
+[lanes]
+enabled = ["speak"]
+capacity = { speak = 1 }
+required = { speak = false }
+
+[tts]
+device = "cuda"
