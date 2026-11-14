@@ -389,6 +389,7 @@ mod tests {
             kind: backend_contracts::JobKind::RecordHardNegative,
             dedup_key: None,
             payload: serde_json::to_value(Versioned::V1(event)).unwrap(),
+            priority: 15,
             generation: 1,
             attempts: 1,
             max_attempts: 8,

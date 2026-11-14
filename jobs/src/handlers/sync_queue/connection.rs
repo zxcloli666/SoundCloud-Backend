@@ -11,6 +11,7 @@ use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 use super::client::{RefreshedToken, SoundCloudError, TokenRefreshClient};
 use super::model::Connection;
 use super::read_limit::AppReadLimits;
+use super::read_line::Waiter;
 
 const REFRESH_LEASE_SECONDS: i32 = 60;
 const REJECTED_TOKEN_RETRY_SECONDS: i32 = 5 * 60;
@@ -107,6 +108,15 @@ impl ConnectionManager {
             return Ok(Some(seconds));
         }
         Ok(READ_LIMITS.admit(oauth_app_id))
+    }
+
+    pub async fn read_turn(
+        &self,
+        oauth_app_id: Uuid,
+        waiter: Waiter,
+    ) -> Result<Option<i64>, ConnectionError> {
+        let cooldown = self.cooldowns.retry_after_seconds(oauth_app_id).await?;
+        Ok(READ_LIMITS.turn(oauth_app_id, waiter, cooldown))
     }
 
     pub fn reads_answered(&self, oauth_app_id: Option<Uuid>) {

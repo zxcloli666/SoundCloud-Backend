@@ -580,6 +580,7 @@ impl ScClient {
     ) -> Option<Value> {
         let inputs = serde_json::to_vec(&serde_json::json!({
             "user_id": user_id, "kind": kind, "cursor": url, "wrapped": true,
+            "playlist_tracks": false,
         }))
         .ok()?;
         let v = self
