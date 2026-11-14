@@ -4,7 +4,7 @@ import pytest
 
 from worker.contract import Contract
 
-MAX_DELIVER = 5
+MAX_DELIVER = {"speak": 1}
 NONE = "-"
 LANE_TABLE = """
 audio       INDEX_AUDIO   index.audio.new       180  60  12 256  30  600  1650  240 public
@@ -14,6 +14,7 @@ encode      ENCODE        encode.text.new        30  30   6 256   5   60   225  
 collab      TRAIN_COLLAB  train.collab.new     3600 300  60   1 120 1800 19800    - private
 taste       TRAIN_TASTE   train.taste.new      7200 300  60   1 300 1800 39900    - private
 ai          AI_RPC        ai.rpc.>               30  30   6 128   -    -     -    - private
+speak       SPEAK_RPC     speak.rpc.>            90  30   6   8   -    -     -    - private
 """
 STREAM_TABLE = """
 INDEX_AUDIO     index.audio.>     work_queue   86400  86400
@@ -23,6 +24,7 @@ ENCODE          encode.>          work_queue   86400    900
 TRAIN_COLLAB    train.collab.>    work_queue   21600   3600
 TRAIN_TASTE     train.taste.>     work_queue   86400   3600
 AI_RPC          ai.rpc.>          work_queue     120    120
+SPEAK_RPC       speak.rpc.>       work_queue     120    120
 PIPELINE_DONE   done.>            limits      259200  43200
 WORKER_INVALID  worker.invalid.>  limits      604800    120
 """
@@ -34,8 +36,14 @@ DONE_SUBJECTS = {
     "collab": "done.train_collab",
     "taste": "done.train_taste",
     "ai": None,
+    "speak": None,
 }
-OBJECT_STORES = {"COLLAB_DATA": 86400, "TASTE_DATA": 86400, "TASTE_MODELS": None}
+OBJECT_STORES = {
+    "COLLAB_DATA": 86400,
+    "SPEAK_CLIPS": 600,
+    "TASTE_DATA": 86400,
+    "TASTE_MODELS": None,
+}
 
 
 def rows(table: str) -> dict[str, list[str]]:
@@ -68,7 +76,7 @@ def test_lane_matches_the_design_table(contract: Contract, name: str) -> None:
     )
     assert actual == tuple(number(cell) for cell in numbers)
     assert lane.public == (visibility == "public")
-    assert lane.max_deliver == MAX_DELIVER
+    assert lane.max_deliver == MAX_DELIVER.get(name, 5)
     assert lane.done_subject == DONE_SUBJECTS[name]
 
 

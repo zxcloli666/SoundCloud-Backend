@@ -114,17 +114,19 @@ async def probe(path: Path, deadline: Deadline) -> StreamInfo:
     return StreamInfo(sample_rate, channels)
 
 
-async def run_tool(argv: list[str], deadline: Deadline, stage: str) -> tuple[int, bytes, bytes]:
+async def run_tool(
+    argv: list[str], deadline: Deadline, stage: str, feed: bytes | None = None
+) -> tuple[int, bytes, bytes]:
     deadline.check(stage)
     process = await asyncio.create_subprocess_exec(
         *argv,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.DEVNULL if feed is None else asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=TOOL_ENV,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), deadline.remaining())
+        stdout, stderr = await asyncio.wait_for(process.communicate(feed), deadline.remaining())
     except TimeoutError as error:
         raise TransientFailure(Reason.DEADLINE_EXCEEDED, f"stage={stage}") from error
     finally:

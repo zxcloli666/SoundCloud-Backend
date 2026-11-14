@@ -20,7 +20,7 @@ from huggingface_hub.errors import EntryNotFoundError
 from huggingface_hub.file_download import repo_folder_name
 
 from worker import settings as settings_module
-from worker.settings import Settings, SettingsError
+from worker.settings import Settings, SettingsError, TtsFile, TtsSection, TtsVoice
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -28,6 +28,8 @@ EXIT_CONFIG = 78
 DEFAULT_CONFIG_DIR = Path("config")
 FASTTEXT_HOME_ENV = "FASTTEXT_HOME"
 ROFORMER_HOME_ENV = "MELBAND_ROFORMER_MODELS_PATH"
+TTS_HOME_ENV = "SCD_TTS_MODELS_PATH"
+EXECUTABLE_MODE = 0o755
 FASTTEXT_SLOT = "cpu-tools"
 ROFORMER_SLOT = "sep"
 MAIN_BRANCH = "main"
@@ -79,6 +81,7 @@ class VerifiedDownload:
     url: str
     sha256: str
     target: Path
+    executable: bool = False
 
     def describe(self) -> str:
         return self.url
@@ -181,6 +184,8 @@ def plan(settings: Settings, environ: Mapping[str, str]) -> list[Item]:
 
 
 def artifacts_for(slot: str, settings: Settings, environ: Mapping[str, str]) -> list[Artifact]:
+    if slot == settings_module.TTS_SLOT:
+        return tts_artifacts(settings.tts, home(environ, TTS_HOME_ENV))
     spec = settings.slots[slot]
     if not spec.model:
         return []
@@ -209,6 +214,25 @@ def roformer_artifacts(spec: settings_module.SlotSettings, models_dir: Path) -> 
             directory / source.config,
         ),
     ]
+
+
+def tts_artifacts(tts: TtsSection, models_dir: Path) -> list[Artifact]:
+    engine = tts.engine
+    programs: list[Artifact] = [
+        VerifiedDownload(
+            f"{tts.base_url}/{engine.path(name)}",
+            sha256,
+            models_dir / engine.path(name),
+            executable=name == engine.program,
+        )
+        for name, sha256 in engine.files.items()
+    ]
+    weights: list[TtsFile | TtsVoice] = [tts.codec, *tts.voices.values()]
+    models: list[Artifact] = [
+        VerifiedDownload(f"{tts.base_url}/{model.path}", model.sha256, models_dir / model.path)
+        for model in weights
+    ]
+    return programs + models
 
 
 def fetch_all(items: Sequence[Item], fetcher: Callable[[Artifact], None]) -> int:
@@ -295,8 +319,13 @@ def chosen_files(files: Sequence[str]) -> list[str]:
 
 
 def fetch_download(download: VerifiedDownload) -> None:
-    if has_sha256(download.target, download.sha256):
-        return
+    if not has_sha256(download.target, download.sha256):
+        replace_verified(download)
+    if download.executable:
+        download.target.chmod(EXECUTABLE_MODE)
+
+
+def replace_verified(download: VerifiedDownload) -> None:
     download.target.parent.mkdir(parents=True, exist_ok=True)
     partial = download.target.with_name(download.target.name + ".partial")
     try:

@@ -89,6 +89,7 @@ def test_image_env_points_libraries_at_the_models_volume() -> None:
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env[fm.FASTTEXT_HOME_ENV].startswith("/models/")
     assert env[fm.ROFORMER_HOME_ENV].startswith("/models/")
+    assert env[fm.TTS_HOME_ENV].startswith("/models/")
     assert env["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
 
 

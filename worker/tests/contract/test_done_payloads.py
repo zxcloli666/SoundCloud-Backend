@@ -7,7 +7,7 @@ import pytest
 
 from tests.contract import samples
 from worker.bus.outbox import encode
-from worker.contract import Contract
+from worker.contract import Contract, LaneSpec
 from worker.domain.outcome import (
     DETAIL_MAX_CHARS,
     REOPENABLE_FAILURES,
@@ -109,28 +109,62 @@ def largest_ok_done(contract: Contract, lane: str) -> dict[str, object]:
     return done
 
 
+RPC_LANES = {"ai": ("resolve_artist", "match_track", "complete"), "speak": ("say",)}
+
+
+def rpc_lane(contract: Contract, subject: str) -> LaneSpec:
+    [lane] = [
+        lane
+        for lane in contract.lanes.values()
+        if lane.rpc and subject.startswith(lane.filter_subject.removesuffix(">"))
+    ]
+    return lane
+
+
 @pytest.mark.parametrize("method", sorted(samples.RPC_REQUESTS))
 def test_rpc_request_samples_are_valid(contract: Contract, method: str) -> None:
     assert contract.validate(method, samples.RPC_REQUESTS[method]) == []
-    assert method.startswith(contract.lane("ai").filter_subject.removesuffix(">"))
+    assert method.rpartition(".")[2] in RPC_LANES[rpc_lane(contract, method).name]
 
 
 @pytest.mark.parametrize("schema", sorted(samples.RPC_REPLIES))
 def test_rpc_replies_are_valid(contract: Contract, schema: str) -> None:
-    ai = contract.lane("ai")
+    lane = rpc_lane(contract, schema)
     for reply in samples.RPC_REPLIES[schema]:
         assert contract.validate(schema, reply) == []
-        assert len(orjson.dumps(reply)) <= ai.result_max_bytes
+        assert len(orjson.dumps(reply)) <= lane.result_max_bytes
     for error in samples.RPC_ERRORS:
         assert contract.validate(schema, {"ok": False, "error": error}) == []
     assert contract.validate(schema, {"ok": False, "error": "timeout"}) != []
     assert contract.validate(schema, {"ok": True}) != []
 
 
-def test_rpc_windows_bound_the_ai_lane(contract: Contract) -> None:
-    ai = contract.lane("ai")
-    assert contract.rpc.windows_s == {"resolve_artist": 20, "match_track": 10, "complete": 30}
-    assert ai.deadline_s == max(contract.rpc.windows_s.values())
-    assert {f"ai.rpc.{method}" for method in contract.rpc.windows_s} == set(samples.RPC_REQUESTS)
-    assert ai.done_subject is None
-    assert ai.nak_base_s is None and ai.reopenable == frozenset()
+@pytest.mark.parametrize("name", sorted(RPC_LANES))
+def test_rpc_windows_bound_their_lane(contract: Contract, name: str) -> None:
+    lane = contract.lane(name)
+    windows = {method: contract.rpc.windows_s[method] for method in RPC_LANES[name]}
+    assert lane.deadline_s == max(windows.values())
+    prefix = lane.filter_subject.removesuffix(">")
+    assert {f"{prefix}{method}" for method in windows} <= set(samples.RPC_REQUESTS)
+    assert lane.done_subject is None
+    assert lane.nak_base_s is None and lane.reopenable == frozenset()
+
+
+def test_every_rpc_method_belongs_to_one_lane(contract: Contract) -> None:
+    owned = [method for methods in RPC_LANES.values() for method in methods]
+    assert sorted(owned) == sorted(contract.rpc.windows_s)
+    assert contract.rpc.windows_s == {
+        "resolve_artist": 20,
+        "match_track": 10,
+        "complete": 30,
+        "say": 90,
+    }
+
+
+def test_a_say_reply_of_the_longest_line_fits_the_lane(contract: Contract) -> None:
+    lane = contract.lane("speak")
+    clip = contract.schemas["speak.rpc.say.reply"]["$defs"]["SayData"]["properties"]["clip"]
+    longest = {"ok": True, "data": {"seconds": 99.999, "clip": "A" * clip["maxLength"]}}
+    assert contract.validate("speak.rpc.say.reply", longest) == []
+    assert len(orjson.dumps(longest)) <= lane.result_max_bytes <= contract.max_message_bytes
+    assert lane.max_deliver == 1

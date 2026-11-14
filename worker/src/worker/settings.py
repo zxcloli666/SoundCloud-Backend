@@ -21,7 +21,7 @@ ENV_REF_PREFIX = "env:"
 SECRET_KEYS = frozenset({"password", "api_key"})
 INTEGER = re.compile(r"[+-]?\d+")
 
-LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai")
+LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak")
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
 DEVICES = ("auto", "cuda", "cpu")
@@ -34,8 +34,13 @@ LOCAL_LLM_METHOD = "complete"
 LOCAL_LLM_DEVICE = "llama-cpu"
 LOCAL_LLM_FILE_SUFFIX = ".gguf"
 LOCAL_LLM_MIN_CONTEXT_TOKENS = 1024
+TTS_SLOT = "tts"
+TTS_METHOD = "say"
+TTS_DEVICE = "qwen-cpu"
 MAX_NICE = 19
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+PATH_PART = re.compile(r"[A-Za-z0-9._-]+")
+SPEAKER = re.compile(r"[a-z0-9_-]+")
 MIX_FALLBACK = "mix"
 
 LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -47,6 +52,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "collab": ("train-collab",),
         "taste": ("train-taste",),
         "ai": (LOCAL_LLM_SLOT,),
+        "speak": (TTS_SLOT,),
     }
 )
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})
@@ -295,6 +301,38 @@ class LlmSection:
 
 
 @dataclass(frozen=True)
+class TtsEngine:
+    directory: str
+    program: str
+    files: Mapping[str, str]
+
+    def path(self, name: str) -> str:
+        return f"{self.directory}/{name}"
+
+
+@dataclass(frozen=True)
+class TtsFile:
+    path: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class TtsVoice:
+    path: str
+    sha256: str
+    speaker: str
+
+
+@dataclass(frozen=True)
+class TtsSection:
+    base_url: str
+    idle_unload_s: int
+    engine: TtsEngine
+    codec: TtsFile
+    voices: Mapping[str, TtsVoice]
+
+
+@dataclass(frozen=True)
 class Settings:
     worker: WorkerSection
     nats: NatsSection
@@ -306,6 +344,7 @@ class Settings:
     collab: CollabSection
     taste: TasteSection
     llm: LlmSection
+    tts: TtsSection
     profile: str = ""
 
     @property
@@ -523,6 +562,7 @@ def validate(settings: Settings) -> None:
         *validate_sync(settings),
         *validate_taste(settings),
         *validate_llm(settings),
+        *validate_tts(settings),
     ]
     if problems:
         raise SettingsError("; ".join(problems))
@@ -690,6 +730,41 @@ def validate_local_llm(settings: Settings) -> list[str]:
     if not 0 <= local.nice <= MAX_NICE:
         problems.append(f"llm.local.nice must be within 0..{MAX_NICE}")
     return problems
+
+
+def validate_tts(settings: Settings) -> list[str]:
+    tts = settings.tts
+    problems = []
+    if not tts.base_url.startswith("https://") or tts.base_url.endswith("/"):
+        problems.append("tts.base_url must be an https URL without a trailing slash")
+    if tts.idle_unload_s < 0:
+        problems.append("tts.idle_unload_s must be >= 0")
+    if tts.engine.program not in tts.engine.files:
+        problems.append("tts.engine.program must be one of tts.engine.files")
+    if not tts.voices:
+        problems.append("tts.voices is empty")
+    paths = [
+        *(tts.engine.path(name) for name in tts.engine.files),
+        tts.codec.path,
+        *(voice.path for voice in tts.voices.values()),
+    ]
+    problems += [
+        f"tts path {path!r} is not a plain relative path" for path in paths if not plain(path)
+    ]
+    hashes = [*tts.engine.files.values(), tts.codec.sha256]
+    hashes += [voice.sha256 for voice in tts.voices.values()]
+    if not all(SHA256_HEX.fullmatch(sha256) for sha256 in hashes):
+        problems.append("tts sha256 values must be 64 lowercase hex characters")
+    problems += [
+        f"tts.voices.{name}.speaker must match {SPEAKER.pattern}"
+        for name, voice in tts.voices.items()
+        if not SPEAKER.fullmatch(voice.speaker)
+    ]
+    return problems
+
+
+def plain(path: str) -> bool:
+    return all(part not in (".", "..") and PATH_PART.fullmatch(part) for part in path.split("/"))
 
 
 def check_public_lanes(settings: Settings, public_lanes: frozenset[str]) -> None:

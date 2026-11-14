@@ -207,16 +207,26 @@ class RpcHandler:
     def _encode(
         self, lease: Lease, method: str, reply: Mapping[str, object]
     ) -> tuple[Mapping[str, object], bytes]:
+        fallback = error_reply(ERROR_INTERNAL)
         try:
-            return reply, encode(reply)
+            body = encode(reply)
         except ValueError as error:
             self._counters.inc("rpc_internal_total", method=method)
             log.error(
                 "rpc_reply_unencodable",
                 extra={**lease.log_fields(), "method": method, "error": str(error)},
             )
-            fallback = error_reply(ERROR_INTERNAL)
             return fallback, encode(fallback)
+        limit = min(self.lane.result_max_bytes, self._contract.max_message_bytes)
+        if len(body) <= limit:
+            return reply, body
+        self._counters.inc("rpc_reply_too_large_total", method=method)
+        self._counters.inc("rpc_internal_total", method=method)
+        log.error(
+            "rpc_reply_too_large",
+            extra={**lease.log_fields(), "method": method, "bytes": len(body), "limit": limit},
+        )
+        return fallback, encode(fallback)
 
     def _deadline(self, msg: Msg, method: str) -> Deadline:
         window_s = self._contract.rpc.windows_s.get(method, self.lane.deadline_s)

@@ -6,9 +6,9 @@ import pytest
 
 from tests.conftest import BASE_ENV, CONFIG_DIR, LLM_KEYS
 from worker import settings as s
-from worker.app import Blueprint
+from worker.app import Blueprint, StartupError, tts_options
 from worker.contract import Contract
-from worker.fetch_models import FASTTEXT_HOME_ENV
+from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
 from worker.runtime import devices
 from worker.runtime.supervisor import BULK_NICE
 
@@ -82,7 +82,9 @@ DESIGN = {
         dict.fromkeys(SYNC_X2, 1),
         local_llm=True,
     ),
+    "cpu-tts": Profile("lane", "trusted", {"speak": 1}, {}),
 }
+SPEAK_ONLY = {"speak"}
 
 
 def load(profile: str) -> s.Settings:
@@ -202,7 +204,7 @@ def test_cpu_profile_serves_every_lane_with_one_copy_of_each_model() -> None:
     assert settings.runtime.onednn is False
     assert settings.runtime.allow_slow_lanes is True
     assert settings.runtime.isolate_encode is True
-    assert set(settings.lanes.enabled) == set(s.LANES)
+    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY
     assert all(settings.slots[slot].replicas == 1 for slot in SYNC_X2)
     assert all(settings.lanes.capacity[lane] > 1 for lane in ("audio", "lyrics", "transcribe"))
 
@@ -217,7 +219,7 @@ def test_the_local_llm_loads_exactly_where_the_ai_lane_is_served() -> None:
         settings = load(name)
         loads_local = s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
         assert loads_local is ("ai" in settings.lanes.enabled) is design.local_llm, name
-        assert loads_local is not settings.is_public, name
+        assert not (loads_local and settings.is_public), name
 
 
 @pytest.mark.parametrize("name", sorted(name for name in DESIGN if DESIGN[name].local_llm))
@@ -247,3 +249,31 @@ def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
         "state_cache_mib": local.state_cache_mib,
     }
     assert all(other.idle_unload_s == 0 for other in blueprint.plans if other is not plan)
+
+
+def test_only_the_tts_profile_serves_the_speak_lane() -> None:
+    for name in DESIGN:
+        serves = "speak" in load(name).lanes.enabled
+        assert serves is (name == "cpu-tts"), name
+
+
+def test_the_tts_profile_runs_one_reserved_speech_engine(contract: Contract) -> None:
+    settings = load("cpu-tts")
+    blueprint = Blueprint.of(settings, contract, {TTS_HOME_ENV: "/models/tts"}, cpus=4)
+    assert [lane.name for lane in blueprint.lanes] == ["speak"]
+    [plan] = blueprint.plans
+    assert plan.slot_names == (s.TTS_SLOT,)
+    assert plan.reserved
+    assert plan.idle_unload_s == settings.tts.idle_unload_s == 600
+    [spec] = plan.slots
+    assert spec.device == s.TTS_DEVICE
+    assert not devices.uses_torch(spec.device)
+    assert spec.options == tts_options(settings.tts)
+    assert spec.options["program"] == "qwen-engine-linux-x86_64/1/scd-qwen"
+    assert sorted(spec.options["voices"]) == ["loli", "moriarty"]
+    assert blueprint.launch.env == {TTS_HOME_ENV: "/models/tts"}
+
+
+def test_the_tts_profile_needs_its_models_folder(contract: Contract) -> None:
+    with pytest.raises(StartupError, match=TTS_HOME_ENV):
+        Blueprint.of(load("cpu-tts"), contract, {}, cpus=4)

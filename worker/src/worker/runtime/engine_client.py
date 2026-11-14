@@ -27,7 +27,7 @@ from worker.runtime.protocol import (
     SlotState,
     Started,
 )
-from worker.settings import LOCAL_LLM_SLOT
+from worker.settings import LOCAL_LLM_SLOT, TTS_SLOT
 
 ENGINE_MODULE = "worker.runtime.engine_main"
 DEFAULT_ALLOC_CONF = "expandable_segments:True"
@@ -36,7 +36,7 @@ CAUSE_PING = "ping"
 CAUSE_RECYCLE = "recycle"
 CAUSE_STOP = "stop"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
-COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan", LOCAL_LLM_SLOT})
+COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan", LOCAL_LLM_SLOT, TTS_SLOT})
 COOPERATIVE_GRACE_S = 15.0
 COOPERATIVE_STUCK_S = 60.0
 LATE_SLOTS = frozenset({"text", "muq", "mulan", "asr", "align", "mms"})

@@ -19,6 +19,7 @@ from worker.domain.ports import (
     LanguageGuess,
     Separation,
     Span,
+    Speech,
     TextKind,
     TokenSpan,
 )
@@ -27,6 +28,7 @@ MERT_DIM = 1024
 CLAP_DIM = 512
 TEXT_DIM = 1024
 MULAN_TEXT_DIM = 512
+SPEECH_SAMPLES = 2400
 
 
 def unit_vector(seed: bytes, dim: int) -> Float32Array:
@@ -49,6 +51,7 @@ class FakeEngines:
         self.completion = Completion(
             "{}", input_tokens=7, reused_tokens=0, output_tokens=2, finished=True
         )
+        self.speech = Speech(np.full(SPEECH_SAMPLES, 0.25, np.float32), loaded=False, load_s=0.0)
 
     def fail(self, method: str, error: Exception) -> None:
         def raiser(**kwargs: object) -> object:
@@ -241,6 +244,13 @@ class FakeEngines:
         if forced is not None:
             return forced
         return self.completion
+
+    async def say(self, voice: str, text: str, deadline: Deadline) -> Speech:
+        deadline.check("say")
+        forced = self._record("say", voice=voice, text=text, remaining=deadline.remaining())
+        if forced is not None:
+            return forced
+        return self.speech
 
 
 def even_alignment(duration_s: float, tokens: int, score: float) -> Alignment:

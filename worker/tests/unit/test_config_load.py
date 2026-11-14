@@ -126,6 +126,46 @@ def test_a_chunk_as_long_as_the_context_is_accepted(base_env: dict[str, str]) ->
     assert whole.llm.local.eval_chunk_tokens == whole.llm.local.context_tokens
 
 
+def test_the_speech_models_url_follows_the_host(base_env: dict[str, str]) -> None:
+    shipped = s.load(CONFIG_DIR, base_env)
+    moved = s.load(
+        CONFIG_DIR, {**base_env, "WORKER__TTS__BASE_URL": "https://models.example/voice"}
+    )
+
+    assert shipped.tts.base_url == "https://storage.scnative.dev/voice-models"
+    assert moved.tts.base_url == "https://models.example/voice"
+
+
+@pytest.mark.parametrize(
+    ("override", "problem"),
+    [
+        ({"WORKER__TTS__BASE_URL": "http://models.example/voice"}, r"tts\.base_url must be"),
+        ({"WORKER__TTS__BASE_URL": "https://models.example/voice/"}, "trailing slash"),
+        ({"WORKER__TTS__IDLE_UNLOAD_S": "-1"}, r"tts\.idle_unload_s must be >= 0"),
+        ({"WORKER__TTS__ENGINE__PROGRAM": "qwen"}, r"tts\.engine\.program must be one of"),
+        ({"WORKER__TTS__CODEC__PATH": "../codec.gguf"}, "not a plain relative path"),
+        ({"WORKER__TTS__CODEC__PATH": "/models/codec.gguf"}, "not a plain relative path"),
+        ({"WORKER__TTS__CODEC__SHA256": "ABC"}, "tts sha256 values must be 64 lowercase hex"),
+        ({"WORKER__TTS__VOICES__LOLI__SPEAKER": "Loli"}, r"tts\.voices\.loli\.speaker"),
+    ],
+)
+def test_speech_settings_are_checked_at_start(
+    base_env: dict[str, str], override: dict[str, str], problem: str
+) -> None:
+    with pytest.raises(s.SettingsError, match=problem):
+        s.load(CONFIG_DIR, {**base_env, **override})
+
+
+def test_a_config_without_voices_is_a_start_error(
+    base_env: dict[str, str], config_copy: Path
+) -> None:
+    worker_toml = config_copy / "worker.toml"
+    shipped = worker_toml.read_text(encoding="utf-8")
+    worker_toml.write_text(shipped.split("[tts.voices.")[0] + "[tts.voices]\n", encoding="utf-8")
+    with pytest.raises(s.SettingsError, match=r"tts\.voices is empty"):
+        s.load(config_copy, base_env)
+
+
 def test_missing_required_env_ref_is_a_start_error(base_env: dict[str, str]) -> None:
     env = dict(base_env)
     del env["WORKER_NODE_NAME"]

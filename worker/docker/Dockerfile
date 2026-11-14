@@ -37,6 +37,7 @@ ENV PATH=/app/.venv/bin:${PATH} \
     HF_HUB_OFFLINE=1 \
     MELBAND_ROFORMER_MODELS_PATH=/models/roformer \
     FASTTEXT_HOME=/models/fasttext \
+    SCD_TTS_MODELS_PATH=/models/tts \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     TOKENIZERS_PARALLELISM=false \
     WORKER__WORKER__BUILD=${APP_VERSION}-${FLAVOR}

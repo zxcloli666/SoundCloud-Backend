@@ -18,7 +18,7 @@ PRODUCER = {"worker_id": "w", "build": "b", "models": {}, "sync_version": None}
 
 
 def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
-    assert contract.version == 2
+    assert contract.version == 3
     assert set(contract.lanes) == {
         "audio",
         "lyrics",
@@ -27,6 +27,7 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "collab",
         "taste",
         "ai",
+        "speak",
     }
     assert contract.public_lanes == {"audio", "lyrics", "transcribe"}
     assert all(lane.durable == f"{name}-workers" for name, lane in contract.lanes.items())
@@ -38,7 +39,12 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "collab": 128,
         "taste": 128,
     }
-    assert contract.rpc.windows_s == {"resolve_artist": 20, "match_track": 10, "complete": 30}
+    assert contract.rpc.windows_s == {
+        "resolve_artist": 20,
+        "match_track": 10,
+        "complete": 30,
+        "say": 90,
+    }
     assert contract.rpc.reply_header == "X-Reply-To"
     assert contract.max_message_bytes == 900_000
     assert contract.complete_limits == c.CompleteLimits(
@@ -49,6 +55,14 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         schema_bytes=64_000,
         max_tokens=1024,
     )
+    assert contract.say_limits == c.SayLimits(text_chars=300)
+
+
+def test_a_contract_without_say_limits_is_refused() -> None:
+    raw = json.loads(CONTRACT_PATH.read_text())
+    del raw["limits"]["say"]
+    with pytest.raises(c.ContractError, match="say"):
+        c.parse(raw)
 
 
 def test_wrong_version_is_rejected() -> None:
@@ -174,6 +188,7 @@ def test_reopenable_lanes_carry_attempt_request_id_or_object(contract: c.Contrac
     assert contract.lane("lyrics").reopenable == {"engine_restarted", "worker_lost"}
     assert contract.lane("encode").reopenable == frozenset()
     assert contract.lane("ai").reopenable == frozenset()
+    assert contract.lane("speak").reopenable == frozenset()
 
 
 def test_reasons_match_the_domain_enum(contract: c.Contract) -> None:
@@ -206,11 +221,12 @@ def test_pipeline_done_window_covers_the_longest_attempt_window(contract: c.Cont
 
 
 def test_every_lane_has_schemas_for_request_and_done(contract: c.Contract) -> None:
+    prefixes = [lane.filter_subject.removesuffix(">") for lane in contract.lanes.values()]
+    for method in contract.rpc.windows_s:
+        [prefix] = [prefix for prefix in prefixes if f"{prefix}{method}" in contract.schemas]
+        assert f"{prefix}{method}.reply" in contract.schemas
     for lane in contract.lanes.values():
         if lane.rpc:
-            for method in contract.rpc.windows_s:
-                assert f"ai.rpc.{method}" in contract.schemas
-                assert f"ai.rpc.{method}.reply" in contract.schemas
             continue
         assert lane.filter_subject in contract.schemas
         assert lane.done_subject in contract.schemas
@@ -503,3 +519,17 @@ def test_rpc_reply_schemas(contract: c.Contract) -> None:
     }
     assert contract.validate("ai.rpc.match_track", request) == []
     assert contract.validate("ai.rpc.match_track", {**request, "candidates": []})
+
+
+def test_say_schemas(contract: c.Contract) -> None:
+    assert contract.validate("speak.rpc.say", {"voice": "loli", "text": "Привет"}) == []
+    assert contract.validate("speak.rpc.say", {"voice": "loli", "text": "я" * 300}) == []
+    assert contract.validate("speak.rpc.say", {"voice": "loli", "text": "я" * 301})
+    assert contract.validate("speak.rpc.say", {"voice": "loli", "text": ""})
+    assert contract.validate("speak.rpc.say", {"text": "Привет"})
+    said = {"ok": True, "data": {"seconds": 1.25, "clip": "T2dnUw=="}}
+    assert contract.validate("speak.rpc.say.reply", said) == []
+    assert contract.validate("speak.rpc.say.reply", {"ok": False, "error": "internal"}) == []
+    assert contract.validate("speak.rpc.say.reply", {"ok": True, "data": {"seconds": 1.25}})
+    empty = {"ok": True, "data": {"seconds": 0.0, "clip": ""}}
+    assert contract.validate("speak.rpc.say.reply", empty)
