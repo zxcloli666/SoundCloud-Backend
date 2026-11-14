@@ -33,6 +33,7 @@ from worker.runtime.engine_client import (
     SlotUnavailable,
     next_message_id,
 )
+from worker.runtime.memory import NO_USAGE
 from worker.runtime.protocol import Call, ErrorKind, Reply, SlotSpec
 from worker.runtime.supervisor import (
     LANE_GROUPS,
@@ -441,12 +442,13 @@ async def test_snapshot_lists_every_slot() -> None:
             "crashes",
             "oom",
             "reserved_gap_mib",
-            "rss_mib",
+            "resident_mib",
+            "charged_mib",
             "calls",
             "p50_ms",
             "p95_ms",
         }
-        assert report["rss_mib"] > 0
+        assert report["resident_mib"] >= report["charged_mib"] > 0
     finally:
         await supervisor.stop()
 
@@ -458,10 +460,10 @@ async def test_engine_memory_is_reported_per_engine_and_zero_once_stopped() -> N
     try:
         memory = supervisor.memory()
         assert set(memory) == {"a", "b"}
-        assert all(rss > 0 for rss in memory.values())
+        assert all(usage.resident_mib >= usage.charged_mib > 0 for usage in memory.values())
     finally:
         await supervisor.stop()
-    assert supervisor.memory() == {"a": 0, "b": 0}
+    assert supervisor.memory() == {"a": NO_USAGE, "b": NO_USAGE}
 
 
 async def test_idle_unload_timeout_kills_the_stuck_engine() -> None:

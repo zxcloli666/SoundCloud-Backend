@@ -113,6 +113,7 @@ async def build_harness(
     lane_name: str = "audio",
     capacity: int = 2,
     required: bool = False,
+    public: bool = False,
 ) -> Harness:
     lane = contract.lane(lane_name)
     counters = Counters()
@@ -123,7 +124,7 @@ async def build_harness(
         js, connection, settings.nats.outbox, counters, clock, WORKER_ID, BUILD, contract.headers
     )
     watch = ConsumerWatch(
-        lane, js, connection, counters, clock, required, settings.lanes.required_grace_s
+        lane, js, connection, counters, clock, required, settings.lanes.required_grace_s, public
     )
     leases = Leases(
         lane, connection, counters, clock, lambda: watch.max_deliver, contract.headers.msg_id

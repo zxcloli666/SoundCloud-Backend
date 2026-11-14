@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,13 +11,22 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError, validators
 from jsonschema.protocols import Validator
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 MAX_UTF8_BYTES = "x-max-utf8-bytes"
 OBJECT_PLACEHOLDER = "{object}"
+PRIORITY_GROUP_NAME = re.compile(r"[A-Za-z0-9_/=-]{1,16}")
+PRIORITY_MAX = 9
 
 
 class ContractError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class PriorityGroup:
+    name: str
+    bridge: int
+    workers: int
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,7 @@ class LaneSpec:
     reopenable: frozenset[str]
     rpc: bool
     public: bool
+    priority_group: PriorityGroup | None
 
     def nak_delay(self, num_delivered: int) -> float:
         if self.nak_base_s is None or self.nak_cap_s is None:
@@ -240,6 +251,7 @@ def parse(raw: Mapping[str, Any]) -> Contract:
 
 
 def parse_lane(name: str, spec: Mapping[str, Any]) -> LaneSpec:
+    group = parse_priority_group(name, spec.get("priority_group"))
     try:
         return LaneSpec(
             name=name,
@@ -269,9 +281,30 @@ def parse_lane(name: str, spec: Mapping[str, Any]) -> LaneSpec:
             reopenable=frozenset(spec["reopenable"]),
             rpc=bool(spec["rpc"]),
             public=bool(spec["public"]),
+            priority_group=group,
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ContractError(f"lane {name}: {error!r}") from error
+
+
+def parse_priority_group(lane: str, raw: object) -> PriorityGroup | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ContractError(f"lane {lane}: priority_group must be an object")
+    name = raw.get("name")
+    if not isinstance(name, str) or not PRIORITY_GROUP_NAME.fullmatch(name):
+        raise ContractError(f"lane {lane}: priority_group.name {name!r} is not a group name")
+    return PriorityGroup(name, priority_of(lane, raw, "bridge"), priority_of(lane, raw, "workers"))
+
+
+def priority_of(lane: str, raw: Mapping[str, object], key: str) -> int:
+    value = raw.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= PRIORITY_MAX:
+        raise ContractError(
+            f"lane {lane}: priority_group.{key} must be an integer 0..{PRIORITY_MAX}"
+        )
+    return value
 
 
 def parse_stream(name: str, spec: Mapping[str, Any]) -> StreamSpec:

@@ -189,15 +189,15 @@ class EngineClient:
     def slot_states(self) -> Mapping[str, SlotState]:
         return self._states
 
-    def rss_mib(self) -> int:
+    def usage(self) -> memory.Usage:
         if not self.alive:
-            return 0
+            return memory.NO_USAGE
         try:
-            return memory.tree_rss_mib(self.pid)
+            return memory.tree_usage(self.pid)
         except (OSError, ValueError) as error:
             self._counters.inc("engine_rss_unreadable_total", engine=self.name)
             self._log.warning("engine_rss_unreadable", pid=self.pid, error=str(error))
-            return 0
+            return memory.NO_USAGE
 
     def loaded(self, slot: str) -> bool:
         return self._states[slot].loaded

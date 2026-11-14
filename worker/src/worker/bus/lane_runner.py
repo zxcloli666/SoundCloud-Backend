@@ -186,7 +186,10 @@ class LaneRunner:
         started = self._clock.now()
         taken = 0
         try:
-            async for msg in pulled(subscription, batch, PULL_EXPIRES_S, self._clock):
+            pulling = pulled(
+                subscription, batch, PULL_EXPIRES_S, self._clock, self.watch.pull_priority
+            )
+            async for msg in pulling:
                 taken += 1
                 self._spawn(msg)
         except PullUnanswered as unanswered:

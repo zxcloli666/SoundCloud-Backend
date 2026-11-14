@@ -309,7 +309,12 @@
       "max_deliver": 1,
       "nak_base_s": null,
       "nak_cap_s": null,
-      "public": false,
+      "priority_group": {
+        "bridge": 0,
+        "name": "speak",
+        "workers": 1
+      },
+      "public": true,
       "quarantine_after_s": null,
       "reasons": [],
       "reopenable": [],
@@ -3245,5 +3250,5 @@
     "invalid": "worker.invalid.<lane>",
     "status": "worker.status.<worker_id>"
   },
-  "version": 3
+  "version": 4
 }

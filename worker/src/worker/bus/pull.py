@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType
 
 import nats.errors
 import nats.js.errors
@@ -12,6 +13,7 @@ from worker.domain.deadline import Clock
 
 NANOS_PER_S = 1_000_000_000
 REPLY_SLACK_S = 1.0
+NO_PRIORITY: Mapping[str, object] = MappingProxyType({})
 
 
 class PullUnanswered(Exception):
@@ -19,9 +21,13 @@ class PullUnanswered(Exception):
 
 
 async def pulled(
-    subscription: JetStreamContext.PullSubscription, batch: int, expires_s: float, clock: Clock
+    subscription: JetStreamContext.PullSubscription,
+    batch: int,
+    expires_s: float,
+    clock: Clock,
+    priority: Mapping[str, object] = NO_PRIORITY,
 ) -> AsyncIterator[Msg]:
-    request = {"batch": batch, "expires": int(expires_s * NANOS_PER_S)}
+    request = {"batch": batch, "expires": int(expires_s * NANOS_PER_S), **priority}
     await subscription._nc.publish(
         subscription._nms, json.dumps(request).encode(), subscription._deliver
     )

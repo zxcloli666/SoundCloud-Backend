@@ -16,15 +16,19 @@ from worker.bus.consumers import (
     CHECK_INTERVAL_S,
     EX_CONFIG,
     NOT_SERVED_RETRY_S,
+    PRIORITIZED,
     UNAVAILABLE_RETRY_MAX_S,
     UNAVAILABLE_RETRY_MIN_S,
+    UNGROUPED,
     ConfigDrift,
     ConsumerWatch,
     LaneState,
+    Priority,
     consumer_diff,
+    pull_priority,
     served_lanes,
 )
-from worker.contract import Contract
+from worker.contract import Contract, LaneSpec
 from worker.settings import Settings, SettingsError
 
 
@@ -42,9 +46,28 @@ def consumer_config(contract: Contract, lane: str = "audio", **overrides: object
     return dataclasses.replace(config, **overrides)
 
 
+def jobs_priority(lane: LaneSpec) -> Priority:
+    group = lane.priority_group
+    return Priority((group.name,), PRIORITIZED) if group else UNGROUPED
+
+
+def public_watch(harness: Harness) -> ConsumerWatch:
+    return ConsumerWatch(
+        harness.lane,
+        harness.connection.js,
+        harness.connection,
+        harness.counters,
+        harness.clock,
+        False,
+        60.0,
+        public=True,
+    )
+
+
 def test_diff_is_empty_for_the_contract_config(contract: Contract) -> None:
     for name, lane in contract.lanes.items():
-        assert consumer_diff(lane, consumer_config(contract, name)) == {}
+        config = consumer_config(contract, name)
+        assert consumer_diff(lane, config, priority=jobs_priority(lane)) == {}
 
 
 def test_diff_normalises_server_defaults_and_enums(contract: Contract) -> None:
@@ -76,29 +99,93 @@ def test_a_public_node_expects_the_broker_to_deliver_each_task_once(contract: Co
         broker = consumer_config(contract, name, max_deliver=BROKER_MAX_DELIVER)
         private = consumer_config(contract, name)
         assert consumer_diff(lane, broker, public=True) == {}
-        assert consumer_diff(lane, broker) == {"max_deliver": (lane.max_deliver, 1)}
-        assert consumer_diff(lane, private, public=True) == {"max_deliver": (1, lane.max_deliver)}
+        if lane.max_deliver != BROKER_MAX_DELIVER:
+            assert consumer_diff(lane, broker, priority=jobs_priority(lane)) == {
+                "max_deliver": (lane.max_deliver, 1)
+            }
+            assert consumer_diff(lane, private, public=True) == {
+                "max_deliver": (1, lane.max_deliver)
+            }
 
 
 async def test_a_public_node_serves_the_broker_consumer_instead_of_exiting_78(
     harness: Harness,
 ) -> None:
     harness.bus.consumers[("INDEX_AUDIO", "audio-workers")].config.max_deliver = 1
-    public = ConsumerWatch(
-        harness.lane,
-        harness.connection.js,
-        harness.connection,
-        harness.counters,
-        harness.clock,
-        False,
-        60.0,
-        public=True,
-    )
+    public = public_watch(harness)
     assert public.max_deliver == BROKER_MAX_DELIVER
     assert await public.verify_at_start() is LaneState.SERVING
     assert public.max_deliver == 1
     with pytest.raises(ConfigDrift):
         await harness.watch.verify_at_start()
+
+
+def test_only_a_trusted_worker_on_a_grouped_lane_pulls_with_a_group_and_priority(
+    contract: Contract,
+) -> None:
+    speak, audio = contract.lane("speak"), contract.lane("audio")
+    assert pull_priority(speak, public=False) == {"group": "speak", "priority": 1}
+    assert pull_priority(speak, public=True) == {}
+    assert pull_priority(audio, public=False) == {}
+    assert pull_priority(audio, public=True) == {}
+
+
+@pytest.mark.parametrize(
+    ("priority", "diff"),
+    [
+        (
+            Priority(("voice",), PRIORITIZED),
+            {"priority_groups": (("speak",), ("voice",))},
+        ),
+        (Priority(("speak",), "overflow"), {"priority_policy": (PRIORITIZED, "overflow")}),
+        (
+            Priority(("speak", "voice"), PRIORITIZED),
+            {"priority_groups": (("speak",), ("speak", "voice"))},
+        ),
+    ],
+    ids=["other_group", "other_policy", "extra_group"],
+)
+def test_a_trusted_worker_sees_another_priority_group_or_policy_as_drift(
+    contract: Contract, priority: Priority, diff: dict[str, tuple[object, object]]
+) -> None:
+    lane = contract.lane("speak")
+    config = consumer_config(contract, "speak")
+    broker = consumer_config(contract, "speak", max_deliver=BROKER_MAX_DELIVER)
+    assert consumer_diff(lane, config, priority=priority) == diff
+    assert consumer_diff(lane, broker, public=True, priority=priority) == {}
+
+
+@pytest.mark.parametrize("priority", [UNGROUPED, Priority((), "none")], ids=["absent", "none"])
+def test_a_consumer_jobs_has_not_grouped_yet_is_no_drift(
+    contract: Contract, priority: Priority
+) -> None:
+    lane = contract.lane("speak")
+    assert consumer_diff(lane, consumer_config(contract, "speak"), priority=priority) == {}
+
+
+def test_a_lane_without_a_group_ignores_the_priority_of_its_consumer(contract: Contract) -> None:
+    lane = contract.lane("audio")
+    grouped = Priority(("audio",), PRIORITIZED)
+    assert consumer_diff(lane, consumer_config(contract), priority=grouped) == {}
+
+
+async def test_a_trusted_worker_serves_the_grouped_consumer_jobs_provisions(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    harness = await build_harness(fake_nats, contract, settings, clock, "speak")
+    assert await harness.watch.verify_at_start() is LaneState.SERVING
+    await harness.stop()
+
+
+async def test_a_speak_consumer_jobs_has_not_grouped_yet_is_served_by_every_worker(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    harness = await build_harness(fake_nats, contract, settings, clock, "speak")
+    consumer = harness.bus.consumers[(harness.lane.stream, harness.lane.durable)]
+    consumer.priority_groups, consumer.priority_policy = (), ""
+    assert await public_watch(harness).verify_at_start() is LaneState.SERVING
+    assert await harness.watch.verify_at_start() is LaneState.SERVING
+    await harness.stop()
 
 
 def test_diff_reports_every_drifted_field(contract: Contract) -> None:

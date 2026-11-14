@@ -8,7 +8,7 @@ import os
 import signal
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from multiprocessing.connection import Connection
 
 from worker.observability.logging import JsonLog, error_text
@@ -211,7 +211,7 @@ class Engine:
             revision=spec.revision[:8],
             device=spec.device,
             seconds=round(time.perf_counter() - started, 2),
-            rss_mib=self._rss_mib(),
+            **asdict(self._usage()),
         )
         return slot
 
@@ -225,7 +225,7 @@ class Engine:
             self._log.exception("slot_unload_failed", error, slot=name)
         slot.model = None
         self._release(collect=True)
-        self._log.info("slot_unloaded", slot=name, rss_mib=self._rss_mib())
+        self._log.info("slot_unloaded", slot=name, **asdict(self._usage()))
 
     def _unload_all(self) -> None:
         for name in self._slots:
@@ -248,12 +248,12 @@ class Engine:
         if not memory.trim(collect=collect):
             self._log.warning("engine_malloc_trim_unavailable")
 
-    def _rss_mib(self) -> int:
+    def _usage(self) -> memory.Usage:
         try:
-            return memory.tree_rss_mib(os.getpid())
-        except OSError as error:
+            return memory.tree_usage(os.getpid())
+        except (OSError, ValueError) as error:
             self._log.warning("engine_rss_unreadable", error=str(error))
-            return 0
+            return memory.NO_USAGE
 
     def _apply_threads(self, threads: int) -> None:
         if threads < 1:

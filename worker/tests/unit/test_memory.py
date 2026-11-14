@@ -38,30 +38,71 @@ PARENT = (
     "import subprocess, sys\n"
     "subprocess.run([sys.executable, '-c', sys.argv[1], sys.argv[2]], check=False)\n"
 )
+MAPPER = (
+    "import mmap, sys, time\n"
+    "with open(sys.argv[1], 'rb') as model:\n"
+    "    mapped = mmap.mmap(model.fileno(), 0, prot=mmap.PROT_READ)\n"
+    "touched = sum(mapped[offset] for offset in range(0, len(mapped), mmap.PAGESIZE))\n"
+    "print('ready', flush=True)\n"
+    "time.sleep(60)\n"
+)
+
+
+def started(*args: str) -> subprocess.Popen[str]:
+    process = subprocess.Popen(
+        [sys.executable, "-c", *args], stdout=subprocess.PIPE, text=True, start_new_session=True
+    )
+    assert process.stdout is not None and process.stdout.readline().strip() == "ready"
+    return process
+
+
+def killed(process: subprocess.Popen[str]) -> None:
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
 
 
 @pytest.fixture
 def family() -> Iterator[subprocess.Popen[str]]:
-    parent = subprocess.Popen(
-        [sys.executable, "-c", PARENT, HOLDER, str(BALLAST_MIB)],
-        stdout=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    assert parent.stdout is not None and parent.stdout.readline().strip() == "ready"
+    parent = started(PARENT, HOLDER, str(BALLAST_MIB))
     yield parent
-    os.killpg(parent.pid, signal.SIGKILL)
-    parent.wait()
+    killed(parent)
+
+
+@pytest.fixture
+def mapper(tmp_path: Path) -> Iterator[subprocess.Popen[str]]:
+    model = tmp_path / "model.bin"
+    model.write_bytes(bytes(range(256)) * (BALLAST_MIB << 12))
+    process = started(MAPPER, str(model))
+    yield process
+    killed(process)
 
 
 def test_the_memory_of_a_process_counts_its_children_and_grandchildren(
     family: subprocess.Popen[str],
 ) -> None:
     [holder] = memory.descendants(family.pid)
+    usage = memory.tree_usage(family.pid)
+    ours = memory.tree_usage(os.getpid())
 
     assert {family.pid, holder} <= set(memory.descendants(os.getpid()))
-    assert memory.tree_rss_mib(family.pid) - memory.rss_mib(family.pid) >= BALLAST_MIB
-    assert memory.tree_rss_mib(os.getpid()) - memory.rss_mib(os.getpid()) >= BALLAST_MIB
+    assert usage.resident_mib - memory.rss_mib(family.pid) >= BALLAST_MIB
+    assert usage.charged_mib >= BALLAST_MIB
+    assert ours.resident_mib - memory.rss_mib(os.getpid()) >= BALLAST_MIB
+    assert ours.charged_mib >= usage.charged_mib
+
+
+def test_mapped_model_files_count_as_resident_but_not_as_charged(
+    mapper: subprocess.Popen[str],
+) -> None:
+    usage = memory.tree_usage(mapper.pid)
+
+    assert usage.resident_mib - usage.charged_mib >= BALLAST_MIB
+    assert usage.charged_mib < BALLAST_MIB
+
+
+def test_the_memory_of_a_missing_process_is_an_error() -> None:
+    with pytest.raises(OSError):
+        memory.tree_usage(2**22 + 1)
 
 
 def test_a_child_that_already_exited_is_not_counted() -> None:
@@ -70,7 +111,7 @@ def test_a_child_that_already_exited_is_not_counted() -> None:
         assert wait_for_state(child.pid, "Z")
 
         assert child.pid not in memory.descendants(os.getpid())
-        assert memory.tree_rss_mib(os.getpid()) >= memory.rss_mib(os.getpid())
+        assert memory.tree_usage(os.getpid()).resident_mib >= memory.rss_mib(os.getpid())
     finally:
         child.wait()
 

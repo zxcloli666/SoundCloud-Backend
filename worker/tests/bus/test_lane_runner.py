@@ -27,7 +27,7 @@ from worker.bus.lane_runner import (
 )
 from worker.bus.lease import Settled, drop_if_stale
 from worker.bus.outbox import PublishTimedOut
-from worker.bus.pull import REPLY_SLACK_S
+from worker.bus.pull import NANOS_PER_S, REPLY_SLACK_S
 from worker.contract import Contract
 from worker.domain.deadline import Deadline
 from worker.domain.encode_text import EncodeTextLane
@@ -627,6 +627,74 @@ async def test_a_pull_the_server_refuses_is_counted_and_repeated_after_the_error
     assert (at_once, before_the_pause_ends, len(subscription.fetches)) == (1, 1, 2)
     assert harness.counters.value("fetch_failures_total", lane="audio") == 1
     assert len(harness.processor.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("lane_name", "public", "priority"),
+    [
+        ("speak", False, {"group": "speak", "priority": 1}),
+        ("speak", True, {}),
+        ("audio", False, {}),
+        ("audio", True, {}),
+    ],
+    ids=["trusted_speak", "public_speak", "trusted_audio", "public_audio"],
+)
+async def test_a_pull_names_the_priority_group_only_for_a_trusted_worker_on_a_grouped_lane(
+    fake_nats: FakeNats,
+    contract: Contract,
+    settings: Settings,
+    clock: FakeClock,
+    lane_name: str,
+    public: bool,
+    priority: dict[str, object],
+) -> None:
+    harness = await build_harness(fake_nats, contract, settings, clock, lane_name, public=public)
+    consumer = harness.bus.consumers[(harness.lane.stream, harness.lane.durable)]
+    consumer.config.max_deliver = harness.watch.max_deliver
+    if public:
+        consumer.priority_groups, consumer.priority_policy = (), ""
+    assert await harness.watch.check() is LaneState.SERVING
+    harness.start()
+    await harness.settle()
+    await harness.stop()
+
+    expires = int(PULL_EXPIRES_S * NANOS_PER_S)
+    assert harness.bus.pull_bodies == [{"batch": 2, "expires": expires, **priority}]
+    assert len(harness.bus.open_pulls) == 1
+    assert harness.counters.value("fetch_failures_total", lane=lane_name) == 0
+
+
+async def test_a_pull_with_the_group_is_served_by_a_consumer_jobs_has_not_grouped_yet(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    harness = await build_harness(fake_nats, contract, settings, clock, "speak")
+    consumer = harness.bus.consumers[(harness.lane.stream, harness.lane.durable)]
+    consumer.priority_groups, consumer.priority_policy = (), ""
+    assert await harness.watch.check() is LaneState.SERVING
+    harness.start()
+    await harness.settle()
+    await harness.stop()
+
+    expires = int(PULL_EXPIRES_S * NANOS_PER_S)
+    assert harness.bus.pull_bodies == [
+        {"batch": 2, "expires": expires, "group": "speak", "priority": 1}
+    ]
+    assert len(harness.bus.open_pulls) == 1
+    assert harness.counters.value("fetch_failures_total", lane="speak") == 0
+
+
+async def test_a_pull_without_the_group_is_refused_by_a_grouped_consumer(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    harness = await build_harness(fake_nats, contract, settings, clock, "speak")
+    await harness.watch.check()
+    harness.watch.pull_priority = {}
+    harness.start()
+    await harness.settle()
+    await harness.stop()
+
+    assert harness.bus.open_pulls == []
+    assert harness.counters.value("fetch_failures_total", lane="speak") == 1
 
 
 async def test_a_pull_left_without_a_reply_moves_the_lane_to_a_new_inbox(harness: Harness) -> None:

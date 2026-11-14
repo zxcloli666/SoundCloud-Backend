@@ -82,6 +82,8 @@ JSON, `{"statusCode": 400, "code": "voice_speak_invalid", "message": "text is em
 
 ## Worker
 
+Trusted workers and public nodes behind the bridge serve the lane. A public node that waits for a line gets it before a trusted worker.
+
 Subject `speak.rpc.say`, request `{"voice": "loli", "text": "Hello!"}`, published through JetStream with the rpc headers of the contract: `X-Reply-To` is `speak.reply.<user id>.<ticket>`, `Nats-Msg-Id` is the ticket, `X-Deadline` is the time of the ticket plus 90 s in Unix milliseconds.
 
 The worker publishes its rpc reply to the `X-Reply-To` subject, `{"ok": true, "data": {"seconds": 1.4, "clip": "T2dnUw..."}}` or `{"ok": false, "error": "internal"}`. It needs the right to publish on `speak.reply.>` and nothing else of this stream. `clip` is the standard base64, with padding, of the Ogg file, at most 500 000 characters. A clip that does not decode, is empty or does not start with `OggS` counts as a failure. A line is delivered once and never retried. The full schema is in `backend-contracts/contract/worker-contract.json`.
