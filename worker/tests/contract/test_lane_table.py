@@ -25,6 +25,7 @@ TRAIN_COLLAB    train.collab.>    work_queue   21600   3600
 TRAIN_TASTE     train.taste.>     work_queue   86400   3600
 AI_RPC          ai.rpc.>          work_queue     120    120
 SPEAK_RPC       speak.rpc.>       work_queue     120    120
+SPEAK_REPLY     speak.reply.>,speak.keep.>  limits  600  120
 PIPELINE_DONE   done.>            limits      259200  43200
 WORKER_INVALID  worker.invalid.>  limits      604800    120
 """
@@ -38,12 +39,7 @@ DONE_SUBJECTS = {
     "ai": None,
     "speak": None,
 }
-OBJECT_STORES = {
-    "COLLAB_DATA": 86400,
-    "SPEAK_CLIPS": 600,
-    "TASTE_DATA": 86400,
-    "TASTE_MODELS": None,
-}
+OBJECT_STORES = {"COLLAB_DATA": 86400, "TASTE_DATA": 86400, "TASTE_MODELS": None}
 
 
 def rows(table: str) -> dict[str, list[str]]:
@@ -82,9 +78,9 @@ def test_lane_matches_the_design_table(contract: Contract, name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(STREAMS))
 def test_stream_matches_the_design_table(contract: Contract, name: str) -> None:
-    subject, retention, max_age_s, duplicate_window_s = STREAMS[name]
+    subjects, retention, max_age_s, duplicate_window_s = STREAMS[name]
     stream = contract.streams[name]
-    assert stream.subjects == (subject,)
+    assert stream.subjects == tuple(subjects.split(","))
     assert stream.retention == retention
     assert (stream.max_age_s, stream.duplicate_window_s) == (
         int(max_age_s),

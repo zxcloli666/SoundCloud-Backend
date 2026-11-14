@@ -24,7 +24,7 @@ from worker.settings import Settings
 LINE = {"voice": "loli", "text": "Ставлю следующий трек."}
 VOICES = frozenset({"loli", "moriarty"})
 WINDOW_S = 90
-INBOX = "_INBOX.api.1"
+REPLY_TO = "speak.reply.1.3f2b9c4e-8a1d-4e6f-b2c7-5d9e0a1f4b63"
 
 
 class GatedEngines(FakeEngines):
@@ -44,7 +44,6 @@ class Speak:
         self.contract = contract
         self.engines = GatedEngines()
         self.encoder = FakeEncoder()
-        self.clips = harness.bus.provision_object_store("SPEAK_CLIPS")
         speaker = Speaker(self.engines, self.encoder, contract, VOICES, harness.counters)
         self.handler = self.handler_for({"say": speaker.say})
 
@@ -75,7 +74,7 @@ class Speak:
         deadline_ms = int((self.harness.clock.now() + WINDOW_S) * 1000)
         headers = {
             "Nats-Msg-Id": f"speak:{len(self.harness.bus.core_published)}",
-            "X-Reply-To": INBOX,
+            "X-Reply-To": REPLY_TO,
             "X-Deadline": str(deadline_ms),
         }
         return self.harness.bus.enqueue(f"speak.rpc.{method}", payload, headers)
@@ -89,7 +88,7 @@ class Speak:
         return self.reply()
 
     def reply(self) -> dict[str, object] | None:
-        replies = [entry for entry in self.harness.bus.core_published if entry[0] == INBOX]
+        replies = [entry for entry in self.harness.bus.core_published if entry[0] == REPLY_TO]
         return json.loads(replies[-1][1]) if replies else None
 
     def ack_kinds(self) -> list[str]:
@@ -119,7 +118,20 @@ async def test_a_line_is_answered_with_its_clip_inside_the_reply(
     assert speak.ack_kinds() == ["ack_sync"]
     [(_, call)] = speak.engines.calls
     assert call["remaining"] == pytest.approx(WINDOW_S - PROCESS_MARGIN_S - ENCODE_MARGIN_S)
-    assert speak.clips.puts == [] and speak.clips.gets == []
+    stores = speak.harness.bus.object_stores.values()
+    assert all(store.puts == [] and store.gets == [] for store in stores)
+    assert speak.harness.bus.published == []
+
+
+async def test_the_reply_goes_to_the_reply_subject_the_api_named(speak: Speak) -> None:
+    speak.enqueue()
+
+    await speak.run_one()
+
+    [(subject, body, headers)] = speak.harness.bus.core_published
+    assert subject == REPLY_TO
+    assert json.loads(body)["ok"] is True
+    assert headers is not None and headers["X-Deliveries"] == "1"
     assert speak.harness.bus.published == []
 
 
