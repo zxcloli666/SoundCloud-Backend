@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -13,7 +14,7 @@ from worker.fetch_models import TTS_HOME_ENV
 from worker.models.tts import process, slot
 from worker.models.tts.slot import TtsSlot
 from worker.runtime.protocol import CALL_GUARD, BadInput, CallExpired, SlotSpec
-from worker.settings import TTS_DEVICE, TTS_METHOD, TTS_SLOT
+from worker.settings import TTS_DEVICES, TTS_METHOD, TTS_SLOT
 
 TEXT = "Ставлю на паузу."
 
@@ -28,6 +29,7 @@ def open_deadline() -> Iterator[None]:
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(TTS_HOME_ENV, str(tmp_path))
+    monkeypatch.delenv(process.LIBRARY_PATH, raising=False)
     return install(tmp_path)
 
 
@@ -39,8 +41,15 @@ def tts(home: Path) -> Iterator[TtsSlot]:
     loaded.unload()
 
 
-def spec() -> SlotSpec:
-    return SlotSpec(TTS_SLOT, "", "", "", TTS_DEVICE, 1, 0, OPTIONS)
+def spec(device: str = TTS_DEVICES["cpu"]) -> SlotSpec:
+    return SlotSpec(TTS_SLOT, "", "", "", device, 1, 0, OPTIONS)
+
+
+def cuda_wheels(root: Path, *packages: str) -> list[Path]:
+    folders = [root / "nvidia" / package / "lib" for package in packages]
+    for folder in folders:
+        folder.mkdir(parents=True)
+    return folders
 
 
 def say(tts: TtsSlot, name: str = "loli", text: str = TEXT) -> tuple[int, dict[str, object]]:
@@ -198,6 +207,58 @@ def test_load_needs_the_models_folder(home: Path, monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(RuntimeError, match=TTS_HOME_ENV):
         TtsSlot().load(spec())
+
+
+def test_a_cuda_voice_runs_on_the_first_cuda_device_with_the_cuda_runtime_on_its_library_path(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, blas = cuda_wheels(tmp_path / "site", "cuda_runtime", "cublas")
+    monkeypatch.syspath_prepend(str(tmp_path / "site"))
+    tts = TtsSlot()
+    tts.load(spec(TTS_DEVICES["cuda"]))
+    try:
+        spoken, _ = say(tts)
+    finally:
+        tts.unload()
+
+    assert spoken == SPOKEN
+    [start] = journal(home, "start")
+    assert start["argv"] == [str(home / "loli.gguf"), str(home / "codec.gguf"), "CUDA0"]
+    assert start["library_path"] == os.pathsep.join(map(str, [home / ENGINE, runtime, blas]))
+
+
+def test_the_library_path_the_engine_inherits_comes_after_its_own_folders(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(process.LIBRARY_PATH, "/opt/drivers")
+    tts = TtsSlot()
+    tts.load(spec())
+    try:
+        say(tts)
+    finally:
+        tts.unload()
+
+    [start] = journal(home, "start")
+    assert start["argv"][-1] == "cpu"
+    assert start["library_path"] == os.pathsep.join([str(home / ENGINE), "/opt/drivers"])
+
+
+def test_a_device_the_speech_engine_does_not_know_is_refused_at_load(home: Path) -> None:
+    with pytest.raises(RuntimeError, match="cannot run on device 'cuda'"):
+        TtsSlot().load(spec("cuda"))
+
+
+def test_cuda_libraries_take_the_first_folder_of_each_wheel_in_path_order(
+    tmp_path: Path,
+) -> None:
+    early, late = tmp_path / "early", tmp_path / "late"
+    [blas] = cuda_wheels(early, "cublas")
+    runtime, _ = cuda_wheels(late, "cuda_runtime", "cublas")
+
+    found = slot.cuda_libraries(["", str(tmp_path / "missing"), str(early), str(late)])
+
+    assert found == (runtime, blas)
+    assert slot.cuda_libraries([str(tmp_path / "missing")]) == ()
 
 
 @pytest.mark.parametrize(

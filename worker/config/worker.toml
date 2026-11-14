@@ -210,15 +210,17 @@ nice = 5
 max_in_flight = 2
 
 [tts]
-base_url = "https://storage.scnative.dev/voice-models"
+base_urls = ["https://storage.scnative.dev/voice-models"]
+download_mib_s = 4
+device = "cpu"
 idle_unload_s = 600
 
 [tts.engine]
-directory = "qwen-engine-linux-x86_64/1"
+directory = "qwen-engine-linux-x86_64/2"
 program = "scd-qwen"
 
 [tts.engine.files]
-"scd-qwen" = "fa4fdae5344685bfa0eabcc2f29819240209481ed015dea68659dbbbcc60adb7"
+"scd-qwen" = "4ddb076a071207d799d60b4e9909cc238b8c0928ef217defa917db6e49687e4c"
 "libggml.so.0" = "de890b08e24547b45326b4283ffe8ab8eed542fe49158f5a8c6bd2dee6e67e82"
 "libggml-base.so.0" = "d9ea1fc950ff08de6c927ca46e22a8ed081c6edc42bee4aea55a498569881a2c"
 "libggml-cpu-alderlake.so" = "495d5ea066ae1945e6980b361e387581cc6f1dd9ad73e4646e47b01c0eb1ded5"
@@ -235,6 +237,9 @@ program = "scd-qwen"
 "libggml-cpu-sse42.so" = "e99f5352057fbf823a7826116589c775bd557b8b2fd466c2483479d40f36925e"
 "libggml-cpu-x64.so" = "8a7ff79d27fa7168e43c16d552dc578c8dc75029850534eb105ff6ed805406d2"
 "libggml-cpu-zen4.so" = "38aea82ad8d4d2506f28899e16192bbc8f7fef242d0baad13a2cdfb90fab4715"
+
+[tts.engine.cuda_files]
+"libggml-cuda.so" = "dde0323e99ff8a4c49e4a0a10057003910e1bfe7a8dcab8b33daba8b1bd209fd"
 
 [tts.codec]
 path = "qwen-codec/1/qwen-tokenizer-12hz-Q8_0.gguf"

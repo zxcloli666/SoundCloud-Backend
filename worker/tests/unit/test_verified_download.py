@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -19,6 +21,24 @@ STALL_S = 1.0
 TIMEOUT_S = 0.3
 DROP = "drop"
 STALL = "stall"
+REAL_SLEEP = time.sleep
+MIB = fm.MIB
+
+
+class FakeTime:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.pauses: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.pauses.append(seconds)
+        self.now += seconds
+
+    def throttle(self, bytes_per_s: float) -> fm.Throttle:
+        return fm.Throttle(bytes_per_s, self.clock, self.sleep)
 
 
 @dataclass
@@ -41,7 +61,16 @@ class Served:
         return self.target.with_name(self.target.name + fm.PARTIAL_SUFFIX)
 
     def download(self, sha256: str = hashlib.sha256(BODY).hexdigest()) -> fm.VerifiedDownload:
-        return fm.VerifiedDownload(self.url, sha256, self.target)
+        return fm.VerifiedDownload((self.url,), sha256, self.target)
+
+    def mirrored(self, *urls: str) -> fm.VerifiedDownload:
+        return fm.VerifiedDownload((self.url, *urls), hashlib.sha256(BODY).hexdigest(), self.target)
+
+
+@dataclass
+class Mirror:
+    url: str
+    script: Script
 
 
 def handler_for(script: Script) -> type[BaseHTTPRequestHandler]:
@@ -84,19 +113,38 @@ def first_byte(asked: str | None) -> int:
     return int(asked.removeprefix("bytes=").removesuffix("-"))
 
 
+def serving(script: Script) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(script))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def address(server: ThreadingHTTPServer) -> str:
+    return f"http://127.0.0.1:{server.server_address[1]}/voice.gguf"
+
+
+def stopped(server: ThreadingHTTPServer) -> None:
+    server.shutdown()
+    server.server_close()
+
+
 @pytest.fixture
 def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
     script = Script()
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for(script))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    server = serving(script)
     pauses: list[float] = []
     monkeypatch.setattr(fm.time, "sleep", pauses.append)
     monkeypatch.setattr(fm, "DOWNLOAD_TIMEOUT_S", TIMEOUT_S)
-    url = f"http://127.0.0.1:{server.server_address[1]}/voice.gguf"
-    yield Served(url, script, pauses, tmp_path / "models" / "voice.gguf")
-    server.shutdown()
-    server.server_close()
+    yield Served(address(server), script, pauses, tmp_path / "models" / "voice.gguf")
+    stopped(server)
+
+
+@pytest.fixture
+def mirror() -> Iterator[Mirror]:
+    script = Script()
+    server = serving(script)
+    yield Mirror(address(server), script)
+    stopped(server)
 
 
 def events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
@@ -231,3 +279,150 @@ def test_a_partial_file_that_is_already_whole_is_kept(served: Served) -> None:
 
     assert served.target.read_bytes() == BODY
     assert served.script.ranges == [f"bytes={len(BODY)}-"]
+
+
+def test_a_file_the_first_address_refuses_comes_from_the_next_one(
+    served: Served, mirror: Mirror, capsys: pytest.CaptureFixture[str]
+) -> None:
+    served.script.acts = [HTTPStatus.NOT_FOUND]
+
+    failures = fm.fetch_all([fm.Item("tts", served.mirrored(mirror.url))], fm.fetch)
+
+    assert failures == 0
+    assert served.target.read_bytes() == BODY
+    assert (served.script.ranges, mirror.script.ranges) == ([None], [None])
+    assert served.pauses == []
+    [moved_on, fetched] = events(capsys)
+    assert moved_on["event"] == "model_address_failed" and moved_on["url"] == served.url
+    assert fetched["event"] == "model_fetched"
+
+
+def test_the_next_address_resumes_the_part_the_first_one_left(
+    served: Served, mirror: Mirror
+) -> None:
+    served.script.acts = [DROP, *[HTTPStatus.SERVICE_UNAVAILABLE] * len(fm.RETRY_PAUSES_S)]
+
+    fm.fetch_download(served.mirrored(mirror.url))
+
+    assert served.target.read_bytes() == BODY
+    assert not served.partial.exists()
+    assert mirror.script.ranges == [f"bytes={CUT}-"]
+    assert served.pauses == list(fm.RETRY_PAUSES_S)
+
+
+def test_a_file_the_first_address_serves_wrong_comes_whole_from_the_next_one(
+    served: Served, mirror: Mirror
+) -> None:
+    served.script.body = b"not the voice"
+
+    fm.fetch_download(served.mirrored(mirror.url))
+
+    assert served.target.read_bytes() == BODY
+    assert mirror.script.ranges == [None]
+
+
+def test_a_file_no_address_can_give_fails_naming_every_address(
+    served: Served, mirror: Mirror
+) -> None:
+    served.script.acts = [HTTPStatus.NOT_FOUND]
+    mirror.script.acts = [HTTPStatus.FORBIDDEN]
+
+    with pytest.raises(fm.FetchError) as failed:
+        fm.fetch_download(served.mirrored(mirror.url))
+
+    assert served.url in str(failed.value) and mirror.url in str(failed.value)
+    assert not served.target.exists()
+
+
+def test_the_ceiling_spreads_the_bytes_over_the_time_it_allows() -> None:
+    fake = FakeTime()
+    throttle = fake.throttle(4 * MIB)
+
+    for _ in range(8):
+        throttle.passed(MIB)
+
+    assert fake.pauses == [0.25] * 4
+    assert fake.now == 8 * 0.25 - fm.THROTTLE_BURST_S
+
+
+def test_a_network_slower_than_the_ceiling_pays_no_pause() -> None:
+    fake = FakeTime()
+    throttle = fake.throttle(4 * MIB)
+
+    for _ in range(8):
+        fake.now += 0.5
+        throttle.passed(MIB)
+
+    assert fake.pauses == []
+
+
+def test_an_idle_gap_earns_at_most_one_second_of_credit() -> None:
+    fake = FakeTime()
+    throttle = fake.throttle(4 * MIB)
+    for _ in range(8):
+        throttle.passed(MIB)
+    fake.now += 60
+    paused_before = sum(fake.pauses)
+
+    for _ in range(8):
+        throttle.passed(MIB)
+
+    assert sum(fake.pauses) - paused_before == 8 * 0.25 - fm.THROTTLE_BURST_S
+
+
+def test_pauses_shorter_than_the_minimum_are_paid_with_a_later_chunk() -> None:
+    fake = FakeTime()
+    throttle = fake.throttle(4 * MIB)
+
+    for _ in range(128):
+        throttle.passed(MIB // 16)
+
+    assert len(fake.pauses) < 64
+    assert all(pause >= fm.THROTTLE_MIN_PAUSE_S for pause in fake.pauses)
+    assert 1.0 - fm.THROTTLE_MIN_PAUSE_S <= fake.now <= 1.0
+
+
+def test_a_ceiling_of_zero_means_no_limit() -> None:
+    fake = FakeTime()
+    throttle = fake.throttle(0)
+
+    for _ in range(100):
+        throttle.passed(MIB)
+
+    assert fake.pauses == []
+
+
+def test_every_file_and_address_of_a_fetch_shares_one_ceiling(
+    served: Served, mirror: Mirror, tmp_path: Path
+) -> None:
+    fake = FakeTime()
+    sha256 = hashlib.sha256(BODY).hexdigest()
+    served.script.acts = [HTTPStatus.NOT_FOUND]
+    names = ("a", "b", "c")
+    first = fm.VerifiedDownload((served.url, mirror.url), sha256, tmp_path / "a", throttled=True)
+    rest = [
+        fm.VerifiedDownload((served.url,), sha256, tmp_path / name, throttled=True)
+        for name in names[1:]
+    ]
+    free = fm.VerifiedDownload((served.url,), sha256, tmp_path / "free")
+    items = [fm.Item("tts", download) for download in (first, *rest, free)]
+
+    fetcher = functools.partial(fm.fetch, throttle=fake.throttle(len(BODY)))
+    assert fm.fetch_all(items, fetcher) == 0
+
+    assert fake.pauses == [1.0, 1.0]
+    assert all((tmp_path / name).read_bytes() == BODY for name in (*names, "free"))
+
+
+def test_throttle_pauses_longer_than_the_read_timeout_are_not_a_stall(
+    served: Served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fm, "CHUNK_BYTES", 1024)
+    pause_s = TIMEOUT_S + 0.05
+    throttle = fm.Throttle(1024 / pause_s, time.monotonic, REAL_SLEEP)
+
+    fm.fetch_download(served.download(), throttle)
+
+    assert served.target.read_bytes() == BODY
+    assert served.script.ranges == [None]
+    assert served.pauses == []

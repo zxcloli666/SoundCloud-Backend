@@ -27,6 +27,7 @@ def main() -> None:
         argv=[talker, codec, device],
         cwd=os.getcwd(),
         library_path=os.environ.get("LD_LIBRARY_PATH"),
+        threads=os.environ.get("SCD_QWEN_THREADS"),
         pid=os.getpid(),
     )
     out = sys.stdout.buffer

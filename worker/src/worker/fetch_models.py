@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import functools
 import hashlib
 import http.client
 import importlib.util
@@ -39,6 +40,9 @@ ROFORMER_SLOT = "sep"
 MAIN_BRANCH = "main"
 DOWNLOAD_TIMEOUT_S = 60
 CHUNK_BYTES = 1 << 20
+MIB = 1 << 20
+THROTTLE_BURST_S = 1.0
+THROTTLE_MIN_PAUSE_S = 0.05
 RETRY_PAUSES_S = (2.0, 5.0, 15.0, 30.0, 60.0)
 PARTIAL_SUFFIX = ".partial"
 HTTP_PARTIAL_CONTENT = 206
@@ -66,6 +70,37 @@ class FetchError(RuntimeError):
     pass
 
 
+class Throttle:
+    def __init__(
+        self,
+        bytes_per_s: float,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.bytes_per_s = bytes_per_s
+        self._clock = clock
+        self._sleep = sleep
+        self._due: float | None = None
+
+    @classmethod
+    def of(cls, mib_per_s: float) -> Throttle:
+        return cls(mib_per_s * MIB)
+
+    def passed(self, size: int) -> None:
+        if self.bytes_per_s <= 0:
+            return
+        now = self._clock()
+        earliest = now - THROTTLE_BURST_S
+        start = earliest if self._due is None else max(self._due, earliest)
+        self._due = start + size / self.bytes_per_s
+        pause = self._due - now
+        if pause >= THROTTLE_MIN_PAUSE_S:
+            self._sleep(pause)
+
+
+UNLIMITED = Throttle(0.0)
+
+
 @dataclass(frozen=True)
 class HubSnapshot:
     repo: str
@@ -89,13 +124,14 @@ class HubFile:
 
 @dataclass(frozen=True)
 class VerifiedDownload:
-    url: str
+    urls: tuple[str, ...]
     sha256: str
     target: Path
     executable: bool = False
+    throttled: bool = False
 
     def describe(self) -> str:
-        return self.url
+        return self.urls[0]
 
 
 @dataclass(frozen=True)
@@ -173,7 +209,8 @@ def main(argv: Sequence[str], environ: Mapping[str, str] = os.environ) -> int:
     except (SettingsError, FetchError) as error:
         report("fetch_models_config_error", error=str(error))
         return EXIT_CONFIG
-    failures = fetch_all(items, fetch)
+    throttle = Throttle.of(settings.tts.download_mib_s)
+    failures = fetch_all(items, functools.partial(fetch, throttle=throttle))
     report(
         "fetch_models_finished",
         profile=settings.profile,
@@ -205,7 +242,7 @@ def artifacts_for(slot: str, settings: Settings, environ: Mapping[str, str]) -> 
         return [HubFile(spec.model, spec.revision, local.file, local.sha256)]
     if slot == FASTTEXT_SLOT:
         target = home(environ, FASTTEXT_HOME_ENV) / spec.model.rsplit("/", 1)[-1]
-        return [VerifiedDownload(spec.model, spec.revision, target)]
+        return [VerifiedDownload((spec.model,), spec.revision, target)]
     if slot == ROFORMER_SLOT:
         return roformer_artifacts(spec, home(environ, ROFORMER_HOME_ENV))
     return [HubSnapshot(spec.model, spec.revision), *COMPANIONS.get(spec.model, ())]
@@ -217,7 +254,7 @@ def roformer_artifacts(spec: settings_module.SlotSettings, models_dir: Path) -> 
         raise FetchError(f"slots.{ROFORMER_SLOT}.model {spec.model!r} has no known source")
     directory = models_dir / spec.model
     return [
-        VerifiedDownload(source.checkpoint_url(), spec.revision, directory / source.checkpoint),
+        VerifiedDownload((source.checkpoint_url(),), spec.revision, directory / source.checkpoint),
         PackagedFile(
             ROFORMER_PACKAGE,
             f"configs/{source.config}",
@@ -231,19 +268,26 @@ def tts_artifacts(tts: TtsSection, models_dir: Path) -> list[Artifact]:
     engine = tts.engine
     programs: list[Artifact] = [
         VerifiedDownload(
-            f"{tts.base_url}/{engine.path(name)}",
+            mirrored(tts, engine.path(name)),
             sha256,
             models_dir / engine.path(name),
             executable=name == engine.program,
+            throttled=True,
         )
-        for name, sha256 in engine.files.items()
+        for name, sha256 in engine.files_for(tts.device).items()
     ]
     weights: list[TtsFile | TtsVoice] = [tts.codec, *tts.voices.values()]
     models: list[Artifact] = [
-        VerifiedDownload(f"{tts.base_url}/{model.path}", model.sha256, models_dir / model.path)
+        VerifiedDownload(
+            mirrored(tts, model.path), model.sha256, models_dir / model.path, throttled=True
+        )
         for model in weights
     ]
     return programs + models
+
+
+def mirrored(tts: TtsSection, path: str) -> tuple[str, ...]:
+    return tuple(f"{base}/{path}" for base in tts.base_urls)
 
 
 def fetch_all(items: Sequence[Item], fetcher: Callable[[Artifact], None]) -> int:
@@ -260,14 +304,14 @@ def fetch_all(items: Sequence[Item], fetcher: Callable[[Artifact], None]) -> int
     return failures
 
 
-def fetch(artifact: Artifact) -> None:
+def fetch(artifact: Artifact, throttle: Throttle = UNLIMITED) -> None:
     match artifact:
         case HubSnapshot():
             fetch_snapshot(artifact, HfApi())
         case HubFile():
             fetch_file(artifact)
         case VerifiedDownload():
-            fetch_download(artifact)
+            fetch_download(artifact, throttle if artifact.throttled else UNLIMITED)
         case PackagedFile():
             fetch_packaged(artifact)
 
@@ -329,36 +373,49 @@ def chosen_files(files: Sequence[str]) -> list[str]:
     return kept
 
 
-def fetch_download(download: VerifiedDownload) -> None:
+def fetch_download(download: VerifiedDownload, throttle: Throttle = UNLIMITED) -> None:
     if not has_sha256(download.target, download.sha256):
-        replace_verified(download)
+        replace_verified(download, throttle)
     if download.executable:
         download.target.chmod(EXECUTABLE_MODE)
 
 
-def replace_verified(download: VerifiedDownload) -> None:
+def replace_verified(download: VerifiedDownload, throttle: Throttle) -> None:
     download.target.parent.mkdir(parents=True, exist_ok=True)
     partial = download.target.with_name(download.target.name + PARTIAL_SUFFIX)
-    resumed = download_with_retries(download.url, partial)
+    failures: list[str] = []
+    for url in download.urls:
+        try:
+            verified_from(url, download.sha256, partial, throttle)
+        except FetchError as error:
+            failures.append(str(error))
+            report("model_address_failed", url=url, error=str(error))
+            continue
+        partial.replace(download.target)
+        return
+    raise FetchError("; ".join(failures))
+
+
+def verified_from(url: str, sha256: str, partial: Path, throttle: Throttle) -> None:
+    resumed = download_with_retries(url, partial, throttle)
     digest = file_sha256(partial)
-    if digest != download.sha256 and resumed:
+    if digest != sha256 and resumed:
         partial.unlink()
-        report("model_download_restarted", url=download.url, why="sha256 after resume")
-        download_with_retries(download.url, partial)
+        report("model_download_restarted", url=url, why="sha256 after resume")
+        download_with_retries(url, partial, throttle)
         digest = file_sha256(partial)
-    if digest != download.sha256:
+    if digest != sha256:
         partial.unlink()
-        raise FetchError(f"{download.url}: sha256 {digest} != {download.sha256}")
-    partial.replace(download.target)
+        raise FetchError(f"{url}: sha256 {digest} != {sha256}")
 
 
-def download_with_retries(url: str, partial: Path) -> bool:
+def download_with_retries(url: str, partial: Path, throttle: Throttle) -> bool:
     pauses = iter(RETRY_PAUSES_S)
     attempts = 0
     while True:
         attempts += 1
         try:
-            return resume_to(url, partial)
+            return resume_to(url, partial, throttle)
         except DOWNLOAD_ERRORS as error:
             pause = None if refused(error) else next(pauses, None)
             if pause is None:
@@ -382,7 +439,7 @@ def refused(error: Exception) -> bool:
     )
 
 
-def resume_to(url: str, partial: Path) -> bool:
+def resume_to(url: str, partial: Path, throttle: Throttle) -> bool:
     kept = size_of(partial)
     try:
         response = urllib.request.urlopen(ranged(url, kept), timeout=DOWNLOAD_TIMEOUT_S)
@@ -393,7 +450,7 @@ def resume_to(url: str, partial: Path) -> bool:
     with response:
         resumed = bool(kept) and response.status == HTTP_PARTIAL_CONTENT
         with partial.open("ab" if resumed else "wb") as out:
-            written = copy_body(response, out)
+            written = copy_body(response, out, throttle)
         promised = response.headers.get("Content-Length")
     if promised is not None and written < int(promised):
         raise http.client.IncompleteRead(b"", int(promised) - written)
@@ -405,10 +462,11 @@ def ranged(url: str, kept: int) -> urllib.request.Request:
     return urllib.request.Request(url, headers=headers)
 
 
-def copy_body(response: BinaryIO, out: BinaryIO) -> int:
+def copy_body(response: BinaryIO, out: BinaryIO, throttle: Throttle) -> int:
     written = 0
     while chunk := response.read(CHUNK_BYTES):
         written += out.write(chunk)
+        throttle.passed(len(chunk))
     return written
 
 
