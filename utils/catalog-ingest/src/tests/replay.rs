@@ -181,7 +181,9 @@ async fn the_same_observation_stream_gives_the_same_rows_on_both_paths() {
         "UPDATE public.tracks SET deleted_at = '2026-10-29 00:00:00+00' WHERE sc_track_id = '{DELETED_TRACK}'"
     );
     let age = format!(
-        "UPDATE public.tracks SET sc_synced_at = sc_synced_at - interval '8 days' WHERE sc_track_id = '{SEEDED_TRACK}'"
+        "UPDATE public.tracks SET sc_synced_at = sc_synced_at - interval '8 days' WHERE sc_track_id = '{SEEDED_TRACK}';
+         UPDATE public.track_sync_stamps SET sc_synced_at = sc_synced_at - interval '8 days'
+         WHERE track_id IN (SELECT id FROM public.tracks WHERE sc_track_id = '{SEEDED_TRACK}')"
     );
     let pending = format!(
         "UPDATE public.tracks SET sc_desired = '{{\"title\": \"Wanted\"}}', sc_mutation_observation = {}

@@ -686,7 +686,7 @@ async fn validate_core_schema(core: &sqlx::PgPool) -> anyhow::Result<()> {
              AND EXISTS (
                  SELECT 1
                  FROM pg_index
-                 WHERE indexrelid = to_regclass('tracks_duration_resolve_due_idx')
+                 WHERE indexrelid = to_regclass('tracks_duration_resolve_pending_idx')
                    AND indisvalid AND indisready
                    AND indpred IS NOT NULL
              )",
