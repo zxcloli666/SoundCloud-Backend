@@ -216,11 +216,11 @@ device = "cpu"
 idle_unload_s = 600
 
 [tts.engine]
-directory = "qwen-engine-linux-x86_64/2"
+directory = "qwen-engine-linux-x86_64/3"
 program = "scd-qwen"
 
 [tts.engine.files]
-"scd-qwen" = "4ddb076a071207d799d60b4e9909cc238b8c0928ef217defa917db6e49687e4c"
+"scd-qwen" = "4b6fb96d4556c3abc4d9588f58e9be365a65ad594977bbfb5915a2eb5398170b"
 "libggml.so.0" = "de890b08e24547b45326b4283ffe8ab8eed542fe49158f5a8c6bd2dee6e67e82"
 "libggml-base.so.0" = "d9ea1fc950ff08de6c927ca46e22a8ed081c6edc42bee4aea55a498569881a2c"
 "libggml-cpu-alderlake.so" = "495d5ea066ae1945e6980b361e387581cc6f1dd9ad73e4646e47b01c0eb1ded5"

@@ -273,7 +273,7 @@ def test_the_tts_profile_runs_one_reserved_speech_engine(contract: Contract) -> 
     assert spec.device == s.TTS_DEVICES["cpu"]
     assert not devices.uses_torch(spec.device)
     assert spec.options == tts_options(settings.tts)
-    assert spec.options["program"] == "qwen-engine-linux-x86_64/2/scd-qwen"
+    assert spec.options["program"] == "qwen-engine-linux-x86_64/3/scd-qwen"
     assert sorted(spec.options["voices"]) == ["loli", "moriarty"]
     assert blueprint.launch.env == {TTS_HOME_ENV: "/models/tts"}
 
