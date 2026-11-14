@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 SAY = ord("S")
 CANCEL = ord("C")
+TUNE = ord("T")
 READY = ord("R")
 AUDIO = ord("A")
 DONE = ord("D")
