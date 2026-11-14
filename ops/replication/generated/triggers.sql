@@ -67,6 +67,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_comments;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_sync_stamps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_transcription_sync_versions;
@@ -5835,6 +5836,77 @@ ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_storage_failures FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_storage_failures', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_sync_stamps FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_sync_stamps', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_owner_track_sync_stamps()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.track_id IS DISTINCT FROM OLD.track_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                    INSERT INTO public.track_sync_stamps (sc_synced_at, track_id) VALUES (NEW.sc_synced_at, NEW.track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                DELETE FROM public.track_sync_stamps t WHERE t.track_id = OLD.track_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.track_sync_stamps t WHERE t.track_id = NEW.track_id FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.track_sync_stamps t SET sc_synced_at = NEW.sc_synced_at WHERE t.track_id = NEW.track_id;
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.track_sync_stamps (sc_synced_at, track_id)
+        VALUES (NEW.sc_synced_at, NEW.track_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.track_sync_stamps still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_sync_stamps FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_sync_stamps();
+ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_sync_stamps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_tracks', 'cmd', 'migration', 'repl');
@@ -7857,6 +7929,7 @@ FROM (VALUES
     ('guard', 'track_comments', 'scd_guard_track_comments'),
     ('guard', 'track_search', 'scd_guard_track_search'),
     ('guard', 'track_storage_failures', 'scd_guard_track_storage_failures'),
+    ('guard', 'track_sync_stamps', 'scd_guard_track_sync_stamps'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
     ('guard', 'tracks', 'scd_guard_tracks'),
     ('guard', 'transcription_sync_versions', 'scd_guard_transcription_sync_versions'),
@@ -8157,6 +8230,9 @@ BEGIN
             ('track_search', 'zz_owner'),
             ('track_search', 'zzz_suppress'),
             ('track_storage_failures', 'zz_guard'),
+            ('track_sync_stamps', 'zz_guard'),
+            ('track_sync_stamps', 'zz_owner'),
+            ('track_sync_stamps', 'zzz_suppress'),
             ('track_work_aliases', 'zz_guard'),
             ('tracks', 'zz_guard'),
             ('tracks', 'zz_owner'),

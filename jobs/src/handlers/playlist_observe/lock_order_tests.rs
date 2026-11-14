@@ -498,5 +498,15 @@ async fn hydrated_batches_racing_on_one_new_track_retry_and_keep_their_other_row
     .await?;
     let expected: Vec<(String, bool)> = (0..=6).map(|n| (format!("90{n}"), true)).collect();
     assert_eq!(stored, expected);
+
+    let stamped: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT track.sc_track_id, stamp.sc_synced_at >= track.sc_synced_at
+         FROM tracks AS track
+         JOIN track_sync_stamps AS stamp ON stamp.track_id = track.id
+         WHERE track.sc_track_id LIKE '90_' ORDER BY track.sc_track_id",
+    )
+    .fetch_all(&core)
+    .await?;
+    assert_eq!(stamped, expected);
     Ok(())
 }
