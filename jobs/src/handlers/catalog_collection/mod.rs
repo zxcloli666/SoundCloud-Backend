@@ -16,11 +16,19 @@ use crate::queue::{JobError, JobResult, LeasedJob};
 use super::catalog_read::PublicCatalogReader;
 use super::catalog_remote::{
     CatalogRemote, owner_is_signed_out, postpone, public_error, refused_as_forbidden,
+    waits_for_application,
 };
 
 const APIV2_DEADLINE: Duration = Duration::from_secs(25);
+const APIV2_TRIES: i32 = 4;
 const NOT_FOUND_PATIENCE: chrono::Duration = chrono::Duration::minutes(25);
 const FORBIDDEN_PATIENCE: chrono::Duration = chrono::Duration::hours(6);
+
+enum Fetched {
+    Page(page::Page),
+    OwnerApiNeeded,
+    Apiv2Again,
+}
 
 pub struct CatalogCollectionHandler {
     pool: PgPool,
@@ -64,7 +72,7 @@ impl CatalogCollectionHandler {
         let step = Mutex::new("apiv2");
         let page = tokio::time::timeout(
             Duration::from_secs(45),
-            self.fetch(&payload, snapshot.next_cursor.as_deref(), &step),
+            self.fetch(job, &payload, snapshot.next_cursor.as_deref(), &step),
         )
         .await
         .map_err(|_| {
@@ -83,14 +91,18 @@ impl CatalogCollectionHandler {
                 return self.finish_without_owner(job, &payload, &snapshot).await;
             }
             Err(error) => return Err(give_up_or_wait(&snapshot, error)),
-            Ok(page) => page,
-        };
-        let Some(page) = page else {
-            state::abandon_apiv2(&self.pool, job, &payload).await?;
-            return Err(postpone(
-                1,
-                anyhow::anyhow!("collection restarts on the owner API"),
-            ));
+            Ok(Fetched::Page(page)) => page,
+            Ok(Fetched::OwnerApiNeeded) => {
+                state::abandon_apiv2(&self.pool, job, &payload).await?;
+                return Err(postpone(
+                    1,
+                    anyhow::anyhow!("collection restarts on the owner API"),
+                ));
+            }
+            Ok(Fetched::Apiv2Again) => {
+                state::start_over(&self.pool, job, &payload).await?;
+                return Err(postpone(1, anyhow::anyhow!("collection restarts on apiv2")));
+            }
         };
         let more = self
             .writer
@@ -109,12 +121,6 @@ impl CatalogCollectionHandler {
         payload: &CatalogCollectionPayload,
         snapshot: &state::Snapshot,
     ) -> JobResult {
-        if !payload.apiv2_first() {
-            return Err(JobError::settled(
-                CollectionFailure::AuthRequired,
-                anyhow::anyhow!("owner must sign in again"),
-            ));
-        }
         let owner_api_start = page::owner_api_start(payload)?;
         if snapshot.next_cursor.as_deref() == Some(&owner_api_start) {
             state::finish_unverified(&self.pool, job, payload).await?;
@@ -124,29 +130,32 @@ impl CatalogCollectionHandler {
 
     async fn fetch(
         &self,
+        job: &LeasedJob,
         payload: &CatalogCollectionPayload,
         cursor: Option<&str>,
         step: &Mutex<&'static str>,
-    ) -> JobResult<Option<page::Page>> {
+    ) -> JobResult<Fetched> {
         let enter = |name: &'static str| {
             *step.lock().unwrap_or_else(PoisonError::into_inner) = name;
         };
         let (apiv2, path) = match cursor {
             Some(cursor) => page::target(payload, cursor)?,
-            None => {
-                let apiv2 = payload.apiv2_first();
-                (apiv2, page::first_path(payload, apiv2))
-            }
+            None => (true, page::first_path(payload, true)),
         };
         let path = page::request_path(payload, &path)?;
         if !apiv2 {
             enter("apiv1");
-            return self.apiv1(payload, &path).await.map(Some);
+            return match self.apiv1(job, payload, &path).await {
+                Err(error) if !payload.owner && waits_for_application(&error) => {
+                    Ok(Fetched::Apiv2Again)
+                }
+                page => page.map(Fetched::Page),
+            };
         }
         enter("apiv2");
         let failure = match self.apiv2(payload, &path).await {
             Ok(value) => match page::parse(payload, value, true) {
-                Ok(page) => return Ok(Some(page)),
+                Ok(page) => return Ok(Fetched::Page(page)),
                 Err(error) if !payload.owner => return Err(error),
                 Err(error) => error,
             },
@@ -157,7 +166,14 @@ impl CatalogCollectionHandler {
             {
                 return Err(public_error(error));
             }
-            Err(error) => public_error(error),
+            Err(error) => {
+                let unreachable = !matches!(error, sc_transport::ScError::Api { status: 404, .. });
+                let failure = public_error(error);
+                if unreachable && job.attempts < APIV2_TRIES {
+                    return Err(failure);
+                }
+                failure
+            }
         };
         if payload.owner {
             tracing::debug!(
@@ -166,12 +182,12 @@ impl CatalogCollectionHandler {
                 "apiv2 could not answer an owner collection, reading the owner API"
             );
             if cursor.is_some() {
-                return Ok(None);
+                return Ok(Fetched::OwnerApiNeeded);
             }
         }
         let path = page::request_path(payload, &page::first_path(payload, false))?;
         enter("apiv1 after apiv2");
-        self.apiv1(payload, &path).await.map(Some)
+        self.apiv1(job, payload, &path).await.map(Fetched::Page)
     }
 
     async fn apiv2(
@@ -201,11 +217,18 @@ impl CatalogCollectionHandler {
             })
     }
 
-    async fn apiv1(&self, payload: &CatalogCollectionPayload, path: &str) -> JobResult<page::Page> {
+    async fn apiv1(
+        &self,
+        job: &LeasedJob,
+        payload: &CatalogCollectionPayload,
+        path: &str,
+    ) -> JobResult<page::Page> {
         let value = if payload.owner {
-            self.remote.owner_get(&payload.subject_id, path).await?
+            self.remote
+                .owner_get(job, &payload.subject_id, path)
+                .await?
         } else {
-            self.remote.public_get(path).await?
+            self.remote.public_get(job, path).await?
         };
         page::parse(payload, value, false)
     }

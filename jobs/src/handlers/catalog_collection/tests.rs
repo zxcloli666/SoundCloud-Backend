@@ -15,6 +15,7 @@ async fn setup(
         kind: JobKind::CatalogCollection,
         dedup_key: Some("liked-tracks:42:owner".into()),
         payload: json!({}),
+        priority: 20,
         generation: 1,
         attempts: 1,
         max_attempts: 8,
@@ -1227,6 +1228,298 @@ async fn an_owner_collection_is_checked_on_the_owner_api_the_first_time_and_then
             assert!(!more);
         }
     }
+    Ok(())
+}
+
+fn owner_item(collection: CatalogCollection, id: i64, sharing: &str) -> Value {
+    match collection {
+        CatalogCollection::OwnedTracks => {
+            let mut item = track(id);
+            item["sharing"] = json!(sharing);
+            item
+        }
+        _ => {
+            json!({"urn": format!("soundcloud:playlists:{id}"), "title": "Set", "sharing": sharing, "track_count": 0,
+            "user": {"id": 42, "urn": "soundcloud:users:42", "username": "Owner"}})
+        }
+    }
+}
+
+fn owner_page(collection: CatalogCollection, ids: &[(i64, &str)], apiv2: bool) -> page::Page {
+    page::Page {
+        items: ids
+            .iter()
+            .map(|(id, sharing)| owner_item(collection, *id, sharing))
+            .collect(),
+        next: None,
+        liked_at: Vec::new(),
+        apiv2,
+    }
+}
+
+fn owner_mirror(collection: CatalogCollection) -> &'static str {
+    match collection {
+        CatalogCollection::LikedPlaylists => "user_likes_playlists",
+        CatalogCollection::OwnedPlaylists => "user_owned_playlists",
+        _ => "user_owned_tracks",
+    }
+}
+
+async fn age_mirror(pool: &PgPool, table: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(&format!(
+        "UPDATE {table} SET synced_at = now() - interval '1 day', created_at = created_at - interval '1 day'"
+    ))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn mirror_rows(pool: &PgPool, table: &str) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM {table} WHERE user_id = '42'"
+    ))
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn owner_collection_known_to_the_owner_api(
+    pool: &PgPool,
+    job: &mut LeasedJob,
+    payload: &CatalogCollectionPayload,
+    writer: &CollectionWriter,
+    unseen_sharing: &str,
+) -> anyhow::Result<()> {
+    let collection = payload.collection;
+    let snapshot = state::begin(pool, job, payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    let known = owner_page(
+        collection,
+        &[(1, "public"), (2, "public"), (3, unseen_sharing)],
+        false,
+    );
+    let more = writer
+        .persist(
+            job,
+            payload,
+            &snapshot,
+            known,
+            catalog_ingest::Observation::begin(pool).await?,
+        )
+        .await?;
+    assert!(!more);
+    age_mirror(pool, owner_mirror(collection)).await?;
+    next_generation(pool, job).await
+}
+
+const OWNER_COLLECTIONS: [CatalogCollection; 3] = [
+    CatalogCollection::LikedPlaylists,
+    CatalogCollection::OwnedPlaylists,
+    CatalogCollection::OwnedTracks,
+];
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_apiv2_snapshot_of_a_never_verified_owner_collection_restarts_on_the_owner_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, mut payload, writer) = setup(&pool).await?;
+    for collection in OWNER_COLLECTIONS {
+        payload.collection = collection;
+        let table = owner_mirror(collection);
+        let first = state::begin(&pool, &job, &payload)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+        let seeded = owner_page(
+            collection,
+            &[(1, "public"), (2, "public"), (3, "public")],
+            true,
+        );
+        assert!(
+            writer
+                .persist(
+                    &job,
+                    &payload,
+                    &first,
+                    seeded,
+                    catalog_ingest::Observation::begin(&pool).await?,
+                )
+                .await?
+        );
+        age_mirror(&pool, table).await?;
+        next_generation(&pool, &mut job).await?;
+
+        let again = state::begin(&pool, &job, &payload)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+        let more = writer
+            .persist(
+                &job,
+                &payload,
+                &again,
+                owner_page(collection, &[(1, "public")], true),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?;
+
+        assert!(more, "{table}");
+        assert_eq!(mirror_rows(&pool, table).await?, 3, "{table}");
+        let (cursor, complete): (Option<String>, bool) = sqlx::query_as(
+            "SELECT next_cursor, complete FROM catalog_collection_sync WHERE collection = $1 AND scope = 'owner'",
+        )
+        .bind(collection.as_str())
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(
+            cursor.as_deref(),
+            Some(page::owner_api_start(&payload)?.as_str()),
+            "{table}"
+        );
+        assert!(!complete, "{table}");
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_apiv2_snapshot_missing_only_private_items_completes_without_the_owner_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, mut payload, writer) = setup(&pool).await?;
+    for collection in OWNER_COLLECTIONS {
+        payload.collection = collection;
+        owner_collection_known_to_the_owner_api(&pool, &mut job, &payload, &writer, "private")
+            .await?;
+        let snapshot = state::begin(&pool, &job, &payload)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+        let more = writer
+            .persist(
+                &job,
+                &payload,
+                &snapshot,
+                owner_page(collection, &[(1, "public"), (2, "public")], true),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?;
+        let table = owner_mirror(collection);
+        assert!(!more, "{table}");
+        assert_eq!(mirror_rows(&pool, table).await?, 3, "{table}");
+        let complete: bool = sqlx::query_scalar(
+            "SELECT complete FROM catalog_collection_sync WHERE collection = $1 AND scope = 'owner'",
+        )
+        .bind(collection.as_str())
+        .fetch_one(&pool)
+        .await?;
+        assert!(complete, "{table}");
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_apiv2_snapshot_missing_a_public_item_restarts_on_the_owner_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, mut payload, writer) = setup(&pool).await?;
+    for collection in OWNER_COLLECTIONS {
+        payload.collection = collection;
+        owner_collection_known_to_the_owner_api(&pool, &mut job, &payload, &writer, "public")
+            .await?;
+        let snapshot = state::begin(&pool, &job, &payload)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+        let more = writer
+            .persist(
+                &job,
+                &payload,
+                &snapshot,
+                owner_page(collection, &[(1, "public"), (2, "public")], true),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?;
+        let table = owner_mirror(collection);
+        assert!(more, "{table}");
+        assert_eq!(mirror_rows(&pool, table).await?, 3, "{table}");
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn starting_over_resets_the_snapshot_and_ignores_a_stale_lease(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, mut payload, writer) = setup(&pool).await?;
+    payload.collection = CatalogCollection::TrackFavoriters;
+    payload.owner = false;
+    for (index, next) in [
+        "v1:/tracks/42/favoriters?offset=100",
+        "v1:/tracks/42/favoriters?offset=200",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let snapshot = state::begin(&pool, &job, &payload)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+        let fans = page::Page {
+            items: vec![
+                json!({"id": 17 + index as i64, "urn": format!("soundcloud:users:{}", 17 + index), "username": "Fan"}),
+            ],
+            next: Some(next.into()),
+            liked_at: Vec::new(),
+            apiv2: false,
+        };
+        assert!(
+            writer
+                .persist(
+                    &job,
+                    &payload,
+                    &snapshot,
+                    fans,
+                    catalog_ingest::Observation::begin(&pool).await?,
+                )
+                .await?
+        );
+    }
+    let before = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    assert_eq!(
+        before.next_cursor.as_deref(),
+        Some("v1:/tracks/42/favoriters?offset=200")
+    );
+    assert_eq!(before.page_count, 2);
+    assert_eq!(before.item_count, 2);
+
+    let stale = LeasedJob {
+        generation: job.generation + 1,
+        ..job.clone()
+    };
+    state::start_over(&pool, &stale, &payload).await?;
+    let untouched = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    assert_eq!(untouched.snapshot_id, before.snapshot_id);
+    assert_eq!(untouched.page_count, 2);
+
+    state::start_over(&pool, &job, &payload).await?;
+    let (snapshot_id, cursor, pages, items): (Uuid, Option<String>, i64, i64) = sqlx::query_as(
+        "SELECT snapshot_id, next_cursor, page_count, item_count FROM catalog_collection_sync WHERE collection = $1",
+    )
+    .bind(payload.collection.as_str())
+    .fetch_one(&pool)
+    .await?;
+    assert_ne!(snapshot_id, before.snapshot_id);
+    assert_eq!((cursor, pages, items), (None, 0, 0));
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalog_collection_cursors WHERE collection = $1")
+            .bind(payload.collection.as_str())
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(stored, 0);
     Ok(())
 }
 

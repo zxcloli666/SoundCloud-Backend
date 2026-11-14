@@ -54,7 +54,7 @@ impl CatalogRefreshHandler {
             return Ok(());
         }
         let observation = self.writer.begin_observation().await?;
-        let value = tokio::time::timeout(FETCH_DEADLINE, self.fetch(&payload))
+        let value = tokio::time::timeout(FETCH_DEADLINE, self.fetch(job, &payload))
             .await
             .map_err(|_| {
                 JobError::retryable(anyhow::anyhow!("catalog refresh deadline exceeded"))
@@ -78,7 +78,7 @@ impl CatalogRefreshHandler {
             .await
     }
 
-    async fn fetch(&self, payload: &CatalogRefreshPayload) -> JobResult<Value> {
+    async fn fetch(&self, job: &LeasedJob, payload: &CatalogRefreshPayload) -> JobResult<Value> {
         let path = payload.entity.path(&payload.sc_id);
         if payload.entity == CatalogEntity::WebProfiles {
             return match self.public.get_json(&path).await {
@@ -88,7 +88,10 @@ impl CatalogRefreshHandler {
                 }
                 Err(error) => {
                     tracing::debug!(%error, path, "apiv2 web profiles unavailable, trying apiv1");
-                    self.remote.public_get(&path).await.map_err(settle_absent)
+                    self.remote
+                        .public_get(job, &path)
+                        .await
+                        .map_err(settle_absent)
                 }
             };
         }
@@ -97,7 +100,7 @@ impl CatalogRefreshHandler {
                 Some(value) => Ok(value),
                 None => self
                     .remote
-                    .owner_get(owner, &path)
+                    .owner_get(job, owner, &path)
                     .await
                     .map_err(settle_absent),
             },
@@ -349,6 +352,7 @@ mod tests {
             kind: JobKind::CatalogRefresh,
             dedup_key: None,
             payload: Value::Null,
+            priority: 15,
             generation: 1,
             attempts: 1,
             max_attempts: 8,

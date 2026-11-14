@@ -176,6 +176,39 @@ pub(super) async fn restart_on_owner_api(
     Ok(())
 }
 
+pub(super) async fn start_over(
+    pool: &PgPool,
+    job: &LeasedJob,
+    payload: &CatalogCollectionPayload,
+) -> JobResult {
+    let mut tx = pool.begin().await.map_err(JobError::retryable)?;
+    if !fence(&mut tx, job).await? {
+        return Ok(());
+    }
+    sqlx::query_file!(
+        "queries/catalog_collection/start_over.sql",
+        &payload.subject_id,
+        payload.collection.as_str(),
+        payload.scope(),
+        job.id,
+        job.generation,
+        Uuid::now_v7()
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(JobError::retryable)?;
+    sqlx::query_file!(
+        "queries/catalog_collection/clear_cursors.sql",
+        &payload.subject_id,
+        payload.collection.as_str(),
+        payload.scope()
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(JobError::retryable)?;
+    tx.commit().await.map_err(JobError::retryable)
+}
+
 pub(super) async fn finish_unverified(
     pool: &PgPool,
     job: &LeasedJob,
