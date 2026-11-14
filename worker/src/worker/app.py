@@ -39,7 +39,7 @@ from worker.domain.metadata.resolve import ArtistResolver
 from worker.domain.outcome import Producer
 from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
-from worker.domain.workspace import Workspace
+from worker.domain.workspace import WorkRoot, Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
 from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
 from worker.llm.chain import build_refiner
@@ -299,7 +299,7 @@ class Node:
             drop_if_stale,
             self.priority_batchers,
         )
-        self.workspace = Workspace(Path(settings.worker.work_dir), self.counters)
+        self.work_root = WorkRoot(Path(settings.worker.work_dir), settings.worker.id, self.counters)
         self.health = HealthFile(health_path)
         self.gpu = GpuProbe(self.counters, enabled=settings.runtime.device != "cpu")
         self.lanes: dict[str, ServedLane] = {}
@@ -318,8 +318,9 @@ class Node:
             drift = await self.verify(watches)
             if drift is not None:
                 return drift.exit_code
-            removed = self.workspace.purge()
-            self.log.info("workspace_purged", entries=removed)
+            home, removed = self.work_root.claim()
+            self.workspace = Workspace(home, self.counters)
+            self.log.info("workspace_claimed", home=str(home), removed=removed)
             pools = HttpPools.of(self.blueprint.lanes, self.settings.lanes.capacity)
             async with pools.llm_session() as llm_session, pools.audio_session() as audio_session:
                 await self.supervisor.start()
@@ -334,6 +335,7 @@ class Node:
             self.log.info("worker_stopped", exit_code=code)
             return code
         finally:
+            self.work_root.release()
             await self.close_connection()
 
     def install_signals(self) -> None:

@@ -203,9 +203,10 @@ def main(argv: Sequence[str], environ: Mapping[str, str] = os.environ) -> int:
     if args.profile:
         env[settings_module.PROFILE_ENV] = args.profile
     try:
-        require_online()
         settings = settings_module.load(args.config_dir, env)
         items = plan(settings, env)
+        if any(isinstance(item.artifact, HubSnapshot | HubFile) for item in items):
+            require_online()
     except (SettingsError, FetchError) as error:
         report("fetch_models_config_error", error=str(error))
         return EXIT_CONFIG

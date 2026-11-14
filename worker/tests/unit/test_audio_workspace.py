@@ -8,24 +8,6 @@ from worker.domain.workspace import Workspace, safe_name
 from worker.observability.counters import Counters
 
 
-def test_purge_removes_leftovers_of_previous_run(work_dir: Path) -> None:
-    (work_dir / "index_audio-1-abc").mkdir()
-    (work_dir / "index_audio-1-abc" / "audio").write_bytes(b"x")
-    (work_dir / "stray.tmp").write_bytes(b"y")
-
-    removed = Workspace(work_dir, Counters()).purge()
-
-    assert removed == 2
-    assert list(work_dir.iterdir()) == []
-
-
-def test_purge_creates_missing_root(tmp_path: Path) -> None:
-    root = tmp_path / "work"
-
-    assert Workspace(root, Counters()).purge() == 0
-    assert root.is_dir()
-
-
 def test_task_folder_is_removed_after_use(work_dir: Path) -> None:
     workspace = Workspace(work_dir, Counters())
 
@@ -52,21 +34,6 @@ def test_two_tasks_with_one_name_get_separate_folders(work_dir: Path) -> None:
 
     with workspace.task("same") as first, workspace.task("same") as second:
         assert first != second
-
-
-def test_cleanup_failure_is_counted(work_dir: Path) -> None:
-    counters = Counters()
-    workspace = Workspace(work_dir, counters)
-    locked = work_dir / "locked"
-    locked.mkdir()
-    (locked / "file").write_bytes(b"x")
-    locked.chmod(0o500)
-    try:
-        workspace.purge()
-    finally:
-        locked.chmod(0o700)
-
-    assert counters.total("workspace_cleanup_failures_total") >= 1
 
 
 @pytest.mark.parametrize(
