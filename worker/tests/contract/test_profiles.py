@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import pytest
@@ -272,6 +273,25 @@ def test_the_tts_profile_runs_one_reserved_speech_engine(contract: Contract) -> 
     assert spec.options["program"] == "qwen-engine-linux-x86_64/1/scd-qwen"
     assert sorted(spec.options["voices"]) == ["loli", "moriarty"]
     assert blueprint.launch.env == {TTS_HOME_ENV: "/models/tts"}
+
+
+@pytest.mark.parametrize(
+    ("logical_cpus", "affinity_cpus", "engine_threads"),
+    [(12, 12, 6), (12, 4, 6), (12, 2, 6), (3, 3, 1), (1, 1, 1), (None, 4, 1)],
+)
+def test_the_tts_plan_states_the_threads_the_engine_runs_on_any_cpu_mask(
+    contract: Contract,
+    monkeypatch: pytest.MonkeyPatch,
+    logical_cpus: int | None,
+    affinity_cpus: int,
+    engine_threads: int,
+) -> None:
+    monkeypatch.setattr(os, "cpu_count", lambda: logical_cpus)
+    env = {TTS_HOME_ENV: "/models/tts"}
+    [plan] = Blueprint.of(load("cpu-tts"), contract, env, cpus=affinity_cpus).plans
+
+    assert plan.own_threads
+    assert plan.threads == engine_threads
 
 
 def test_the_tts_profile_needs_its_models_folder(contract: Contract) -> None:

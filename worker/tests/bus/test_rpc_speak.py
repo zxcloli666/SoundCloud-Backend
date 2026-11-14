@@ -12,6 +12,7 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.encoder import FAKE_OGG, FakeEncoder
 from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
+from worker.bus.lane_runner import THROUGHPUT_WINDOW_S
 from worker.bus.lease import Leases
 from worker.bus.rpc import PROCESS_MARGIN_S, RpcHandler, RpcMethod
 from worker.contract import Contract
@@ -220,3 +221,17 @@ async def test_a_reply_over_the_lane_limit_is_internal_and_never_cut(speak: Spea
     assert all(len(entry[1]) <= limit for entry in speak.harness.bus.core_published)
     assert speak.harness.counters.value("rpc_reply_too_large_total", method="say") == 1
     assert speak.ack_kinds() == ["ack_sync"]
+
+
+async def test_a_finished_line_counts_in_the_lane_throughput(speak: Speak) -> None:
+    speak.engines.gate.clear()
+    speak.enqueue()
+    task = await speak.handle_one()
+    await speak.harness.settle()
+    await speak.harness.clock.tick(2.0)
+    speak.engines.gate.set()
+    await task
+
+    throughput = speak.harness.runner.throughput()
+    assert throughput["per_hour"] == 3600 / THROUGHPUT_WINDOW_S
+    assert throughput["task_p50_ms"] == throughput["task_p95_ms"] == 2000.0

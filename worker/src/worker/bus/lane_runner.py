@@ -50,6 +50,7 @@ ABORT_SETTLE_S = 10.0
 INVALID_BODY_BYTES = 4096
 THROUGHPUT_WINDOW_S = 600.0
 LANE_DONE = "lane_done"
+TASK_MS = "task_ms"
 OPTIONAL_RESULT_FIELDS = ("words",)
 ENVELOPE_FIELDS = frozenset({"status", "reason", "detail", "producer"})
 DEFS_REF = "#/$defs/"
@@ -169,7 +170,7 @@ class LaneRunner:
         }
 
     def throughput(self) -> dict[str, object]:
-        task_ms = self._counters.latency("task_ms", lane=self.lane.name)
+        task_ms = self._counters.latency(TASK_MS, lane=self.lane.name)
         return {
             "per_hour": self._counters.per_hour(
                 LANE_DONE, self._clock.now(), THROUGHPUT_WINDOW_S, lane=self.lane.name
@@ -422,7 +423,7 @@ class QueueHandler:
         self._counters.inc("done_total", lane=self.lane.name, status=outcome.status.value)
         self._counters.mark(LANE_DONE, self._clock.now(), lane=self.lane.name)
         duration_ms = round((self._clock.now() - started) * 1000, 1)
-        self._counters.observe("task_ms", duration_ms, lane=self.lane.name)
+        self._counters.observe(TASK_MS, duration_ms, lane=self.lane.name)
         log.info(
             "job_finished",
             extra={

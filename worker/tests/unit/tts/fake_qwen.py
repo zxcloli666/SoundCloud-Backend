@@ -15,6 +15,7 @@ CHUNK = 800
 CHUNKS = 3
 SLOW_CHUNKS = 20
 SLOW_PAUSE_S = 0.05
+BALLAST_MIB = 64
 JOURNAL = "journal.jsonl"
 
 
@@ -36,6 +37,7 @@ def main() -> None:
         sys.exit(1)
     if mode == "deaf":
         time.sleep(60)
+    ballast = bytes(range(256)) * (BALLAST_MIB << 12) if mode == "heavy" else b""
     send(out, "R", 0, b"16000\ncpu" if mode == "bad_rate" else b"24000\ncpu")
     frames: queue.Queue[tuple[str, int, bytes] | None] = queue.Queue()
     threading.Thread(target=pump, args=(sys.stdin.buffer, frames), daemon=True).start()
@@ -46,7 +48,7 @@ def main() -> None:
             answer(out, mode, number, frames)
         elif kind == "C":
             note("cancel", id=number)
-    note("exit")
+    note("exit", ballast_bytes=len(ballast))
 
 
 def answer(

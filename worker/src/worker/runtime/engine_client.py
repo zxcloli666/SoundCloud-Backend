@@ -193,7 +193,7 @@ class EngineClient:
         if not self.alive:
             return 0
         try:
-            return memory.rss_mib(self.pid)
+            return memory.tree_rss_mib(self.pid)
         except (OSError, ValueError) as error:
             self._counters.inc("engine_rss_unreadable_total", engine=self.name)
             self._log.warning("engine_rss_unreadable", pid=self.pid, error=str(error))

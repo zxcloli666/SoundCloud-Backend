@@ -16,7 +16,7 @@ from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
 from tests.fakes.llm import FakeRefiner
 from worker import settings as settings_module
-from worker.bus.lane_runner import LaneRunner
+from worker.bus.lane_runner import THROUGHPUT_WINDOW_S, LaneRunner
 from worker.bus.lease import ACK_ATTEMPTS, ACK_RETRY_PAUSE_S, Leases
 from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler, RpcMethod
 from worker.contract import Contract
@@ -656,3 +656,18 @@ async def test_complete_never_sends_an_answer_cut_at_the_token_limit(
     assert await rpc.run_one() == {"ok": False, "error": "internal"}
     assert rpc.harness.counters.value("complete_rejected_total", why="cut_at_max_tokens") == 1
     assert rpc.harness.counters.value("rpc_internal_total", method="complete") == 1
+
+
+async def test_answered_calls_count_in_the_lane_throughput_and_handed_on_ones_do_not(
+    rpc: Rpc,
+) -> None:
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
+    await rpc.run_one()
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
+    await rpc.run_one()
+
+    assert rpc.harness.counters.value("rpc_handed_on_total", method="resolve_artist") == 1
+    throughput = rpc.harness.runner.throughput()
+    assert throughput["per_hour"] == 3600 / THROUGHPUT_WINDOW_S
+    assert rpc.harness.counters.latency("task_ms", lane="ai")["n"] == 1

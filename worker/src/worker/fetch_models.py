@@ -3,15 +3,19 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import http.client
 import importlib.util
 import os
 import shutil
 import sys
+import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import BinaryIO
 
 import httpx
 import orjson
@@ -35,6 +39,13 @@ ROFORMER_SLOT = "sep"
 MAIN_BRANCH = "main"
 DOWNLOAD_TIMEOUT_S = 60
 CHUNK_BYTES = 1 << 20
+RETRY_PAUSES_S = (2.0, 5.0, 15.0, 30.0, 60.0)
+PARTIAL_SUFFIX = ".partial"
+HTTP_PARTIAL_CONTENT = 206
+HTTP_RANGE_NOT_SATISFIABLE = 416
+HTTP_CLIENT_ERRORS = range(400, 500)
+HTTP_RETRIED_CLIENT_ERRORS = frozenset({408, 425, 429})
+DOWNLOAD_ERRORS = (OSError, http.client.HTTPException)
 SKIPPED_FILES = (
     "*.md",
     ".gitattributes",
@@ -327,16 +338,82 @@ def fetch_download(download: VerifiedDownload) -> None:
 
 def replace_verified(download: VerifiedDownload) -> None:
     download.target.parent.mkdir(parents=True, exist_ok=True)
-    partial = download.target.with_name(download.target.name + ".partial")
-    try:
-        digest = stream_to(download.url, partial)
-    except OSError:
-        partial.unlink(missing_ok=True)
-        raise
+    partial = download.target.with_name(download.target.name + PARTIAL_SUFFIX)
+    resumed = download_with_retries(download.url, partial)
+    digest = file_sha256(partial)
+    if digest != download.sha256 and resumed:
+        partial.unlink()
+        report("model_download_restarted", url=download.url, why="sha256 after resume")
+        download_with_retries(download.url, partial)
+        digest = file_sha256(partial)
     if digest != download.sha256:
         partial.unlink()
         raise FetchError(f"{download.url}: sha256 {digest} != {download.sha256}")
     partial.replace(download.target)
+
+
+def download_with_retries(url: str, partial: Path) -> bool:
+    pauses = iter(RETRY_PAUSES_S)
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            return resume_to(url, partial)
+        except DOWNLOAD_ERRORS as error:
+            pause = None if refused(error) else next(pauses, None)
+            if pause is None:
+                raise FetchError(f"{url}: {error!r} (attempts: {attempts})") from error
+            report(
+                "model_download_retry",
+                url=url,
+                attempt=attempts,
+                kept_bytes=size_of(partial),
+                pause_s=pause,
+                error=repr(error),
+            )
+            time.sleep(pause)
+
+
+def refused(error: Exception) -> bool:
+    return (
+        isinstance(error, urllib.error.HTTPError)
+        and error.code in HTTP_CLIENT_ERRORS
+        and error.code not in HTTP_RETRIED_CLIENT_ERRORS
+    )
+
+
+def resume_to(url: str, partial: Path) -> bool:
+    kept = size_of(partial)
+    try:
+        response = urllib.request.urlopen(ranged(url, kept), timeout=DOWNLOAD_TIMEOUT_S)
+    except urllib.error.HTTPError as error:
+        if kept and error.code == HTTP_RANGE_NOT_SATISFIABLE:
+            return True
+        raise
+    with response:
+        resumed = bool(kept) and response.status == HTTP_PARTIAL_CONTENT
+        with partial.open("ab" if resumed else "wb") as out:
+            written = copy_body(response, out)
+        promised = response.headers.get("Content-Length")
+    if promised is not None and written < int(promised):
+        raise http.client.IncompleteRead(b"", int(promised) - written)
+    return resumed
+
+
+def ranged(url: str, kept: int) -> urllib.request.Request:
+    headers = {"Range": f"bytes={kept}-"} if kept else {}
+    return urllib.request.Request(url, headers=headers)
+
+
+def copy_body(response: BinaryIO, out: BinaryIO) -> int:
+    written = 0
+    while chunk := response.read(CHUNK_BYTES):
+        written += out.write(chunk)
+    return written
+
+
+def size_of(path: Path) -> int:
+    return path.stat().st_size if path.is_file() else 0
 
 
 def fetch_packaged(packaged: PackagedFile) -> None:
@@ -375,26 +452,16 @@ def package_dir(package: str) -> Path:
     return Path(next(iter(spec.submodule_search_locations)))
 
 
-def stream_to(url: str, into: Path) -> str:
-    digest = hashlib.sha256()
-    with (
-        urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_S) as response,
-        into.open("wb") as out,
-    ):
-        while chunk := response.read(CHUNK_BYTES):
-            digest.update(chunk)
-            out.write(chunk)
-    return digest.hexdigest()
-
-
 def has_sha256(path: Path, expected: str) -> bool:
-    if not path.is_file():
-        return False
+    return path.is_file() and file_sha256(path) == expected
+
+
+def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(CHUNK_BYTES):
             digest.update(chunk)
-    return digest.hexdigest() == expected
+    return digest.hexdigest()
 
 
 def matches_any(name: str, patterns: Sequence[str]) -> bool:
