@@ -35,6 +35,7 @@ pub mod sync_queue;
 pub mod tracks;
 pub mod users;
 pub mod voice_chat;
+pub mod voice_speak;
 
 pub mod admin;
 pub mod health;

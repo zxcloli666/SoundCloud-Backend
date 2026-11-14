@@ -48,6 +48,7 @@ DEEP = 100_000
 MAX_DELIVER = 5
 CALLS = 3
 SETTLE_TURNS = 100
+REPLY_TO = "_INBOX.jobs.1"
 
 
 class Rpc:
@@ -81,7 +82,7 @@ class Rpc:
         self,
         payload: object = RESOLVE,
         method: str = "resolve_artist",
-        reply_to: str | None = "_INBOX.jobs.1",
+        reply_to: str | None = REPLY_TO,
         deadline_ms: int | None = None,
     ) -> int:
         headers = {"Nats-Msg-Id": f"rpc:{len(self.harness.bus.core_published)}:{deadline_ms}"}
@@ -94,9 +95,7 @@ class Rpc:
     async def run_one(self) -> dict[str, object] | None:
         [msg] = await self.harness.fetch()
         await self.handler.handle(msg, asyncio.Event())
-        replies = [
-            entry for entry in self.harness.bus.core_published if entry[0].startswith("_INBOX")
-        ]
+        replies = [entry for entry in self.harness.bus.core_published if entry[0] == REPLY_TO]
         return json.loads(replies[-1][1]) if replies else None
 
     def reply_headers(self) -> dict[str, str] | None:
@@ -516,7 +515,7 @@ async def test_a_call_taken_by_a_worker_with_the_model_off_is_answered_by_one_th
         for harness, runner in zip((without, having), runners, strict=True):
             await harness.stop()
             await runner.cancel()
-    replies = [entry for entry in fake_nats.core_published if entry[0].startswith("_INBOX")]
+    replies = [entry for entry in fake_nats.core_published if entry[0] == REPLY_TO]
 
     assert [json.loads(body)["ok"] for _, body, _ in replies] == [True] * CALLS
     assert [headers["X-Deliveries"] for _, _, headers in replies] == ["2"] * CALLS

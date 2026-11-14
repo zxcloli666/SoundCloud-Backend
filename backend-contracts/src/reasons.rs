@@ -328,7 +328,7 @@ impl WorkerLane {
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
             ],
-            Self::Ai => &[],
+            Self::Ai | Self::Speak => &[],
         }
     }
 
@@ -349,7 +349,7 @@ impl WorkerLane {
             Self::Lyrics | Self::Collab | Self::Taste => {
                 &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost]
             }
-            Self::Encode | Self::Ai => &[],
+            Self::Encode | Self::Ai | Self::Speak => &[],
         }
     }
 }
@@ -428,6 +428,7 @@ mod tests {
         assert_eq!(names(WorkerLane::Taste), two);
         assert!(names(WorkerLane::Encode).is_empty());
         assert!(names(WorkerLane::Ai).is_empty());
+        assert!(names(WorkerLane::Speak).is_empty());
         for lane in WorkerLane::ALL {
             assert!(
                 lane.reopenable()

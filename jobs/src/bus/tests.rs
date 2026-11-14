@@ -25,7 +25,8 @@ fn jobs_owns_every_pipeline_stream_contract() {
     assert!(
         streams
             .iter()
-            .all(|stream| stream.storage == StorageType::File)
+            .filter(|stream| stream.name != "SPEAK_REPLY")
+            .all(|stream| stream.storage == StorageType::File && !stream.allow_direct)
     );
     for stream_name in ["INDEX_AUDIO", "EMBED_LYRICS", "TRANSCRIBE"] {
         assert_eq!(
@@ -92,6 +93,38 @@ fn jobs_owns_every_pipeline_stream_contract() {
             "{name}"
         );
     }
+    let speak = stream("SPEAK_RPC");
+    assert_eq!(speak.map(|speak| speak.discard), Some(DiscardPolicy::New));
+    assert_eq!(
+        speak.map(|speak| speak.retention),
+        Some(RetentionPolicy::WorkQueue)
+    );
+    assert_eq!(speak.map(|speak| speak.max_bytes), Some(16 * 1024 * 1024));
+    assert_eq!(
+        speak.map(|speak| speak.max_age),
+        Some(Duration::from_secs(2 * 60))
+    );
+    let replies = stream("SPEAK_REPLY");
+    assert_eq!(
+        replies.map(|replies| (
+            replies.subjects.clone(),
+            replies.retention,
+            replies.discard,
+            replies.storage,
+            replies.allow_direct
+        )),
+        Some((
+            vec!["speak.reply.>".to_owned(), "speak.keep.>".to_owned()],
+            RetentionPolicy::Limits,
+            DiscardPolicy::Old,
+            StorageType::Memory,
+            true
+        ))
+    );
+    assert_eq!(
+        replies.map(|replies| (replies.max_age, replies.max_bytes)),
+        Some((Duration::from_secs(10 * 60), 256 * 1024 * 1024))
+    );
     assert_eq!(
         stream("WORKER_INVALID").map(|invalid| invalid.retention),
         Some(RetentionPolicy::Limits)
@@ -187,6 +220,8 @@ async fn explicit_pipeline_duplicate_window_round_trips() -> anyhow::Result<()> 
         duplicate_window_seconds: 24 * 60 * 60,
         max_bytes: 16 * 1024 * 1024,
         discard: StreamDiscard::Old,
+        storage: StreamStorage::File,
+        allow_direct: false,
     };
     let desired = pipeline_stream_config(&spec);
 
@@ -210,6 +245,7 @@ fn managed_stream_update_preserves_unowned_settings() {
         subjects: vec!["subject".to_owned()],
         retention: RetentionPolicy::WorkQueue,
         max_bytes: 2,
+        allow_direct: true,
         ..Default::default()
     };
 
@@ -218,6 +254,7 @@ fn managed_stream_update_preserves_unowned_settings() {
     assert_eq!(updated.description.as_deref(), Some("owned by operations"));
     assert_eq!(updated.subjects, desired.subjects);
     assert_eq!(updated.max_bytes, 2);
+    assert!(updated.allow_direct);
 }
 
 #[test]

@@ -84,7 +84,11 @@ fn receiver_of(lane: WorkerLane) -> Option<WorkerLostLane> {
         WorkerLane::Audio => Some(WorkerLostLane::AudioIndex),
         WorkerLane::Transcribe => Some(WorkerLostLane::Transcription),
         WorkerLane::Lyrics => Some(WorkerLostLane::LyricsEmbedding),
-        WorkerLane::Encode | WorkerLane::Collab | WorkerLane::Taste | WorkerLane::Ai => None,
+        WorkerLane::Encode
+        | WorkerLane::Collab
+        | WorkerLane::Taste
+        | WorkerLane::Ai
+        | WorkerLane::Speak => None,
     }
 }
 

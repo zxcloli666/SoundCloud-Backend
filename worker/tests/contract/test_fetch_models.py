@@ -22,6 +22,7 @@ def env(tmp_path: Path) -> dict[str, str]:
         **BASE_ENV,
         fm.FASTTEXT_HOME_ENV: str(tmp_path / "fasttext"),
         fm.ROFORMER_HOME_ENV: str(tmp_path / "roformer"),
+        fm.TTS_HOME_ENV: str(tmp_path / "tts"),
     }
 
 
@@ -152,10 +153,55 @@ def test_verified_files_land_where_their_libraries_look(env: dict[str, str]) -> 
     ]
 
 
-def test_missing_model_home_is_a_config_error(env: dict[str, str]) -> None:
-    del env[fm.FASTTEXT_HOME_ENV]
-    with pytest.raises(fm.FetchError, match=fm.FASTTEXT_HOME_ENV):
-        plan_for("gpu-24", env)
+def test_the_tts_profile_fetches_the_engine_the_codec_and_every_voice(
+    env: dict[str, str],
+) -> None:
+    tts = s.load(CONFIG_DIR, {**env, s.PROFILE_ENV: "cpu-tts"}).tts
+    items = plan_for("cpu-tts", env)
+    assert {item.slot for item in items} == {s.TTS_SLOT}
+    downloads = [item.artifact for item in items]
+    assert all(isinstance(artifact, fm.VerifiedDownload) for artifact in downloads)
+    home = Path(env[fm.TTS_HOME_ENV])
+    paths = [
+        *(tts.engine.path(name) for name in tts.engine.files),
+        tts.codec.path,
+        *(voice.path for voice in tts.voices.values()),
+    ]
+    assert [(d.url, d.target) for d in downloads] == [
+        (f"{tts.base_url}/{path}", home / path) for path in paths
+    ]
+    assert [d.sha256 for d in downloads] == [
+        *tts.engine.files.values(),
+        tts.codec.sha256,
+        *(voice.sha256 for voice in tts.voices.values()),
+    ]
+    assert len(downloads) == 20
+    assert [d.target.name for d in downloads if d.executable] == ["scd-qwen"]
+    assert not any("vulkan" in d.url for d in downloads)
+    assert all(d.url.startswith("https://storage.scnative.dev/voice-models/") for d in downloads)
+
+
+def test_speech_files_come_from_the_host_models_url(env: dict[str, str]) -> None:
+    moved = {**env, "WORKER__TTS__BASE_URL": "https://models.example/voice"}
+    urls = [item.artifact.describe() for item in plan_for("cpu-tts", moved)]
+    assert len(urls) == 20
+    assert all(url.startswith("https://models.example/voice/qwen-") for url in urls)
+
+
+def test_other_profiles_fetch_no_speech_files(env: dict[str, str]) -> None:
+    for profile in PROFILES:
+        slots = {item.slot for item in plan_for(profile, env)}
+        assert (s.TTS_SLOT in slots) is (profile == "cpu-tts"), profile
+
+
+@pytest.mark.parametrize(
+    ("profile", "home"),
+    [("gpu-24", fm.FASTTEXT_HOME_ENV), ("cpu-tts", fm.TTS_HOME_ENV)],
+)
+def test_missing_model_home_is_a_config_error(env: dict[str, str], profile: str, home: str) -> None:
+    del env[home]
+    with pytest.raises(fm.FetchError, match=home):
+        plan_for(profile, env)
 
 
 def test_download_keeps_only_a_verified_file(tmp_path: Path) -> None:
@@ -170,6 +216,24 @@ def test_download_keeps_only_a_verified_file(tmp_path: Path) -> None:
     assert target.read_bytes() == b"weights"
     source.unlink()
     fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target))
+
+
+def test_an_executable_download_is_made_executable_even_when_already_there(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "scd-qwen"
+    source.write_bytes(b"#!engine")
+    good = hashlib.sha256(b"#!engine").hexdigest()
+    target = tmp_path / "models" / "scd-qwen"
+    library = tmp_path / "models" / "libggml.so"
+    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target, executable=True))
+    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, library))
+    assert target.stat().st_mode & 0o777 == fm.EXECUTABLE_MODE
+    assert library.stat().st_mode & 0o111 == 0
+    target.chmod(0o644)
+    source.unlink()
+    fm.fetch_download(fm.VerifiedDownload(source.as_uri(), good, target, executable=True))
+    assert target.stat().st_mode & 0o777 == fm.EXECUTABLE_MODE
 
 
 def test_packaged_roformer_config_matches_its_pin(tmp_path: Path) -> None:

@@ -49,6 +49,8 @@ pub(super) fn scratch_stream(prefix: &str, suffix: &str) -> PipelineStreamSpec {
         duplicate_window_seconds: 60,
         max_bytes: 16 * 1024 * 1024,
         discard: StreamDiscard::New,
+        storage: StreamStorage::File,
+        allow_direct: false,
     }
 }
 

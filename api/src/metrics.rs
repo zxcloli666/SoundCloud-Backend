@@ -5,8 +5,12 @@ use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
 mod llm;
+mod speak;
 
 pub use llm::{record_llm_budgets, record_llm_step, record_voice_chat};
+pub use speak::{
+    record_speak_line, record_speak_poll, record_speak_reply, record_speak_store_error,
+};
 
 const REQUEST_DURATION: &str = "api_http_request_duration_seconds";
 const REQUESTS_TOTAL: &str = "api_http_requests_total";
@@ -87,7 +91,8 @@ pub fn init() {
                 RETRY_AFTER_BUCKETS,
             )
         })
-        .and_then(llm::buckets);
+        .and_then(llm::buckets)
+        .and_then(speak::buckets);
     let builder = match builder {
         Ok(builder) => builder,
         Err(error) => {

@@ -6,7 +6,7 @@ use url::Url;
 mod llm;
 mod voice;
 
-pub use llm::{LlmCfg, VoiceChatCfg};
+pub use llm::{LlmCfg, PhrasesCfg, VoiceChatCfg, VoiceSpeakCfg};
 pub use voice::{OAuthClient, VoiceCfg};
 
 #[derive(Clone, Debug)]
@@ -169,6 +169,7 @@ pub struct AdmissionCfg {
     pub voice_utterance: AdmissionLimitCfg,
     pub voice_resolve: AdmissionLimitCfg,
     pub voice_chat: AdmissionLimitCfg,
+    pub voice_speak: AdmissionLimitCfg,
     pub voice_alice_ip: AdmissionLimitCfg,
     pub voice_salut_ip: AdmissionLimitCfg,
     pub diag_bundle: AdmissionLimitCfg,
@@ -249,6 +250,7 @@ impl AdmissionCfg {
             voice_utterance,
             voice_resolve,
             voice_chat: AdmissionLimitCfg::closed(),
+            voice_speak: AdmissionLimitCfg::closed(),
             voice_alice_ip,
             voice_salut_ip,
             diag_bundle,
@@ -263,6 +265,13 @@ impl AdmissionCfg {
     fn with_voice_chat(mut self, chat: Option<&VoiceChatCfg>) -> Self {
         if let Some(chat) = chat {
             self.voice_chat = AdmissionLimitCfg::per_client(chat.requests_per_minute);
+        }
+        self
+    }
+
+    fn with_voice_speak(mut self, speak: Option<&VoiceSpeakCfg>) -> Self {
+        if let Some(speak) = speak {
+            self.voice_speak = AdmissionLimitCfg::per_client(speak.requests_per_minute);
         }
         self
     }
@@ -465,7 +474,9 @@ impl AppConfig {
                 url: env_str("REDIS_URL", "redis://localhost:6379"),
             },
 
-            admission: AdmissionCfg::from_env().with_voice_chat(llm.voice_chat.as_ref()),
+            admission: AdmissionCfg::from_env()
+                .with_voice_chat(llm.voice_chat.as_ref())
+                .with_voice_speak(llm.voice_speak.as_ref()),
 
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),

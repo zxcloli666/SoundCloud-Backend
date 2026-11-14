@@ -131,7 +131,7 @@ impl Settings {
 }
 
 impl SecretRef {
-    pub(crate) fn resolve(&self) -> Option<Secret<String>> {
+    pub fn resolve(&self) -> Option<Secret<String>> {
         std::env::var(&self.variable)
             .ok()
             .map(|value| value.trim().to_owned())

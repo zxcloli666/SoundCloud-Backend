@@ -29,6 +29,8 @@ pub const MAX_COMPLETE_MESSAGES: u32 = 64;
 pub const MAX_COMPLETE_MESSAGE_BYTES: u32 = 12_000;
 pub const MAX_COMPLETE_SCHEMA_BYTES: u32 = 64_000;
 pub const MAX_COMPLETE_TOKENS: u32 = 1024;
+pub const MAX_SAY_TEXT_CHARS: u32 = 300;
+pub const MAX_SAY_CLIP_CHARS: u32 = 500_000;
 pub const MAX_MESSAGE_BYTES: u32 = 900_000;
 pub const MAX_UTF8_BYTES_KEYWORD: &str = "x-max-utf8-bytes";
 pub const COLLAB_DATASET_VERSION: u32 = 2;
@@ -506,6 +508,26 @@ pub struct CompleteData {
     pub output_tokens: u32,
 }
 
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct SayRequest {
+    #[schemars(length(min = 1))]
+    pub voice: String,
+    #[schemars(length(min = 1, max = MAX_SAY_TEXT_CHARS))]
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct SayData {
+    #[schemars(range(min = 0.0))]
+    pub seconds: f64,
+    #[schemars(
+        description = "An Ogg Opus file, mono, in standard base64 with padding.",
+        length(min = 1, max = MAX_SAY_CLIP_CHARS),
+        extend("contentEncoding" = "base64")
+    )]
+    pub clip: String,
+}
+
 fn nullable<T: JsonSchema>(generator: &mut SchemaGenerator) -> Schema {
     generator.subschema_for::<Option<T>>()
 }
@@ -616,6 +638,23 @@ pub struct PipelineStreamSpec {
     pub duplicate_window_seconds: u64,
     pub max_bytes: i64,
     pub discard: StreamDiscard,
+    pub storage: StreamStorage,
+    pub allow_direct: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamStorage {
+    File,
+    Memory,
+}
+
+impl StreamStorage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Memory => "memory",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -648,6 +687,11 @@ pub const RESOLVE_ARTIST_WINDOW_SECONDS: u64 = 20;
 pub const MATCH_TRACK_WINDOW_SECONDS: u64 = 10;
 pub const COMPLETE_WINDOW_SECONDS: u64 = 30;
 
+pub const SPEAK_SAY: &str = "speak.rpc.say";
+pub const SAY_WINDOW_SECONDS: u64 = 90;
+pub const SPEAK_REPLY_PREFIX: &str = "speak.reply";
+pub const SPEAK_KEEP_PREFIX: &str = "speak.keep";
+
 pub const INDEX_AUDIO: &str = "index.audio.new";
 pub const EMBED_LYRICS: &str = "embed.lyrics.new";
 pub const TRANSCRIBE_AUDIO: &str = "transcribe.audio.new";
@@ -675,9 +719,12 @@ pub const STORAGE_TRACK_REJECTED: &str = "storage.track_rejected";
 
 const HOUR: u64 = 60 * 60;
 const DAY: u64 = 24 * HOUR;
-const GIB: i64 = 1024 * 1024 * 1024;
+const MIB: i64 = 1024 * 1024;
+const GIB: i64 = 1024 * MIB;
 pub const JOB_STREAM_MAX_BYTES: i64 = GIB;
 pub const DONE_STREAM_MAX_BYTES: i64 = 24 * GIB;
+pub const SPEAK_STREAM_MAX_BYTES: i64 = 16 * MIB;
+pub const SPEAK_REPLY_MAX_BYTES: i64 = 256 * MIB;
 
 pub const COLLAB_DATA_STORE: ObjectStoreSpec = ObjectStoreSpec {
     bucket: COLLAB_DATA_BUCKET,
@@ -695,6 +742,21 @@ pub const WORKER_OBJECT_STORES: [ObjectStoreSpec; 3] =
     [COLLAB_DATA_STORE, TASTE_DATA_STORE, TASTE_MODELS_STORE];
 
 pub const AI_RPC_STREAM: PipelineStreamSpec = work_stream("AI_RPC", &["ai.rpc.>"], 2 * 60, 2 * 60);
+pub const SPEAK_RPC_STREAM: PipelineStreamSpec = PipelineStreamSpec {
+    max_bytes: SPEAK_STREAM_MAX_BYTES,
+    ..work_stream("SPEAK_RPC", &["speak.rpc.>"], 2 * 60, 2 * 60)
+};
+pub const SPEAK_REPLY_STREAM: PipelineStreamSpec = PipelineStreamSpec {
+    name: "SPEAK_REPLY",
+    subjects: &["speak.reply.>", "speak.keep.>"],
+    work_queue: false,
+    max_age_seconds: 10 * 60,
+    duplicate_window_seconds: 2 * 60,
+    max_bytes: SPEAK_REPLY_MAX_BYTES,
+    discard: StreamDiscard::Old,
+    storage: StreamStorage::Memory,
+    allow_direct: true,
+};
 pub const INDEX_AUDIO_STREAM: PipelineStreamSpec =
     work_stream("INDEX_AUDIO", &["index.audio.>"], DAY, DAY);
 pub const EMBED_LYRICS_STREAM: PipelineStreamSpec =
@@ -714,6 +776,8 @@ pub const WORKER_INVALID_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     duplicate_window_seconds: 2 * 60,
     max_bytes: JOB_STREAM_MAX_BYTES,
     discard: StreamDiscard::New,
+    storage: StreamStorage::File,
+    allow_direct: false,
 };
 pub const DONE_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     name: "PIPELINE_DONE",
@@ -723,6 +787,8 @@ pub const DONE_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     duplicate_window_seconds: done_duplicate_window_seconds(),
     max_bytes: DONE_STREAM_MAX_BYTES,
     discard: StreamDiscard::Old,
+    storage: StreamStorage::File,
+    allow_direct: false,
 };
 const _: () = assert!(DONE_STREAM.duplicate_window_seconds < DONE_STREAM.max_age_seconds);
 pub const STORAGE_EVENTS_STREAM: PipelineStreamSpec = PipelineStreamSpec {
@@ -733,9 +799,11 @@ pub const STORAGE_EVENTS_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     duplicate_window_seconds: 2 * 60,
     max_bytes: JOB_STREAM_MAX_BYTES,
     discard: StreamDiscard::New,
+    storage: StreamStorage::File,
+    allow_direct: false,
 };
 
-pub const WORKER_STREAMS: [PipelineStreamSpec; 9] = [
+pub const WORKER_STREAMS: [PipelineStreamSpec; 11] = [
     INDEX_AUDIO_STREAM,
     EMBED_LYRICS_STREAM,
     TRANSCRIBE_STREAM,
@@ -743,12 +811,16 @@ pub const WORKER_STREAMS: [PipelineStreamSpec; 9] = [
     TRAIN_COLLAB_STREAM,
     TRAIN_TASTE_STREAM,
     AI_RPC_STREAM,
+    SPEAK_RPC_STREAM,
+    SPEAK_REPLY_STREAM,
     WORKER_INVALID_STREAM,
     DONE_STREAM,
 ];
 
 pub const PIPELINE_STREAMS: &[PipelineStreamSpec] = &[
     AI_RPC_STREAM,
+    SPEAK_RPC_STREAM,
+    SPEAK_REPLY_STREAM,
     INDEX_AUDIO_STREAM,
     EMBED_LYRICS_STREAM,
     TRANSCRIBE_STREAM,
@@ -774,6 +846,8 @@ const fn work_stream(
         duplicate_window_seconds,
         max_bytes: JOB_STREAM_MAX_BYTES,
         discard: StreamDiscard::New,
+        storage: StreamStorage::File,
+        allow_direct: false,
     }
 }
 
@@ -1127,11 +1201,90 @@ mod tests {
     fn every_other_stream_refuses_new_messages_when_full() {
         for stream in PIPELINE_STREAMS
             .iter()
-            .filter(|stream| stream.name != DONE_STREAM.name)
+            .filter(|stream| ![DONE_STREAM.name, SPEAK_REPLY_STREAM.name].contains(&stream.name))
         {
+            let max_bytes = if stream.name == SPEAK_RPC_STREAM.name {
+                SPEAK_STREAM_MAX_BYTES
+            } else {
+                JOB_STREAM_MAX_BYTES
+            };
             assert_eq!(stream.discard, StreamDiscard::New, "{}", stream.name);
-            assert_eq!(stream.max_bytes, JOB_STREAM_MAX_BYTES, "{}", stream.name);
+            assert_eq!(stream.max_bytes, max_bytes, "{}", stream.name);
         }
+    }
+
+    #[test]
+    fn the_speak_queue_is_a_small_work_queue_of_two_minutes() {
+        assert_eq!(
+            SPEAK_RPC_STREAM,
+            PipelineStreamSpec {
+                name: "SPEAK_RPC",
+                subjects: &["speak.rpc.>"],
+                work_queue: true,
+                max_age_seconds: 120,
+                duplicate_window_seconds: 120,
+                max_bytes: 16 * MIB,
+                discard: StreamDiscard::New,
+                storage: StreamStorage::File,
+                allow_direct: false,
+            }
+        );
+        assert!(SPEAK_SAY.starts_with("speak.rpc."));
+    }
+
+    #[test]
+    fn speak_replies_and_kept_keys_live_in_memory_for_ten_minutes_and_are_read_directly() {
+        assert_eq!(
+            SPEAK_REPLY_STREAM,
+            PipelineStreamSpec {
+                name: "SPEAK_REPLY",
+                subjects: &["speak.reply.>", "speak.keep.>"],
+                work_queue: false,
+                max_age_seconds: 600,
+                duplicate_window_seconds: 120,
+                max_bytes: 256 * MIB,
+                discard: StreamDiscard::Old,
+                storage: StreamStorage::Memory,
+                allow_direct: true,
+            }
+        );
+        assert_eq!(
+            SPEAK_REPLY_STREAM.subjects,
+            [
+                format!("{SPEAK_REPLY_PREFIX}.>"),
+                format!("{SPEAK_KEEP_PREFIX}.>")
+            ]
+        );
+        for stream in PIPELINE_STREAMS
+            .iter()
+            .filter(|stream| stream.name != SPEAK_REPLY_STREAM.name)
+        {
+            assert_eq!(
+                (stream.storage, stream.allow_direct),
+                (StreamStorage::File, false),
+                "{}",
+                stream.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_say_request_and_its_data_keep_the_wire_shape_of_the_method() {
+        let wire = serde_json::json!({ "voice": "loli", "text": "Привет." });
+        let reply = serde_json::json!({ "seconds": 2.5, "clip": "T2dnUw==" });
+
+        let request: SayRequest =
+            serde_json::from_value(wire.clone()).expect("say request deserializes");
+        let data: SayData = serde_json::from_value(reply.clone()).expect("say data deserializes");
+
+        assert_eq!(
+            serde_json::to_value(&request).expect("say request serializes"),
+            wire
+        );
+        assert_eq!(
+            serde_json::to_value(&data).expect("say data serializes"),
+            reply
+        );
     }
 
     #[test]

@@ -193,7 +193,7 @@ pub(super) fn worker_consumer_config(spec: &WorkerLaneSpec) -> anyhow::Result<pu
         deliver_policy: DeliverPolicy::All,
         replay_policy: ReplayPolicy::Instant,
         ack_wait: Duration::from_secs(spec.ack_wait_s),
-        max_deliver: i64::try_from(spec.max_deliver())
+        max_deliver: i64::try_from(spec.max_deliver)
             .context("worker max_deliver does not fit NATS")?,
         max_ack_pending: i64::try_from(spec.max_ack_pending)
             .context("worker max_ack_pending does not fit NATS")?,

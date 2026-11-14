@@ -1,0 +1,11 @@
+[worker]
+trust = "trusted"
+
+[runtime]
+mode = "lane"
+device = "cpu"
+
+[lanes]
+enabled = ["speak"]
+capacity = { speak = 1 }
+required = { speak = true }

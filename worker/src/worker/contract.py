@@ -10,7 +10,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError, validators
 from jsonschema.protocols import Validator
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 MAX_UTF8_BYTES = "x-max-utf8-bytes"
 OBJECT_PLACEHOLDER = "{object}"
 
@@ -134,6 +134,11 @@ class CompleteLimits:
 
 
 @dataclass(frozen=True)
+class SayLimits:
+    text_chars: int
+
+
+@dataclass(frozen=True)
 class Contract:
     version: int
     streams: Mapping[str, StreamSpec]
@@ -149,6 +154,7 @@ class Contract:
     subjects: Mapping[str, str]
     max_message_bytes: int
     complete_limits: CompleteLimits
+    say_limits: SayLimits
 
     def lane(self, name: str) -> LaneSpec:
         try:
@@ -229,6 +235,7 @@ def parse(raw: Mapping[str, Any]) -> Contract:
         subjects=MappingProxyType(dict(table(raw, "subjects"))),
         max_message_bytes=int(limits["max_message_bytes"]),
         complete_limits=parse_complete_limits(table(limits, "complete")),
+        say_limits=parse_say_limits(table(limits, "say")),
     )
 
 
@@ -309,6 +316,13 @@ def parse_complete_limits(limits: Mapping[str, Any]) -> CompleteLimits:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ContractError(f"limits.complete: {error!r}") from error
+
+
+def parse_say_limits(limits: Mapping[str, Any]) -> SayLimits:
+    try:
+        return SayLimits(text_chars=int(limits["text_chars"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ContractError(f"limits.say: {error!r}") from error
 
 
 def table(raw: Mapping[str, Any], key: str) -> Mapping[str, Any]:

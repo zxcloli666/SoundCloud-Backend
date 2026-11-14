@@ -1,8 +1,8 @@
 # worker
 
 Слой моделей над NATS JetStream. Задача приходит из рабочего стрима, результат уходит в `done.*`,
-RPC `ai.rpc.*` получает ответ на `X-Reply-To`. Состояние задач держит JetStream, между рестартами
-живёт только кэш весов в `/models`.
+RPC `ai.rpc.*` и `speak.rpc.*` получают ответ на `X-Reply-To`. Состояние задач держит JetStream,
+между рестартами живёт только кэш весов в `/models`.
 
 ## Границы
 
@@ -30,6 +30,7 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 | `collab` | `TRAIN_COLLAB` | `train.collab.new` | `done.train_collab` | нет |
 | `taste` | `TRAIN_TASTE` | `train.taste.new` | `done.train_taste` | нет |
 | `ai` | `AI_RPC` | `ai.rpc.>` | ответ на `X-Reply-To` | нет |
+| `speak` | `SPEAK_RPC` | `speak.rpc.>` | ответ на `X-Reply-To` | нет |
 
 Лейн держит на сервере один pull-запрос на свои свободные места со сроком 5 с, без `no_wait` и
 heartbeat, и отдаёт задачу обработчику сразу, как она пришла. Пустой запрос, закрытый раньше срока,
@@ -88,6 +89,7 @@ heartbeat, и отдаёт задачу обработчику сразу, ка�
 | `gpu-24-lane` | `lane` | как `gpu-24` | 2/2/2/1 | резерв `gpu-24`, если исполнитель в режиме `slot` не помещается в RAM |
 | `gpu-48` | `slot` | audio 32, lyrics 64, transcribe 8, encode 64, collab 1, taste 1, ai 64 | 4/4/4/4 | 48 ГБ |
 | `cpu` | `lane` | audio 2, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
+| `cpu-tts` | `lane` | speak 1 | - | доверенный хост под озвучку, без GPU |
 
 ### Процессы и потоки
 
@@ -339,6 +341,26 @@ text 12000 против 16000, а transcribe с ёмкостью 2 держит 
 `rescue_strategy = "global_ctc"`, `oom_unload`, запасной LLM-провайдер. Это держат тесты
 `tests/unit/test_config_shipped.py` и `tests/contract/test_profiles.py`.
 
+### Голос
+
+`speak.rpc.say` озвучивает строку. Слот `tts` держит процесс `scd-qwen` на CPU с одним голосом;
+другой голос в запросе - процесс перезапускается с ним, это 3-5 с. Ответ - Ogg Opus, моно,
+48 кбит/с, в base64 прямо в ответе, кодирует `ffmpeg` из образа. Текст в лог не попадает, только
+длина. Лейн есть только в профиле `cpu-tts`.
+
+Неизвестный голос или текст длиннее `limits.say.text_chars` из контракта - `invalid_request`,
+движок не вызывается. Доставка одна (`max_deliver = 1`): ошибка сразу уходит ответом.
+
+| Ключ | По умолчанию | Что задаёт |
+|---|---|---|
+| `tts.base_url` | `https://storage.scnative.dev/voice-models` | откуда `fetch-models` качает файлы; хосту с другим именем хранилища - `WORKER__TTS__BASE_URL` |
+| `tts.idle_unload_s` | 600 | простой, после которого процесс голоса останавливается |
+| `tts.engine`, `tts.codec`, `tts.voices` | | файлы и их sha256, пути от `SCD_TTS_MODELS_PATH` (в образе `/models/tts`) |
+
+Процесс с голосом держит ~3.8 ГБ. Потоков у движка половина логических CPU хоста, лимитов
+контейнера он не видит. Хосту `cpu-tts` нужны память от 6 ГБ и CPU weight вместо quota или cpuset
+меньше половины CPU.
+
 ## Образ
 
 Один `docker/Dockerfile`, сборка torch выбирается `FLAVOR`:
@@ -377,7 +399,8 @@ docker compose run --rm -e HF_HUB_OFFLINE=0 worker fetch-models --profile gpu-24
 
 Команда качает ревизии из конфига только для слотов включённых лейнов профиля (с резервами),
 fastText `lid.176.bin`, чекпойнт сепаратора и GGUF локальной модели сверяет по sha256; GGUF с
-другим хэшем удаляется. Код выхода: 0 — всё скачано,
+другим хэшем удаляется. `--profile cpu-tts` качает движок и голоса из `tts.base_url` (~2.7 ГБ) в
+`SCD_TTS_MODELS_PATH` и сверяет их по sha256. Код выхода: 0 — всё скачано,
 1 — часть не скачалась (каждая ошибка в строке `model_fetch_failed`), 78 — ошибка конфига.
 
 ## Разработка

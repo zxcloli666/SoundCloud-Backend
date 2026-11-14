@@ -96,6 +96,7 @@ RPC_REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             },
             "max_tokens": 512,
         },
+        "speak.rpc.say": {"voice": "loli", "text": "Включаю Kendrick Lamar, Luther."},
     }
 )
 
@@ -141,6 +142,9 @@ RPC_REPLIES: Mapping[str, tuple[Mapping[str, object], ...]] = MappingProxyType(
                     "output_tokens": 80,
                 },
             },
+        ),
+        "speak.rpc.say.reply": (
+            {"ok": True, "data": {"seconds": 2.48, "clip": "T2dnUwACAAAAAAAAAAA="}},
         ),
     }
 )

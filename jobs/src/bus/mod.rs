@@ -33,7 +33,8 @@ use backend_contracts::{
         DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
         MAX_MESSAGE_BYTES as CONTRACT_MAX_MESSAGE_BYTES, MSG_ID_HEADER, ObjectStoreSpec,
         PIPELINE_STREAMS, PipelineStreamSpec, REPLY_TO_HEADER, STORAGE_EVENTS_STREAM,
-        STORAGE_TRACK_REJECTED, STORAGE_TRACK_UPLOADED, StreamDiscard, WORKER_OBJECT_STORES,
+        STORAGE_TRACK_REJECTED, STORAGE_TRACK_UPLOADED, StreamDiscard, StreamStorage,
+        WORKER_OBJECT_STORES,
     },
 };
 use futures::StreamExt;
@@ -912,7 +913,11 @@ fn pipeline_stream_config(spec: &PipelineStreamSpec) -> StreamConfig {
             StreamDiscard::Old => DiscardPolicy::Old,
             StreamDiscard::New => DiscardPolicy::New,
         },
-        storage: StorageType::File,
+        storage: match spec.storage {
+            StreamStorage::File => StorageType::File,
+            StreamStorage::Memory => StorageType::Memory,
+        },
+        allow_direct: spec.allow_direct,
         max_bytes: spec.max_bytes,
         max_age: Duration::from_secs(spec.max_age_seconds),
         max_message_size: MAX_MESSAGE_BYTES,
@@ -1011,6 +1016,7 @@ fn managed_stream_config(mut current: StreamConfig, desired: &StreamConfig) -> S
     current.retention = desired.retention;
     current.discard = desired.discard;
     current.storage = desired.storage;
+    current.allow_direct = desired.allow_direct;
     current.max_bytes = desired.max_bytes;
     current.max_age = desired.max_age;
     current.max_message_size = desired.max_message_size;

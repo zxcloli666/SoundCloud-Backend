@@ -22,9 +22,10 @@ from worker.bus.lane_runner import LaneRunner, Processor, QueueHandler
 from worker.bus.lease import Leases, drop_if_stale
 from worker.bus.objects import ObjectStores
 from worker.bus.outbox import Outbox
-from worker.bus.rpc import RpcHandler
+from worker.bus.rpc import RpcHandler, RpcMethod
 from worker.bus.status import StatusReporter
 from worker.contract import Contract, LaneSpec
+from worker.domain.audio.opus import OpusEncoder
 from worker.domain.audio.source import AudioSource
 from worker.domain.collab import CollabLane
 from worker.domain.complete import Completer
@@ -36,10 +37,11 @@ from worker.domain.lyrics.transcribe import TranscribeLane
 from worker.domain.metadata.match import TrackMatcher
 from worker.domain.metadata.resolve import ArtistResolver
 from worker.domain.outcome import Producer
+from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
 from worker.domain.workspace import Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
-from worker.fetch_models import FASTTEXT_HOME_ENV
+from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
 from worker.llm.chain import build_refiner
 from worker.observability import logging as json_logging
 from worker.observability.counters import Counters
@@ -65,7 +67,7 @@ from worker.runtime.supervisor import (
     pid_limit,
     plan_engines,
 )
-from worker.settings import CPU_ONLY_SLOTS, Settings, SettingsError
+from worker.settings import CPU_ONLY_SLOTS, Settings, SettingsError, TtsSection
 
 CPU_TOOLS = "cpu-tools"
 CPU_TOOL_LOADERS: Mapping[str, str] = {
@@ -84,6 +86,7 @@ SLOT_LOADERS: Mapping[str, str] = {
     "train-collab": "worker.models.item2vec:Item2VecSlot",
     "train-taste": "worker.models.taste_trainer:TasteTrainerSlot",
     settings_module.LOCAL_LLM_SLOT: "worker.models.local_llm.slot:LocalLlmSlot",
+    settings_module.TTS_SLOT: "worker.models.tts.slot:TtsSlot",
 }
 LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "audio": ("muq", "mulan"),
@@ -93,6 +96,7 @@ LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "collab": ("train-collab",),
     "taste": ("train-taste",),
     "ai": (),
+    "speak": (settings_module.TTS_SLOT,),
 }
 PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "audio": {"mert": "muq", "clap": "mulan"},
@@ -105,6 +109,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
 AI_LANE = "ai"
+SPEAK_LANE = "speak"
 LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
 ENCODE_ENGINE = "encode"
 MULAN = "mulan"
@@ -195,7 +200,7 @@ class Blueprint:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
         plans = [
-            local_llm_plan(settings, plan)
+            tts_plan(settings, local_llm_plan(settings, plan))
             for plan in plan_engines(runtime.mode, specs, replicas, groups)
         ]
         if isolated:
@@ -211,6 +216,8 @@ class Blueprint:
             plans.append(EnginePlan(CPU_TOOLS, tools))
             specs.update({spec.name: spec for spec in tools})
             env[FASTTEXT_HOME_ENV] = required_env(environ, FASTTEXT_HOME_ENV)
+        if settings_module.TTS_SLOT in wanted:
+            env[TTS_HOME_ENV] = required_env(environ, TTS_HOME_ENV)
         cpus = cpus or cpus_within_pid_limit(available_cpus(), len(plans), pid_limit())
         policy = RuntimePolicy(
             onednn=runtime.onednn,
@@ -430,6 +437,10 @@ class Node:
                 settings.taste,
             ),
         }
+        rpc_methods: dict[str, Callable[[], Mapping[str, RpcMethod]]] = {
+            AI_LANE: lambda: self.ai_methods(llm_session, engines),
+            SPEAK_LANE: lambda: self.speak_methods(engines),
+        }
         for lane in self.blueprint.lanes:
             watch = watches[lane.name]
             watch.paused = True
@@ -442,23 +453,9 @@ class Node:
                 self.contract.headers.msg_id,
             )
             if lane.rpc:
-                refiner = build_refiner(settings.llm, llm_session, self.clock, self.counters)
-                resolver = ArtistResolver(refiner, self.counters)
-                matcher = TrackMatcher(refiner, self.counters)
-                completer = Completer(
-                    engines,
-                    self.contract.complete_limits,
-                    settings.llm.local,
-                    settings_module.local_llm_ref(settings),
-                    self.counters,
-                )
                 handler: RpcHandler | QueueHandler = RpcHandler(
                     lane,
-                    {
-                        "resolve_artist": resolver.resolve,
-                        "match_track": matcher.match,
-                        "complete": completer.complete,
-                    },
+                    rpc_methods[lane.name](),
                     leases,
                     self.connection,
                     self.contract,
@@ -504,6 +501,29 @@ class Node:
             self.supervisor.snapshot,
             self.gpu.snapshot,
         )
+
+    def ai_methods(
+        self, llm_session: aiohttp.ClientSession, engines: RuntimeEngines
+    ) -> Mapping[str, RpcMethod]:
+        settings = self.settings
+        refiner = build_refiner(settings.llm, llm_session, self.clock, self.counters)
+        completer = Completer(
+            engines,
+            self.contract.complete_limits,
+            settings.llm.local,
+            settings_module.local_llm_ref(settings),
+            self.counters,
+        )
+        return {
+            "resolve_artist": ArtistResolver(refiner, self.counters).resolve,
+            "match_track": TrackMatcher(refiner, self.counters).match,
+            "complete": completer.complete,
+        }
+
+    def speak_methods(self, engines: RuntimeEngines) -> Mapping[str, RpcMethod]:
+        voices = frozenset(self.settings.tts.voices)
+        speaker = Speaker(engines, OpusEncoder(), self.contract, voices, self.counters)
+        return {settings_module.TTS_METHOD: speaker.say}
 
     def producer(self, lane: str) -> Producer:
         models = {
@@ -700,7 +720,7 @@ class HttpPools:
     @classmethod
     def of(cls, lanes: Iterable[LaneSpec], capacity: Mapping[str, int]) -> HttpPools:
         served = tuple(lanes)
-        rpc = sum(capacity[lane.name] for lane in served if lane.rpc)
+        rpc = sum(capacity[lane.name] for lane in served if lane.name == AI_LANE)
         fetching = sum(capacity[lane.name] for lane in served if lane.name in AUDIO_FETCH_LANES)
         return cls(
             llm=POOL_SPARE + LLM_CALLS_PER_REQUEST * rpc,
@@ -825,6 +845,12 @@ def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     )
 
 
+def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    if settings_module.TTS_SLOT not in plan.slot_names:
+        return plan
+    return replace(plan, reserved=True, idle_unload_s=float(settings.tts.idle_unload_s))
+
+
 def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:
     loader = SLOT_LOADERS.get(name)
     if loader is None:
@@ -839,6 +865,8 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
             chunk_tokens=local.eval_chunk_tokens,
             state_cache_mib=local.state_cache_mib,
         )
+    if name == settings_module.TTS_SLOT:
+        options.update(tts_options(settings.tts))
     if name == MULAN and mulan_towers is not None:
         options[MULAN_TOWERS] = mulan_towers
     return SlotSpec(
@@ -853,9 +881,22 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
     )
 
 
+def tts_options(tts: TtsSection) -> dict[str, object]:
+    return {
+        "program": tts.engine.path(tts.engine.program),
+        "codec": tts.codec.path,
+        "voices": {
+            name: {"talker": voice.path, "speaker": voice.speaker}
+            for name, voice in tts.voices.items()
+        },
+    }
+
+
 def slot_device(settings: Settings, name: str) -> str:
     if name == settings_module.LOCAL_LLM_SLOT:
         return settings_module.LOCAL_LLM_DEVICE
+    if name == settings_module.TTS_SLOT:
+        return settings_module.TTS_DEVICE
     return "cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device
 
 

@@ -26,6 +26,7 @@ from worker.domain.ports import (
     Separation,
     SeparationExpired,
     Span,
+    Speech,
     TextKind,
     TokenSpan,
 )
@@ -45,9 +46,10 @@ from worker.runtime.engine_client import (
 )
 from worker.runtime.protocol import Arrays, Call, ErrorKind
 from worker.runtime.supervisor import Supervisor
-from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT
+from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT, TTS_METHOD, TTS_SLOT
 
 BATCHED_SLOTS = ("muq", "mulan", "text")
+AUDIO = "audio"
 STOP_AT = "stop_at"
 CHUNKS = "chunks"
 BUDGET_S = "budget_s"
@@ -441,6 +443,25 @@ class RuntimeEngines:
             reused_tokens=int(number(result, "reused_tokens", LOCAL_LLM_SLOT)),
             output_tokens=int(number(result, "output_tokens", LOCAL_LLM_SLOT)),
             finished=finished,
+        )
+
+    async def say(self, voice: str, text: str, deadline: Deadline) -> Speech:
+        arrays, result = await self._slots.direct(
+            TTS_SLOT,
+            TTS_METHOD,
+            {},
+            {"voice": voice, "text": text},
+            deadline,
+            bad_input=Reason.INVALID_REQUEST,
+            priority=True,
+        )
+        loaded = result.get("loaded")
+        if not isinstance(loaded, bool):
+            raise invalid(TTS_SLOT, "loaded is not a boolean")
+        return Speech(
+            samples=float32(arrays, AUDIO, TTS_SLOT),
+            loaded=loaded,
+            load_s=number(result, "load_s", TTS_SLOT),
         )
 
     async def _draft_chunk(

@@ -117,6 +117,7 @@ pub(super) fn config(redis: &str) -> AppConfig {
             voice_utterance: limit,
             voice_resolve: limit,
             voice_chat: limit,
+            voice_speak: limit,
             voice_alice_ip: limit,
             voice_salut_ip: limit,
             diag_bundle: limit,
@@ -370,6 +371,7 @@ pub(super) async fn state_with(
             format!("voice-test-{}", Uuid::now_v7()),
         )),
         voice_chat: crate::modules::voice_chat::VoiceChat::off(),
+        voice_speak: crate::modules::voice_speak::VoiceSpeak::off(),
         pg,
     })
 }

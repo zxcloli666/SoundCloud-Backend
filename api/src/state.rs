@@ -76,4 +76,5 @@ pub struct AppState {
     pub links: Arc<crate::modules::remote::LinksService>,
     pub confirm: Arc<crate::modules::remote::LinkConfirm>,
     pub voice_chat: Arc<crate::modules::voice_chat::VoiceChat>,
+    pub voice_speak: Arc<crate::modules::voice_speak::VoiceSpeak>,
 }

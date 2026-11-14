@@ -117,6 +117,13 @@ class Completion:
     finished: bool
 
 
+@dataclass(frozen=True)
+class Speech:
+    samples: Float32Array
+    loaded: bool
+    load_s: float
+
+
 class Engines(Protocol):
     async def embed_audio(self, windows: Float32Array, deadline: Deadline) -> AudioEmbeddings: ...
 
@@ -198,6 +205,12 @@ class Engines(Protocol):
         max_tokens: int,
         deadline: Deadline,
     ) -> Completion: ...
+
+    async def say(self, voice: str, text: str, deadline: Deadline) -> Speech: ...
+
+
+class ClipEncoder(Protocol):
+    async def encode(self, samples: Float32Array, deadline: Deadline) -> bytes: ...
 
 
 class Refiner(Protocol):
