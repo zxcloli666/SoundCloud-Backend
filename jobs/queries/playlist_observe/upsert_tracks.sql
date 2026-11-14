@@ -135,7 +135,39 @@ WITH payload AS (
     WHERE tracks.deleted_at IS NULL
        AND (
            EXCLUDED.sc_last_modified IS NULL
-           OR tracks.sc_synced_at < now() - interval '7 days'
+           OR (
+               GREATEST(tracks.sc_synced_at, (
+                   SELECT stamp.sc_synced_at FROM track_sync_stamps AS stamp WHERE stamp.track_id = tracks.id
+               )) < now() - interval '7 days'
+               AND (
+                   tracks.sc_write_confirmed
+                   OR (
+                       EXCLUDED.urn, EXCLUDED.title_normalized, EXCLUDED.description, EXCLUDED.genre,
+                       EXCLUDED.tags, EXCLUDED.waveform_url,
+                       COALESCE(EXCLUDED.language, tracks.language), COALESCE(EXCLUDED.isrc, tracks.isrc),
+                       COALESCE(EXCLUDED.metadata_artist, tracks.metadata_artist),
+                       COALESCE(EXCLUDED.sc_created_at, tracks.sc_created_at),
+                       COALESCE(EXCLUDED.release_year, tracks.release_year),
+                       COALESCE(EXCLUDED.release_date, tracks.release_date),
+                       COALESCE(EXCLUDED.uploader_sc_user_id, tracks.uploader_sc_user_id),
+                       COALESCE(EXCLUDED.uploader_urn, tracks.uploader_urn),
+                       COALESCE(EXCLUDED.uploader_username, tracks.uploader_username),
+                       COALESCE(EXCLUDED.uploader_avatar_url, tracks.uploader_avatar_url),
+                       COALESCE(EXCLUDED.play_count_sc, tracks.play_count_sc),
+                       COALESCE(EXCLUDED.likes_count_sc, tracks.likes_count_sc),
+                       COALESCE(EXCLUDED.reposts_count_sc, tracks.reposts_count_sc),
+                       COALESCE(EXCLUDED.comments_count_sc, tracks.comments_count_sc)
+                   ) IS DISTINCT FROM (
+                       tracks.urn, tracks.title_normalized, tracks.description, tracks.genre,
+                       tracks.tags, tracks.waveform_url,
+                       tracks.language, tracks.isrc, tracks.metadata_artist, tracks.sc_created_at,
+                       tracks.release_year, tracks.release_date, tracks.uploader_sc_user_id,
+                       tracks.uploader_urn, tracks.uploader_username, tracks.uploader_avatar_url,
+                       tracks.play_count_sc, tracks.likes_count_sc, tracks.reposts_count_sc,
+                       tracks.comments_count_sc
+                   )
+               )
+           )
            OR tracks.sc_desired <> '{}'::jsonb
            OR tracks.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified)
            OR tracks.title IS DISTINCT FROM EXCLUDED.title
@@ -155,12 +187,33 @@ WITH payload AS (
        tracks.sc_desired, tracks.sc_write_confirmed, to_jsonb(EXCLUDED)
     )
     RETURNING tracks.id, tracks.sc_synced_at
+), refreshed AS (
+    SELECT DISTINCT track.id,
+           now() AS sc_synced_at
+    FROM payload
+    JOIN tracks AS track ON track.sc_track_id = payload.track->>'sc_track_id'
+    LEFT JOIN track_sync_stamps AS stamp ON stamp.track_id = track.id
+    WHERE NOT EXISTS (SELECT 1 FROM upserted WHERE upserted.id = track.id)
+      AND track.deleted_at IS NULL
+      AND track.sc_desired = '{}'::jsonb
+      AND track.sc_synced_at < now() - interval '7 days'
+      AND (stamp.track_id IS NULL OR stamp.sc_synced_at < now() - interval '7 days')
+      AND catalog_observation_is_current(
+          track.sc_observation, track.sc_mutation_observation, $2,
+          track.sc_last_modified,
+          COALESCE((payload.track->>'sc_last_modified')::timestamptz, track.sc_last_modified),
+          track.sc_desired, track.sc_write_confirmed, '{}'::jsonb
+      )
 )
 INSERT INTO track_sync_stamps AS stamp (track_id, sc_synced_at)
-SELECT upserted.id,
-       upserted.sc_synced_at
-FROM upserted
-ORDER BY upserted.id
+SELECT written.id,
+       written.sc_synced_at
+FROM (
+    SELECT upserted.id, upserted.sc_synced_at FROM upserted
+    UNION ALL
+    SELECT refreshed.id, refreshed.sc_synced_at FROM refreshed
+) AS written
+ORDER BY written.id
 ON CONFLICT (track_id) DO UPDATE
 SET sc_synced_at = EXCLUDED.sc_synced_at
 WHERE stamp.sc_synced_at < EXCLUDED.sc_synced_at

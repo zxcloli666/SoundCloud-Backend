@@ -77,7 +77,39 @@ WITH upserted AS (
          WHERE tracks.deleted_at IS NULL
             AND (
              EXCLUDED.sc_last_modified IS NULL
-             OR tracks.sc_synced_at < now() - interval '7 days'
+             OR (
+                 GREATEST(tracks.sc_synced_at, (
+                     SELECT sync.sc_synced_at FROM track_sync_stamps AS sync WHERE sync.track_id = tracks.id
+                 )) < now() - interval '7 days'
+                 AND (
+                     tracks.sc_write_confirmed
+                     OR (
+                         EXCLUDED.urn, EXCLUDED.title_normalized, EXCLUDED.description, EXCLUDED.genre,
+                         EXCLUDED.tags, EXCLUDED.waveform_url, EXCLUDED.sc_metadata,
+                         COALESCE(EXCLUDED.language, tracks.language), COALESCE(EXCLUDED.isrc, tracks.isrc),
+                         COALESCE(EXCLUDED.metadata_artist, tracks.metadata_artist),
+                         COALESCE(EXCLUDED.sc_created_at, tracks.sc_created_at),
+                         COALESCE(EXCLUDED.release_year, tracks.release_year),
+                         COALESCE(EXCLUDED.release_date, tracks.release_date),
+                         COALESCE(EXCLUDED.uploader_sc_user_id, tracks.uploader_sc_user_id),
+                         COALESCE(EXCLUDED.uploader_urn, tracks.uploader_urn),
+                         COALESCE(EXCLUDED.uploader_username, tracks.uploader_username),
+                         COALESCE(EXCLUDED.uploader_avatar_url, tracks.uploader_avatar_url),
+                         COALESCE(EXCLUDED.play_count_sc, tracks.play_count_sc),
+                         COALESCE(EXCLUDED.likes_count_sc, tracks.likes_count_sc),
+                         COALESCE(EXCLUDED.reposts_count_sc, tracks.reposts_count_sc),
+                         COALESCE(EXCLUDED.comments_count_sc, tracks.comments_count_sc)
+                     ) IS DISTINCT FROM (
+                         tracks.urn, tracks.title_normalized, tracks.description, tracks.genre,
+                         tracks.tags, tracks.waveform_url, tracks.sc_metadata,
+                         tracks.language, tracks.isrc, tracks.metadata_artist, tracks.sc_created_at,
+                         tracks.release_year, tracks.release_date, tracks.uploader_sc_user_id,
+                         tracks.uploader_urn, tracks.uploader_username, tracks.uploader_avatar_url,
+                         tracks.play_count_sc, tracks.likes_count_sc, tracks.reposts_count_sc,
+                         tracks.comments_count_sc
+                     )
+                 )
+             )
              OR tracks.sc_desired <> '{}'::jsonb
              OR tracks.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified)
              OR tracks.title IS DISTINCT FROM EXCLUDED.title
@@ -96,6 +128,12 @@ WITH upserted AS (
             tracks.sc_desired, tracks.sc_write_confirmed, to_jsonb(EXCLUDED)
          )
          RETURNING id, (xmax = 0) AS was_new
+         ), stamped AS (
+            INSERT INTO track_sync_stamps AS sync (track_id, sc_synced_at)
+            SELECT id, now() FROM upserted
+            ON CONFLICT (track_id) DO UPDATE
+            SET sc_synced_at = EXCLUDED.sc_synced_at
+            WHERE sync.sc_synced_at < EXCLUDED.sc_synced_at
          ), bumped AS (
             UPDATE tracks
             SET index_priority = LEAST(index_priority, $29),
@@ -104,8 +142,26 @@ WITH upserted AS (
             WHERE sc_track_id = $1
               AND NOT EXISTS (SELECT 1 FROM upserted)
               AND (index_priority > $29 OR storage_priority > $30 OR pipeline_held)
+         ), refreshed AS (
+            INSERT INTO track_sync_stamps AS sync (track_id, sc_synced_at)
+            SELECT t.id, now()
+            FROM tracks AS t
+            WHERE t.sc_track_id = $1
+              AND NOT EXISTS (SELECT 1 FROM upserted)
+              AND t.deleted_at IS NULL
+              AND t.sc_desired = '{}'::jsonb
+              AND t.sc_synced_at < now() - interval '7 days'
+              AND catalog_observation_is_current(
+                  t.sc_observation, t.sc_mutation_observation, $32,
+                  t.sc_last_modified, COALESCE($17, t.sc_last_modified),
+                  t.sc_desired, t.sc_write_confirmed, '{}'::jsonb
+              )
+            ON CONFLICT (track_id) DO UPDATE
+            SET sc_synced_at = EXCLUDED.sc_synced_at
+            WHERE sync.sc_synced_at < EXCLUDED.sc_synced_at - interval '7 days'
+            RETURNING sync.track_id
          )
          SELECT id, was_new, true AS metadata_applied FROM upserted
          UNION ALL
-         SELECT id, false, false FROM tracks
+         SELECT id, false, EXISTS (SELECT 1 FROM refreshed) FROM tracks
          WHERE sc_track_id = $1 AND NOT EXISTS (SELECT 1 FROM upserted)

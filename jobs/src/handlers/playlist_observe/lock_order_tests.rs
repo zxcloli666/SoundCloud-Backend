@@ -411,6 +411,67 @@ async fn wait_for_lock_waiters(pool: &PgPool, waiting: i64) -> anyhow::Result<()
     anyhow::bail!("the racers never queued behind the gate")
 }
 
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_week_old_hydrated_track_that_changed_nothing_moves_only_its_stamp(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let core = split_core(&pool).await?;
+    let mut payload = hydrated(&["920".to_owned(), "921".to_owned()]);
+    for track in payload.as_array_mut().into_iter().flatten() {
+        track["sc_last_modified"] = json!("2026-09-01T00:00:00Z");
+        track["play_count_sc"] = json!(5);
+    }
+    upsert(&core, &payload, 1).await?;
+    sqlx::query(
+        "UPDATE tracks SET sc_synced_at = sc_synced_at - interval '8 days'
+         WHERE sc_track_id IN ('920', '921')",
+    )
+    .execute(&core)
+    .await?;
+    sqlx::query(
+        "UPDATE track_sync_stamps SET sc_synced_at = sc_synced_at - interval '8 days'
+         WHERE track_id IN (SELECT id FROM tracks WHERE sc_track_id IN ('920', '921'))",
+    )
+    .execute(&core)
+    .await?;
+
+    payload[1]["play_count_sc"] = json!(7);
+    upsert(&core, &payload, 20_000_000).await?;
+
+    let rows: Vec<(String, bool, bool, i64)> = sqlx::query_as(
+        "SELECT track.sc_track_id,
+                track.sc_synced_at > now() - interval '1 day',
+                stamp.sc_synced_at > now() - interval '1 day',
+                track.play_count_sc
+         FROM tracks AS track
+         JOIN track_sync_stamps AS stamp ON stamp.track_id = track.id
+         WHERE track.sc_track_id IN ('920', '921')
+         ORDER BY 1",
+    )
+    .fetch_all(&core)
+    .await?;
+    assert_eq!(
+        rows,
+        vec![
+            ("920".to_owned(), false, true, 5),
+            ("921".to_owned(), true, true, 7)
+        ]
+    );
+    Ok(())
+}
+
+async fn upsert(
+    core: &PgPool,
+    payload: &serde_json::Value,
+    observation: i64,
+) -> anyhow::Result<()> {
+    let mut transaction = core.begin().await?;
+    super::repository::upsert_hydrated_tracks(&mut transaction, payload, observation).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 fn hydrated(sc_track_ids: &[String]) -> serde_json::Value {
     serde_json::Value::Array(
         sc_track_ids

@@ -243,6 +243,75 @@ async fn an_unchanged_track_only_lifts_its_priority() {
     pair.finish().await;
 }
 
+const STALE_TRACK: &str = "INSERT INTO public.tracks (
+        id, sc_track_id, urn, title, title_normalized, description, genre, tags, duration_ms,
+        artwork_url, permalink_url, waveform_url, sharing, sc_created_at, sc_last_modified,
+        release_year, release_date, uploader_sc_user_id, uploader_urn, uploader_username,
+        uploader_avatar_url, play_count_sc, likes_count_sc, reposts_count_sc, comments_count_sc,
+        sc_metadata, sc_synced_at, sc_observation, index_priority, storage_priority,
+        storage_state, index_state, created_at)
+    VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '1874620031', 'soundcloud:tracks:1874620031',
+        'Night Drive', 'night drive', 'night ride', 'Synthwave', '{synthwave,night drive}', 213000,
+        'https://i1.sndcdn.com/artworks-1874620031-t500x500.jpg', 'https://soundcloud.com/kavinsky-fan/night-drive',
+        'https://wave.sndcdn.com/1874620031_m.json', 'public', '2026-01-15 12:00:00+00', '2026-09-01 10:00:00+00',
+        2026, '2026-01-15', '204411307', 'soundcloud:users:204411307', 'kavinsky-fan',
+        'https://i1.sndcdn.com/avatars-204411307-large.jpg', 12004, 431, 17, 9,
+        '{\"kind\": \"track\", \"policy\": \"ALLOW\"}', '2026-10-01 08:00:00+00', 517000, 5, 5,
+        'ok', 'indexed', '2026-01-15 12:00:05+00');
+    INSERT INTO public.track_sync_stamps (track_id, sc_synced_at)
+    VALUES ('6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94', '2026-10-01 08:00:00+00')";
+
+async fn synced(pool: &sqlx::PgPool) -> (DateTime<Utc>, DateTime<Utc>, i64) {
+    sqlx::query_as(
+        "SELECT t.sc_synced_at, s.sc_synced_at, t.play_count_sc
+         FROM public.tracks t JOIN public.track_sync_stamps s ON s.track_id = t.id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_week_old_sync_that_changes_nothing_moves_only_the_stamp() {
+    let same = track("1874620031", "Night Drive", "2026-09-01T10:00:00Z", 5);
+    let pair = Pair::new(STALE_TRACK).await;
+    let upsert = tracks(Mode::Upsert, HLC_1, "2026-10-30T10:00:00Z", vec![same]);
+    let output = pair.run(&upsert, DERIVED).await.assert_same();
+    assert_eq!(
+        output,
+        json!([{"sc_track_id": "1874620031", "id": PROD_TRACK_ID, "was_new": false, "applied": true}])
+    );
+    let expected = (
+        at("2026-10-01T08:00:00Z"),
+        at("2026-10-30T10:00:00Z"),
+        12004,
+    );
+    assert_eq!(synced(&pair.core).await, expected);
+    assert_eq!(synced(&pair.api).await, expected);
+    pair.finish().await;
+}
+
+#[tokio::test]
+async fn a_week_old_sync_with_new_counts_rewrites_the_track() {
+    let mut counted = track("1874620031", "Night Drive", "2026-09-01T10:00:00Z", 5);
+    counted["play_count_sc"] = json!(13000);
+    let pair = Pair::new(STALE_TRACK).await;
+    let upsert = tracks(Mode::Upsert, HLC_1, "2026-10-30T10:00:00Z", vec![counted]);
+    let output = pair.run(&upsert, DERIVED).await.assert_same();
+    assert_eq!(
+        output,
+        json!([{"sc_track_id": "1874620031", "id": PROD_TRACK_ID, "was_new": false, "applied": true}])
+    );
+    let expected = (
+        at("2026-10-30T10:00:00Z"),
+        at("2026-10-30T10:00:00Z"),
+        13000,
+    );
+    assert_eq!(synced(&pair.core).await, expected);
+    assert_eq!(synced(&pair.api).await, expected);
+    pair.finish().await;
+}
+
 #[tokio::test]
 async fn absent_tracks_insert_only_the_missing_rows() {
     let pair = Pair::new(PROD_TRACK).await;
