@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -351,6 +354,62 @@ def test_main_exit_codes(
     assert fm.main(["--profile", "gpu-24", *config], env) == fm.EXIT_CONFIG
     last = orjson.loads(capsys.readouterr().out.splitlines()[-1])
     assert last["event"] == "fetch_models_config_error" and "HF_HUB_OFFLINE" in last["error"]
+
+
+@pytest.mark.parametrize("profile", ["cpu-tts", "gpu-tts"])
+def test_speech_profiles_fetch_with_the_offline_flag_of_the_image(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], profile: str
+) -> None:
+    fetched: list[fm.Artifact] = []
+
+    def recorded(artifact: fm.Artifact, throttle: fm.Throttle) -> None:
+        fetched.append(artifact)
+
+    monkeypatch.setattr(fm, "fetch", recorded)
+    monkeypatch.setattr(fm.constants, "HF_HUB_OFFLINE", True)
+    config = ["--config-dir", str(CONFIG_DIR)]
+
+    assert fm.main(["--profile", profile, *config], env) == fm.EXIT_OK
+    assert fetched
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_only_profiles_with_hub_models_stop_on_the_offline_flag(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], profile: str
+) -> None:
+    monkeypatch.setattr(fm, "fetch", lambda artifact, throttle: None)
+    monkeypatch.setattr(fm.constants, "HF_HUB_OFFLINE", True)
+    hub = any(
+        isinstance(item.artifact, fm.HubSnapshot | fm.HubFile) for item in plan_for(profile, env)
+    )
+    config = ["--config-dir", str(CONFIG_DIR)]
+
+    code = fm.main(["--profile", profile, *config], env)
+
+    assert code == (fm.EXIT_CONFIG if hub else fm.EXIT_OK)
+    assert hub is (profile not in ("cpu-tts", "gpu-tts"))
+
+
+def test_a_config_error_exits_the_fetch_models_process_with_78(env: dict[str, str]) -> None:
+    finished = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "worker",
+            "fetch-models",
+            "--profile",
+            "gpu-96",
+            "--config-dir",
+            str(CONFIG_DIR),
+        ],
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert finished.returncode == fm.EXIT_CONFIG == 78
+    assert orjson.loads(finished.stdout.splitlines()[-1])["event"] == "fetch_models_config_error"
 
 
 @pytest.mark.parametrize(
