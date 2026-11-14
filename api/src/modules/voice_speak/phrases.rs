@@ -8,7 +8,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 
-use super::objects::{ObjectError, Objects};
+use super::stores::{Objects, StoreError};
 use crate::config::PhrasesCfg;
 
 const REGION: &str = "us-east-1";
@@ -44,7 +44,7 @@ impl S3Phrases {
         }))
     }
 
-    async fn fetch(&self, key: &str) -> Result<Option<Bytes>, ObjectError> {
+    async fn fetch(&self, key: &str) -> Result<Option<Bytes>, StoreError> {
         let sent = self
             .client
             .get_object()
@@ -64,17 +64,17 @@ impl S3Phrases {
             {
                 return Ok(None);
             }
-            Err(_) => return Err(ObjectError::Unavailable),
+            Err(_) => return Err(StoreError::Unavailable),
         };
         let body = object
             .body
             .collect()
             .await
-            .map_err(|_| ObjectError::Unavailable)?;
+            .map_err(|_| StoreError::Unavailable)?;
         Ok(Some(body.into_bytes()))
     }
 
-    async fn store(&self, key: &str, clip: Bytes) -> Result<(), ObjectError> {
+    async fn store(&self, key: &str, clip: Bytes) -> Result<(), StoreError> {
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -84,24 +84,24 @@ impl S3Phrases {
             .send()
             .await
             .map(|_| ())
-            .map_err(|_| ObjectError::Unavailable)
+            .map_err(|_| StoreError::Unavailable)
     }
 }
 
 impl Objects for S3Phrases {
-    fn read<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<Bytes>, ObjectError>> {
+    fn read<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<Bytes>, StoreError>> {
         Box::pin(async move {
             tokio::time::timeout(READ_BUDGET, self.fetch(name))
                 .await
-                .map_err(|_| ObjectError::TimedOut)?
+                .map_err(|_| StoreError::TimedOut)?
         })
     }
 
-    fn write<'a>(&'a self, name: &'a str, bytes: Bytes) -> BoxFuture<'a, Result<(), ObjectError>> {
+    fn write<'a>(&'a self, name: &'a str, bytes: Bytes) -> BoxFuture<'a, Result<(), StoreError>> {
         Box::pin(async move {
             tokio::time::timeout(WRITE_BUDGET, self.store(name, bytes))
                 .await
-                .map_err(|_| ObjectError::TimedOut)?
+                .map_err(|_| StoreError::TimedOut)?
         })
     }
 }

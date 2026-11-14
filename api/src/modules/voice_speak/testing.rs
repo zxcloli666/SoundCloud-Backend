@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,19 +7,16 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use llm_ladder::{WorkerError, WorkerTransport};
 use serde_json::{Value, json};
-use tokio::sync::Semaphore;
 
-use super::objects::{ObjectError, Objects};
 use super::service::{Hold, Hosting, Live, VoiceSpeak};
+use super::stores::{Ask, Lane, Objects, Replies, StoreError};
 
 pub const CLIP: &[u8] = b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00OpusHead";
 pub const QUICK: Hold = Hold {
     length: Duration::from_millis(300),
     every: Duration::from_millis(5),
 };
-const SETTLE_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct Shelf {
@@ -28,83 +25,81 @@ pub struct Shelf {
     reads: AtomicUsize,
 }
 
+#[derive(Default)]
+pub struct Board {
+    messages: Mutex<HashMap<String, Bytes>>,
+    broken: AtomicBool,
+}
+
 #[derive(Clone, Copy)]
 pub enum Answer {
     Clip,
     Encoded(&'static str),
-    Refuse(WorkerError),
+    Refuse(&'static str),
     Malformed,
+    Silent,
 }
 
-pub struct Voice {
+pub struct Queue {
     answer: Answer,
-    asked: Mutex<Vec<Asked>>,
-    gate: Semaphore,
-}
-
-#[derive(Clone, Debug)]
-pub struct Asked {
-    pub subject: String,
-    pub request: Value,
-    pub timeout: Duration,
+    replies: Arc<Board>,
+    asked: Mutex<Vec<Ask>>,
+    depth: AtomicU64,
+    refusing: AtomicBool,
 }
 
 pub struct Speaking {
     pub speak: Arc<VoiceSpeak>,
-    pub voice: Arc<Voice>,
-    pub clips: Arc<Shelf>,
+    pub lane: Arc<Queue>,
+    pub replies: Arc<Board>,
     pub phrases: Arc<Shelf>,
-    lines: usize,
 }
 
 pub fn speaking(answer: Answer, lines: usize) -> Speaking {
-    hosted(answer, lines, Semaphore::MAX_PERMITS, true)
-}
-
-pub fn held(answer: Answer, lines: usize) -> Speaking {
-    hosted(answer, lines, 0, true)
+    hosted(answer, lines, true)
 }
 
 pub fn uncached(answer: Answer, lines: usize) -> Speaking {
-    hosted(answer, lines, Semaphore::MAX_PERMITS, false)
+    hosted(answer, lines, false)
 }
 
-fn hosted(answer: Answer, lines: usize, passes: usize, cached: bool) -> Speaking {
-    let clips = Arc::new(Shelf::default());
+fn hosted(answer: Answer, lines: usize, cached: bool) -> Speaking {
+    let replies = Arc::new(Board::default());
     let phrases = Arc::new(Shelf::default());
-    let voice = Arc::new(Voice {
+    let lane = Arc::new(Queue {
         answer,
+        replies: replies.clone(),
         asked: Mutex::default(),
-        gate: Semaphore::new(passes),
+        depth: AtomicU64::new(0),
+        refusing: AtomicBool::new(false),
     });
     let hosting = Hosting {
-        worker: voice.clone(),
-        clips: clips.clone(),
+        lane: lane.clone(),
+        replies: replies.clone(),
         phrases: cached.then(|| phrases.clone() as Arc<dyn Objects>),
     };
     Speaking {
         speak: VoiceSpeak::hosted(lines, hosting, QUICK),
-        voice,
-        clips,
+        lane,
+        replies,
         phrases,
-        lines,
+    }
+}
+
+pub fn reply(answer: Answer) -> Option<Value> {
+    let data = |clip: Value| json!({"ok": true, "data": {"seconds": 1.5, "clip": clip}});
+    match answer {
+        Answer::Clip => Some(data(Value::from(STANDARD.encode(CLIP)))),
+        Answer::Encoded(clip) => Some(data(Value::from(clip))),
+        Answer::Refuse(error) => Some(json!({"ok": false, "error": error})),
+        Answer::Malformed => Some(json!({"ok": true, "data": {"length": 1}})),
+        Answer::Silent => None,
     }
 }
 
 impl Speaking {
-    pub fn live(&self) -> &Arc<Live> {
+    pub fn live(&self) -> &Live {
         self.speak.live().expect("a live speak service")
-    }
-
-    pub async fn settled(&self) {
-        let live = self.live();
-        tokio::time::timeout(SETTLE_BUDGET, async {
-            while live.lines.available_permits() < self.lines {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
-        .expect("every line settles");
     }
 }
 
@@ -131,64 +126,101 @@ impl Shelf {
     pub fn reads(&self) -> usize {
         self.reads.load(Ordering::Relaxed)
     }
-
-    fn working(&self) -> Result<(), ObjectError> {
-        if self.broken.load(Ordering::Relaxed) {
-            Err(ObjectError::Unavailable)
-        } else {
-            Ok(())
-        }
-    }
 }
 
 impl Objects for Shelf {
-    fn read<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<Bytes>, ObjectError>> {
+    fn read<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<Bytes>, StoreError>> {
         Box::pin(async move {
             self.reads.fetch_add(1, Ordering::Relaxed);
-            self.working().map(|()| self.get(name))
+            working(&self.broken).map(|()| self.get(name))
         })
     }
 
-    fn write<'a>(&'a self, name: &'a str, bytes: Bytes) -> BoxFuture<'a, Result<(), ObjectError>> {
+    fn write<'a>(&'a self, name: &'a str, bytes: Bytes) -> BoxFuture<'a, Result<(), StoreError>> {
         Box::pin(async move {
-            self.working()?;
+            working(&self.broken)?;
             self.put(name, &bytes);
             Ok(())
         })
     }
 }
 
-impl Voice {
-    pub fn open(&self) {
-        self.gate.add_permits(Semaphore::MAX_PERMITS);
+impl Board {
+    pub fn put(&self, subject: &str, payload: &[u8]) {
+        self.messages
+            .lock()
+            .unwrap()
+            .insert(subject.to_owned(), Bytes::copy_from_slice(payload));
     }
 
-    pub fn asked(&self) -> Vec<Asked> {
-        self.asked.lock().unwrap().clone()
+    pub fn get(&self, subject: &str) -> Option<Bytes> {
+        self.messages.lock().unwrap().get(subject).cloned()
+    }
+
+    pub fn subjects(&self) -> Vec<String> {
+        let mut subjects: Vec<String> = self.messages.lock().unwrap().keys().cloned().collect();
+        subjects.sort();
+        subjects
+    }
+
+    pub fn break_down(&self) {
+        self.broken.store(true, Ordering::Relaxed);
     }
 }
 
-impl WorkerTransport for Voice {
-    fn call<'a>(
+impl Replies for Board {
+    fn last<'a>(&'a self, subject: &'a str) -> BoxFuture<'a, Result<Option<Bytes>, StoreError>> {
+        Box::pin(async move { working(&self.broken).map(|()| self.get(subject)) })
+    }
+
+    fn put<'a>(
         &'a self,
         subject: &'a str,
         payload: Bytes,
-        timeout: Duration,
-    ) -> BoxFuture<'a, Result<Value, WorkerError>> {
+    ) -> BoxFuture<'a, Result<(), StoreError>> {
         Box::pin(async move {
-            let request: Value = serde_json::from_slice(&payload).unwrap_or(Value::Null);
-            self.asked.lock().unwrap().push(Asked {
-                subject: subject.to_owned(),
-                request: request.clone(),
-                timeout,
-            });
-            let _pass = self.gate.acquire().await;
-            match self.answer {
-                Answer::Clip => Ok(json!({"seconds": 1.5, "clip": STANDARD.encode(CLIP)})),
-                Answer::Encoded(clip) => Ok(json!({"seconds": 1.5, "clip": clip})),
-                Answer::Refuse(error) => Err(error),
-                Answer::Malformed => Ok(json!({"length": 1})),
-            }
+            working(&self.broken)?;
+            Board::put(self, subject, &payload);
+            Ok(())
         })
+    }
+}
+
+impl Queue {
+    pub fn asked(&self) -> Vec<Ask> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    pub fn fill(&self, depth: u64) {
+        self.depth.store(depth, Ordering::Relaxed);
+    }
+
+    pub fn refuse(&self) {
+        self.refusing.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Lane for Queue {
+    fn depth(&self) -> BoxFuture<'_, Result<u64, StoreError>> {
+        Box::pin(async move { Ok(self.depth.load(Ordering::Relaxed)) })
+    }
+
+    fn ask(&self, ask: Ask) -> BoxFuture<'_, Result<(), StoreError>> {
+        Box::pin(async move {
+            working(&self.refusing)?;
+            if let Some(reply) = reply(self.answer) {
+                Board::put(&self.replies, &ask.reply_to, reply.to_string().as_bytes());
+            }
+            self.asked.lock().unwrap().push(ask);
+            Ok(())
+        })
+    }
+}
+
+fn working(broken: &AtomicBool) -> Result<(), StoreError> {
+    if broken.load(Ordering::Relaxed) {
+        Err(StoreError::Unavailable)
+    } else {
+        Ok(())
     }
 }

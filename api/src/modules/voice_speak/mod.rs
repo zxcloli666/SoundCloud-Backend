@@ -1,11 +1,12 @@
 mod handlers;
-mod objects;
 mod phrases;
+mod reply;
 mod request;
 mod service;
+mod stores;
+mod streams;
 #[cfg(test)]
 pub(crate) mod testing;
-mod voicing;
 
 pub use handlers::router;
 pub use service::VoiceSpeak;

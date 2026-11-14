@@ -85,7 +85,7 @@ async fn a_listener_without_star_is_refused_before_the_line_is_read(
         assert_eq!(heard.status, StatusCode::FORBIDDEN);
         assert_eq!(heard.json()["code"], "star_required");
     }
-    assert!(speaking.voice.asked().is_empty());
+    assert!(speaking.lane.asked().is_empty());
     Ok(())
 }
 
@@ -108,7 +108,6 @@ async fn a_listener_with_star_gets_a_ticket_then_the_clip_then_the_kept_phrase(
         None,
     )
     .await?;
-    speaking.settled().await;
     let cached = call(&app, "POST", "/voice/speak", Some(session), Some(line())).await?;
 
     assert_eq!(polled.status, StatusCode::OK);
@@ -117,7 +116,7 @@ async fn a_listener_with_star_gets_a_ticket_then_the_clip_then_the_kept_phrase(
     assert_eq!(cached.status, StatusCode::OK);
     assert_eq!(cached.content_type.as_deref(), Some("audio/ogg"));
     assert_eq!(cached.body, CLIP);
-    assert_eq!(speaking.voice.asked().len(), 1);
+    assert_eq!(speaking.lane.asked().len(), 1);
     let unknown = call(&app, "GET", "/voice/speak/nope", Some(session), None).await?;
     assert_eq!(unknown.status, StatusCode::NOT_FOUND);
     let anonymous = call(&app, "POST", "/voice/speak", None, Some(line())).await?;

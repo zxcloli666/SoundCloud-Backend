@@ -44,6 +44,13 @@ impl SpeakBody {
     }
 }
 
+pub fn names_a_subject(user: &str) -> bool {
+    !user.is_empty()
+        && user
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 impl Line {
     pub fn phrase_key(&self) -> String {
         let mut hash = Sha256::new();

@@ -9,7 +9,7 @@ use bytes::Bytes;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::request::{BODY_LIMIT, SpeakBody};
+use super::request::{BODY_LIMIT, SpeakBody, names_a_subject};
 use super::service::{Busy, Fetched, Said};
 use crate::common::admission::Endpoint;
 use crate::common::session::SessionCtx;
@@ -33,8 +33,11 @@ async fn speak(
     ctx: SessionCtx,
     request: Request,
 ) -> AppResult<Response> {
-    let live = st.voice_speak.live().ok_or_else(unavailable)?.clone();
+    let live = st.voice_speak.live().ok_or_else(unavailable)?;
     let user = ctx.sc_user_id.as_str();
+    if !names_a_subject(user) {
+        return Err(invalid("the account id cannot name a line".to_owned()));
+    }
     st.admission
         .check_key(Endpoint::VoiceSpeak, user)
         .await
@@ -57,6 +60,9 @@ async fn fetch(
 ) -> AppResult<Response> {
     let live = st.voice_speak.live().ok_or_else(unavailable)?;
     let ticket = ticket_of(&ticket)?;
+    if !names_a_subject(&ctx.sc_user_id) {
+        return Err(not_found());
+    }
     reply(live.fetch(&ctx.sc_user_id, ticket).await)
 }
 
@@ -74,7 +80,7 @@ pub(super) fn answer(said: Said) -> Response {
 pub(super) fn reply(fetched: Fetched) -> AppResult<Response> {
     match fetched {
         Fetched::Clip(clip) => Ok(ogg(clip)),
-        Fetched::Failed => Err(AppError::coded(
+        Fetched::Failed | Fetched::Expired => Err(AppError::coded(
             StatusCode::BAD_GATEWAY,
             "voice_speak_failed",
             "The line could not be voiced",
@@ -84,13 +90,18 @@ pub(super) fn reply(fetched: Fetched) -> AppResult<Response> {
 }
 
 pub(super) fn ticket_of(raw: &str) -> AppResult<Uuid> {
-    Uuid::parse_str(raw).map_err(|_| {
-        AppError::coded(
-            StatusCode::NOT_FOUND,
-            "voice_speak_not_found",
-            "No line has this ticket",
-        )
-    })
+    Uuid::parse_str(raw)
+        .ok()
+        .filter(|ticket| ticket.get_version_num() == 7)
+        .ok_or_else(not_found)
+}
+
+fn not_found() -> AppError {
+    AppError::coded(
+        StatusCode::NOT_FOUND,
+        "voice_speak_not_found",
+        "No line has this ticket",
+    )
 }
 
 fn ogg(clip: Bytes) -> Response {

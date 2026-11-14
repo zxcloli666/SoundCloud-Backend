@@ -81,7 +81,7 @@ impl WorkerRpc {
                 tracing::warn!(
                     subject,
                     reason = reason(&error),
-                    "the worker refused a call"
+                    "the worker refused a completion"
                 );
                 Err(refusal(&error))
             }
@@ -126,5 +126,5 @@ fn reason(error: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "worker_rpc_tests.rs"]
+#[path = "worker_tests.rs"]
 mod tests;

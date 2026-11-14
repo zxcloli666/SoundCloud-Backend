@@ -67,3 +67,12 @@ fn a_body_fits_the_longest_line_the_contract_allows() {
 
     assert!(longest.to_string().len() < BODY_LIMIT);
 }
+
+#[test]
+fn only_a_plain_account_id_names_a_subject() {
+    assert!(names_a_subject("98765"));
+    assert!(names_a_subject("user_1-a"));
+    for refused in ["", "1.2", "*", ">", "a b", "Ölf"] {
+        assert!(!names_a_subject(refused), "{refused}");
+    }
+}

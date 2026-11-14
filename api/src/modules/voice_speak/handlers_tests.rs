@@ -38,6 +38,9 @@ async fn the_poll_answers_the_clip_the_failure_or_no_content() {
     let failed = reply(Fetched::Failed)
         .expect_err("a failure")
         .into_response();
+    let expired = reply(Fetched::Expired)
+        .expect_err("a failure")
+        .into_response();
     let pending = reply(Fetched::Pending).expect("no content yet");
 
     assert_eq!(clip.status(), StatusCode::OK);
@@ -46,12 +49,15 @@ async fn the_poll_answers_the_clip_the_failure_or_no_content() {
     assert_eq!(failed.status(), StatusCode::BAD_GATEWAY);
     let failure: Value = serde_json::from_slice(&body(failed).await).expect("a JSON error");
     assert_eq!(failure["code"], "voice_speak_failed");
+    assert_eq!(expired.status(), StatusCode::BAD_GATEWAY);
+    let lost: Value = serde_json::from_slice(&body(expired).await).expect("a JSON error");
+    assert_eq!(lost["code"], "voice_speak_failed");
     assert_eq!(pending.status(), StatusCode::NO_CONTENT);
     assert!(body(pending).await.is_empty());
 }
 
 #[tokio::test]
-async fn a_ticket_that_is_not_a_uuid_is_not_found() {
+async fn a_ticket_that_is_not_a_v7_uuid_is_not_found() {
     let ticket = Uuid::now_v7();
 
     let missing = ticket_of("not-a-ticket")
@@ -63,6 +69,7 @@ async fn a_ticket_that_is_not_a_uuid_is_not_found() {
     assert_eq!(error["code"], "voice_speak_not_found");
     assert_eq!(ticket_of(&ticket.to_string()).ok(), Some(ticket));
     assert!(ticket_of("98765.0190f0c2").is_err());
+    assert!(ticket_of(&Uuid::new_v4().to_string()).is_err());
     assert!(ticket_of("").is_err());
 }
 
