@@ -426,7 +426,7 @@ fn queue_delivery_error(error: QueueError) -> JobError {
 
 async fn indexing_schema_ready(pool: &sqlx::PgPool) -> sqlx::Result<bool> {
     sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL
+        "SELECT to_regclass('track_storage_failures_failed_at_idx') IS NOT NULL
              AND EXISTS (
                  SELECT 1
                  FROM pg_index
