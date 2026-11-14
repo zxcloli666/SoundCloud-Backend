@@ -266,10 +266,14 @@ pub(super) async fn owner_api_is_due(
         return Ok(true);
     };
     let unseen = unseen(key, wanted);
-    let known_private = if payload.collection == CatalogCollection::LikedTracks {
-        "AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.sc_track_id = m.sc_track_id AND t.sharing = 'private')"
-    } else {
-        ""
+    let known_private = match payload.collection {
+        CatalogCollection::LikedTracks | CatalogCollection::OwnedTracks => {
+            "AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.sc_track_id = m.sc_track_id AND t.sharing = 'private')"
+        }
+        CatalogCollection::LikedPlaylists | CatalogCollection::OwnedPlaylists => {
+            "AND NOT EXISTS (SELECT 1 FROM playlists p WHERE p.urn = m.playlist_urn AND p.sharing = 'private')"
+        }
+        _ => "",
     };
     let sql = format!(
         "SELECT sync.verified_at IS NULL

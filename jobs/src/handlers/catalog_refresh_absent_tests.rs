@@ -36,6 +36,7 @@ async fn leased(pool: &PgPool) -> anyhow::Result<LeasedJob> {
         kind: JobKind::CatalogRefresh,
         dedup_key: Some(track().dedup_key()),
         payload: Value::Null,
+        priority: 15,
         generation: 1,
         attempts: 1,
         max_attempts: 8,

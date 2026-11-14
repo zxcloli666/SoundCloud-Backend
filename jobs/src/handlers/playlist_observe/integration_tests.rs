@@ -16,7 +16,7 @@ use crate::config::{OAuthConfig, PlaylistReconcileConfig, SyncQueueConfig};
 use crate::handlers::catalog_remote::CatalogRemote;
 use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 use crate::handlers::star_priority::Turns;
-use crate::queue::{JobError, JobRepository};
+use crate::queue::{JobError, JobRepository, LeasedJob};
 
 use super::super::catalog_read::PublicCatalogReader;
 use super::client::PlaylistReadClient;
@@ -1606,9 +1606,20 @@ async fn a_read_pause_set_by_playlist_observation_holds_catalog_reads(
     let handler = observe_handler(&pool, api_url)?;
     let catalog = CatalogRemote::offline(pool.clone())?;
     handler.connections.pause_reads(app, 600);
+    let job = LeasedJob {
+        id: Uuid::now_v7(),
+        kind: backend_contracts::JobKind::CatalogCollection,
+        dedup_key: None,
+        payload: Value::Null,
+        priority: 20,
+        generation: 1,
+        attempts: 1,
+        max_attempts: 8,
+        lease_id: Uuid::now_v7(),
+    };
 
     let error = catalog
-        .owner_get("42", "/me")
+        .owner_get(&job, "42", "/me")
         .await
         .err()
         .ok_or_else(|| anyhow::anyhow!("a paused app was read anyway"))?;

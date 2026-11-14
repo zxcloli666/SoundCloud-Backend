@@ -552,6 +552,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "sc.user_collection");
         assert_eq!(calls[0].1["wrapped"], true);
+        assert_eq!(calls[0].1["playlist_tracks"], false);
         assert_eq!(calls[0].1["kind"], "track_likes");
         assert_eq!(
             calls[0].1["cursor"],

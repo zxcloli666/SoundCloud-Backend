@@ -11,6 +11,7 @@ mod pause_group;
 #[cfg(test)]
 mod playlist_tests;
 mod read_limit;
+mod read_line;
 #[cfg(test)]
 mod refusal_tests;
 mod repository;
@@ -47,6 +48,7 @@ use self::write_pause::{Admission, MAX_PAUSE, WritePauses};
 pub(super) use self::client::TokenRefreshClient;
 pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
 pub(super) use self::model::Connection;
+pub(super) use self::read_line::Waiter;
 
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;

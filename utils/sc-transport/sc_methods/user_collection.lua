@@ -1,6 +1,6 @@
 
 -- inputs: { user_id = "183", kind = "track_likes"|"playlist_likes"|"playlists"|"followings"|"followers"|"tracks",
---           limit = 200, cursor = "<next_href>"?, wrapped = true? }
+--           limit = 200, cursor = "<next_href>"?, wrapped = true?, playlist_tracks = false? }
 -- output: { ok = true, collection = [ <bare apiv2 entity> ], next_href = "…"|nil }
 local cid = client_id()
 if cid == nil or cid == "" then cid = inputs.client_id end
@@ -56,6 +56,14 @@ end
 local next_href = data.next_href
 if type(next_href) ~= "string" or next_href == "" then
   next_href = nil
+end
+
+if inputs.playlist_tracks == false and type(data.collection) == "table" then
+  for _, item in ipairs(data.collection) do
+    if type(item) == "table" then
+      item.tracks = nil
+    end
+  end
 end
 
 if inputs.wrapped == true then

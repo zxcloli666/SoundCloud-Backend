@@ -58,6 +58,9 @@ pub(super) fn parse(
     let mut items = Vec::with_capacity(collection.len());
     let mut liked_at: Vec<(String, DateTime<Utc>)> = Vec::new();
     for item in collection {
+        if apiv2 && is_system_playlist_like(payload, item) {
+            continue;
+        }
         let mut entity = match payload.collection {
             CatalogCollection::LikedTracks if apiv2 => item.get("track"),
             CatalogCollection::LikedPlaylists if apiv2 => item.get("playlist"),
@@ -137,6 +140,12 @@ pub(super) fn parse(
         liked_at,
         apiv2,
     })
+}
+
+fn is_system_playlist_like(payload: &CatalogCollectionPayload, item: &Value) -> bool {
+    payload.collection == CatalogCollection::LikedPlaylists
+        && item.get("playlist").is_none()
+        && item.get("system_playlist").is_some_and(Value::is_object)
 }
 
 const MAX_COMMENT_BYTES: usize = 16 * 1024;
@@ -274,7 +283,7 @@ pub(super) fn target(payload: &CatalogCollectionPayload, saved: &str) -> JobResu
         .split_once(':')
         .ok_or_else(|| malformed("saved cursor version is missing"))?;
     let apiv2 = match version {
-        "v2" if payload.apiv2_first() => true,
+        "v2" => true,
         "v1" => false,
         _ => return Err(malformed("saved cursor version is invalid")),
     };
@@ -496,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_playlists_and_uploads_never_leave_the_owner_api() {
+    fn owner_playlists_and_uploads_resume_an_apiv2_cursor() {
         let mut payload = payload();
         payload.owner = true;
         for (collection, segment) in [
@@ -505,15 +514,13 @@ mod tests {
             (CatalogCollection::OwnedTracks, "tracks"),
         ] {
             payload.collection = collection;
-            assert!(!payload.apiv2_first());
-            assert!(target(&payload, &format!("v2:/users/42/{segment}?offset=100")).is_err());
+            let path = format!("/users/42/{segment}?offset=100");
+            assert_eq!(
+                target(&payload, &format!("v2:{path}")).unwrap(),
+                (true, path)
+            );
+            assert!(target(&payload, &format!("v2:/users/43/{segment}?offset=100")).is_err());
         }
-        payload.collection = CatalogCollection::Followings;
-        assert!(payload.apiv2_first());
-        assert_eq!(
-            target(&payload, "v2:/users/42/followings?offset=100").unwrap(),
-            (true, "/users/42/followings?offset=100".into())
-        );
     }
 
     #[test]
@@ -564,24 +571,27 @@ mod tests {
     }
 
     #[test]
-    fn favoriters_stay_on_the_transport_that_serves_them() {
+    fn favoriters_resume_on_the_transport_that_saved_them() {
         let mut payload = payload();
         payload.collection = CatalogCollection::TrackFavoriters;
         payload.owner = false;
-        assert!(!payload.collection.public_apiv2());
         let saved = cursor(
             &payload,
-            "https://api.soundcloud.com/tracks/42/favoriters?offset=100",
-            false,
+            "https://api-v2.soundcloud.com/tracks/42/likers?offset=100",
+            true,
         )
         .unwrap();
+        assert_eq!(saved, "v2:/tracks/42/likers?offset=100");
         assert_eq!(
             target(&payload, &saved).unwrap(),
+            (true, "/tracks/42/likers?offset=100".into())
+        );
+        assert_eq!(
+            target(&payload, "v1:/tracks/42/favoriters?offset=100").unwrap(),
             (false, "/tracks/42/favoriters?offset=100".into())
         );
         assert!(target(&payload, "v2:/tracks/42/favoriters?offset=100").is_err());
         payload.collection = CatalogCollection::TrackReposters;
-        assert!(payload.collection.public_apiv2());
         let saved = cursor(
             &payload,
             "https://api-v2.soundcloud.com/tracks/42/reposters?offset=100",
@@ -592,6 +602,42 @@ mod tests {
             target(&payload, &saved).unwrap(),
             (true, "/tracks/42/reposters?offset=100".into())
         );
+    }
+
+    #[test]
+    fn an_apiv2_liked_playlists_page_skips_system_playlist_likes() {
+        let mut payload = payload();
+        payload.collection = CatalogCollection::LikedPlaylists;
+        payload.owner = true;
+        let value = json!({"collection": [
+            {"kind": "system-playlist-like", "created_at": "2019-10-06T06:37:19Z",
+             "system_playlist": {"urn": "soundcloud:system-playlists:weekly::42", "title": "Weekly"}},
+            {"kind": "playlist-like", "created_at": "2019-10-06T06:37:19Z",
+             "playlist": {"id": 7, "title": "Mix", "sharing": "public"}}
+        ]});
+        let parsed = parse(&payload, value, true).unwrap();
+        assert_eq!(parsed.items.len(), 1);
+        let neither = json!({"collection": [{"kind": "playlist-like"}]});
+        assert!(parse(&payload, neither, true).is_err());
+    }
+
+    #[test]
+    fn an_apiv2_likers_page_parses_and_its_cursor_round_trips() {
+        let mut payload = payload();
+        payload.collection = CatalogCollection::TrackFavoriters;
+        payload.owner = false;
+        let href = "https://api-v2.soundcloud.com/tracks/42/likers?offset=2026-11-14T18%3A06%3A50.858Z%2Clikes%2C000-00000000001304883270-00000000000316726172&limit=100";
+        let value = json!({"collection": [
+            {"id": 5, "urn": "soundcloud:users:5", "username": "first"},
+            {"id": 6, "urn": "soundcloud:users:6", "username": "second"}
+        ], "next_href": href});
+        let parsed = parse(&payload, value, true).unwrap();
+        assert_eq!(parsed.items.len(), 2);
+        let saved = parsed.next.unwrap();
+        assert!(saved.starts_with("v2:/tracks/42/likers?limit=100&offset="));
+        let (apiv2, path) = target(&payload, &saved).unwrap();
+        assert!(apiv2);
+        assert_eq!(format!("v2:{path}"), saved);
     }
 
     #[test]

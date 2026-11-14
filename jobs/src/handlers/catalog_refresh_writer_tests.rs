@@ -7,6 +7,7 @@ pub(super) async fn setup(pool: &PgPool) -> anyhow::Result<(CatalogWriter, Lease
         kind: JobKind::CatalogRefresh,
         dedup_key: None,
         payload: Value::Null,
+        priority: 15,
         generation: 1,
         attempts: 1,
         max_attempts: 8,

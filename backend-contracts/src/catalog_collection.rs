@@ -69,14 +69,6 @@ impl CatalogCollection {
         }
     }
 
-    pub const fn public_apiv2(self) -> bool {
-        !matches!(self, Self::TrackFavoriters)
-    }
-
-    pub const fn owner_apiv2(self) -> bool {
-        matches!(self, Self::LikedTracks | Self::Followings)
-    }
-
     pub const fn public_only(self) -> bool {
         matches!(
             self,
@@ -98,6 +90,7 @@ impl CatalogCollection {
             Self::Followers => "followers",
             Self::OwnedTracks => "tracks",
             Self::OwnedPlaylists => "playlists",
+            Self::TrackFavoriters if apiv2 => "likers",
             Self::TrackFavoriters => "favoriters",
             Self::TrackReposters | Self::PlaylistReposters => "reposters",
             Self::TrackComments => "comments",
@@ -167,14 +160,6 @@ impl CatalogCollectionPayload {
         )
     }
 
-    pub const fn apiv2_first(&self) -> bool {
-        if self.owner {
-            self.collection.owner_apiv2()
-        } else {
-            self.collection.public_apiv2()
-        }
-    }
-
     pub fn path(&self, apiv2: bool) -> String {
         let segment = self.collection.path_segment(apiv2);
         if self.owner && !apiv2 {
@@ -217,7 +202,8 @@ mod tests {
             owner: false,
         };
         assert!(payload.is_valid());
-        assert_eq!(payload.path(true), "/tracks/42/favoriters");
+        assert_eq!(payload.path(true), "/tracks/42/likers");
+        assert_eq!(payload.path(false), "/tracks/42/favoriters");
         assert_eq!(payload.dedup_key(), "track-favoriters:42:public");
         assert_eq!(payload.collection.entity(), CatalogEntity::User);
         assert_eq!(payload.collection.subject(), CatalogEntity::Track);
@@ -265,6 +251,17 @@ mod tests {
     }
 
     #[test]
+    fn favoriters_are_likers_on_apiv2_and_favoriters_on_apiv1() {
+        let payload = CatalogCollectionPayload {
+            collection: CatalogCollection::TrackFavoriters,
+            subject_id: "42".into(),
+            owner: false,
+        };
+        assert_eq!(payload.path(true), "/tracks/42/likers");
+        assert_eq!(payload.path(false), "/tracks/42/favoriters");
+    }
+
+    #[test]
     fn collection_scope_determines_identity_and_transport() {
         let mut payload = CatalogCollectionPayload {
             collection: CatalogCollection::LikedTracks,
@@ -279,11 +276,8 @@ mod tests {
         assert_ne!(payload.dedup_key(), public);
         assert_eq!(payload.path(false), "/me/likes/tracks");
         assert_eq!(payload.path(true), "/users/42/track_likes");
-        assert!(payload.apiv2_first());
         payload.collection = CatalogCollection::LikedPlaylists;
-        assert!(!payload.apiv2_first());
         payload.owner = false;
-        assert!(payload.apiv2_first());
         for id in ["0", "01", "-1", "42/tracks", "soundcloud:users:42"] {
             payload.subject_id = id.into();
             assert!(!payload.is_valid());

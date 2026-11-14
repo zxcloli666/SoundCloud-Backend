@@ -1,10 +1,18 @@
 use super::playlist_observe::{PlaylistReadClient, PlaylistReadError};
-use super::sync_queue::{ConnectionError, ConnectionManager, TokenRefreshClient};
+use super::sync_queue::{ConnectionError, ConnectionManager, TokenRefreshClient, Waiter};
 use crate::config::JobsConfig;
-use crate::queue::{JobError, JobResult};
+use crate::queue::{JobError, JobResult, LeasedJob};
 use serde_json::Value;
 use sqlx::PgPool;
 use std::time::Duration;
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ApplicationWait {
+    #[error("SoundCloud application is cooling down")]
+    Owner,
+    #[error("Public SoundCloud application is cooling down")]
+    Public,
+}
 
 pub(super) struct CatalogRemote {
     owner: PlaylistReadClient,
@@ -45,7 +53,7 @@ impl CatalogRemote {
         })
     }
 
-    pub(super) async fn public_get(&self, path: &str) -> JobResult<Value> {
+    pub(super) async fn public_get(&self, job: &LeasedJob, path: &str) -> JobResult<Value> {
         let candidates = self
             .connections
             .app_tokens()
@@ -58,14 +66,11 @@ impl CatalogRemote {
         for candidate in candidates.into_iter().take(8) {
             if let Some(seconds) = self
                 .connections
-                .read_retry_after_seconds(candidate.oauth_app_id)
+                .read_turn(candidate.oauth_app_id, waiter(job))
                 .await
                 .map_err(connection_error)?
             {
-                failure = postpone(
-                    seconds,
-                    anyhow::anyhow!("Public SoundCloud application is cooling down"),
-                );
+                failure = postpone(seconds, ApplicationWait::Public);
                 continue;
             }
             match self.owner.get_path(path, &candidate.value).await {
@@ -94,7 +99,12 @@ impl CatalogRemote {
         Err(failure)
     }
 
-    pub(super) async fn owner_get(&self, owner: &str, path: &str) -> JobResult<Value> {
+    pub(super) async fn owner_get(
+        &self,
+        job: &LeasedJob,
+        owner: &str,
+        path: &str,
+    ) -> JobResult<Value> {
         let token = self
             .connections
             .access_token(&self.tokens, owner)
@@ -103,14 +113,11 @@ impl CatalogRemote {
         if let Some(app_id) = token.oauth_app_id
             && let Some(seconds) = self
                 .connections
-                .read_retry_after_seconds(app_id)
+                .read_turn(app_id, waiter(job))
                 .await
                 .map_err(connection_error)?
         {
-            return Err(postpone(
-                seconds,
-                anyhow::anyhow!("SoundCloud application is cooling down"),
-            ));
+            return Err(postpone(seconds, ApplicationWait::Owner));
         }
         match self.owner.get_path(path, &token.value).await {
             Ok(response) => {
@@ -235,6 +242,25 @@ pub(super) fn owner_is_signed_out(error: &JobError) -> bool {
     )
 }
 
+pub(super) fn waits_for_application(error: &JobError) -> bool {
+    let JobError::Postponed { error, .. } = error else {
+        return false;
+    };
+    error.downcast_ref::<ApplicationWait>().is_some()
+        || matches!(
+            error.downcast_ref::<PlaylistReadError>(),
+            Some(PlaylistReadError::Api { status, .. })
+                if *status == wreq::StatusCode::TOO_MANY_REQUESTS
+        )
+}
+
+fn waiter(job: &LeasedJob) -> Waiter {
+    Waiter {
+        job: job.id,
+        priority: job.priority,
+    }
+}
+
 pub(super) fn refused_as_forbidden(error: &JobError) -> bool {
     let JobError::Postponed { error, .. } = error else {
         return false;
@@ -250,4 +276,52 @@ pub(super) fn refused_as_forbidden(error: &JobError) -> bool {
 
 pub(super) fn postpone(seconds: i64, error: impl Into<anyhow::Error>) -> JobError {
     JobError::postponed(Duration::from_secs(seconds.clamp(1, 86400) as u64), error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn api_error(status: wreq::StatusCode) -> PlaylistReadError {
+        PlaylistReadError::Api {
+            status,
+            body: json!({}),
+            retry_after_seconds: None,
+        }
+    }
+
+    #[test]
+    fn a_postponed_application_wait_is_waiting_for_the_application() {
+        let error = postpone(60, ApplicationWait::Owner);
+
+        assert!(waits_for_application(&error));
+        assert!(waits_for_application(&postpone(
+            60,
+            ApplicationWait::Public
+        )));
+    }
+
+    #[test]
+    fn a_postponed_rate_limit_answer_is_waiting_for_the_application() {
+        let error = owner_error(api_error(wreq::StatusCode::TOO_MANY_REQUESTS));
+
+        assert!(waits_for_application(&error));
+    }
+
+    #[test]
+    fn a_postponed_forbidden_answer_is_not_waiting_for_the_application() {
+        let error = owner_error(api_error(wreq::StatusCode::FORBIDDEN));
+
+        assert!(matches!(error, JobError::Postponed { .. }));
+        assert!(!waits_for_application(&error));
+    }
+
+    #[test]
+    fn a_retryable_error_is_not_waiting_for_the_application() {
+        let error = owner_error(api_error(wreq::StatusCode::BAD_GATEWAY));
+
+        assert!(matches!(error, JobError::Retryable(_)));
+        assert!(!waits_for_application(&error));
+    }
 }

@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
+use super::read_line::{Line, Waiter};
+
 const FIRST_GAP: Duration = Duration::from_secs(10);
 const LONGEST_GAP: Duration = Duration::from_secs(5 * 60);
 const FREE_BELOW: Duration = Duration::from_millis(125);
@@ -17,8 +19,14 @@ struct Limit {
 }
 
 #[derive(Default)]
+struct Apps {
+    limits: HashMap<Uuid, Limit>,
+    lines: HashMap<Uuid, Line>,
+}
+
+#[derive(Default)]
 pub struct AppReadLimits {
-    apps: Mutex<HashMap<Uuid, Limit>>,
+    apps: Mutex<Apps>,
 }
 
 impl AppReadLimits {
@@ -31,13 +39,20 @@ impl AppReadLimits {
         self.admit_at(app, Instant::now()).map(whole_seconds)
     }
 
+    pub fn turn(&self, app: Uuid, waiter: Waiter, cooldown_seconds: Option<i64>) -> Option<i64> {
+        let cooldown =
+            Duration::from_secs(u64::try_from(cooldown_seconds.unwrap_or(0)).unwrap_or(0));
+        self.turn_at(app, waiter, cooldown, Instant::now())
+            .map(whole_seconds)
+    }
+
     pub fn answered(&self, app: Uuid) {
         self.answered_at(app, Instant::now());
     }
 
     fn answered_at(&self, app: Uuid, now: Instant) {
         let mut apps = self.apps.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(limit) = apps.get_mut(&app) else {
+        let Some(limit) = apps.limits.get_mut(&app) else {
             return;
         };
         if now.saturating_duration_since(limit.changed_at) < SHORTEN_EVERY {
@@ -46,13 +61,13 @@ impl AppReadLimits {
         limit.gap = limit.gap.mul_f64(SHORTEN);
         limit.changed_at = now;
         if limit.gap < FREE_BELOW {
-            apps.remove(&app);
+            apps.limits.remove(&app);
         }
     }
 
     fn limited_at(&self, app: Uuid, pause: Duration, now: Instant) -> Duration {
         let mut apps = self.apps.lock().unwrap_or_else(PoisonError::into_inner);
-        let limit = apps.entry(app).or_insert(Limit {
+        let limit = apps.limits.entry(app).or_insert(Limit {
             gap: FIRST_GAP / 2,
             next: now,
             changed_at: now,
@@ -65,12 +80,45 @@ impl AppReadLimits {
 
     fn admit_at(&self, app: Uuid, now: Instant) -> Option<Duration> {
         let mut apps = self.apps.lock().unwrap_or_else(PoisonError::into_inner);
-        let limit = apps.get_mut(&app)?;
+        let limit = apps.limits.get_mut(&app)?;
         if limit.next > now {
             return Some(limit.next.saturating_duration_since(now));
         }
         limit.next = now + limit.gap;
         None
+    }
+
+    fn turn_at(
+        &self,
+        app: Uuid,
+        waiter: Waiter,
+        cooldown: Duration,
+        now: Instant,
+    ) -> Option<Duration> {
+        let mut apps = self.apps.lock().unwrap_or_else(PoisonError::into_inner);
+        let apps = &mut *apps;
+        let (opens_in, gap) = match apps.limits.get(&app) {
+            Some(limit) => (
+                limit.next.saturating_duration_since(now).max(cooldown),
+                limit.gap,
+            ),
+            None if cooldown.is_zero() => {
+                apps.lines.remove(&app);
+                return None;
+            }
+            None => (cooldown, FIRST_GAP),
+        };
+        let wait = apps
+            .lines
+            .entry(app)
+            .or_default()
+            .turn(waiter, opens_in, gap, now);
+        if wait.is_none()
+            && let Some(limit) = apps.limits.get_mut(&app)
+        {
+            limit.next = now + limit.gap;
+        }
+        wait
     }
 }
 
@@ -86,7 +134,13 @@ mod tests {
     const PAUSE: Duration = Duration::from_secs(300);
 
     fn gap(limits: &AppReadLimits, app: Uuid) -> Option<Duration> {
-        limits.apps.lock().unwrap().get(&app).map(|limit| limit.gap)
+        limits
+            .apps
+            .lock()
+            .unwrap()
+            .limits
+            .get(&app)
+            .map(|limit| limit.gap)
     }
 
     #[test]
@@ -172,6 +226,80 @@ mod tests {
         limits.limited_at(app, PAUSE, now);
 
         assert_eq!(limits.limited_at(app, Duration::from_secs(30), now), PAUSE);
+    }
+
+    fn waiter(priority: i16) -> Waiter {
+        Waiter {
+            job: Uuid::now_v7(),
+            priority,
+        }
+    }
+
+    #[test]
+    fn an_app_that_reads_freely_keeps_no_line() {
+        let limits = AppReadLimits::default();
+        let app = Uuid::now_v7();
+        let now = Instant::now();
+
+        assert_eq!(limits.turn_at(app, waiter(20), Duration::ZERO, now), None);
+        assert!(limits.apps.lock().unwrap().lines.is_empty());
+    }
+
+    #[test]
+    fn a_limited_app_gives_each_waiter_its_own_turn_and_one_read_per_gap() {
+        let limits = AppReadLimits::default();
+        let app = Uuid::now_v7();
+        let now = Instant::now();
+        limits.limited_at(app, PAUSE, now);
+        let first = waiter(20);
+        let second = waiter(20);
+
+        assert_eq!(limits.turn_at(app, first, Duration::ZERO, now), Some(PAUSE));
+        assert_eq!(
+            limits.turn_at(app, second, Duration::ZERO, now + Duration::from_millis(1)),
+            Some(PAUSE - Duration::from_millis(1) + FIRST_GAP)
+        );
+
+        let opened = now + PAUSE;
+        assert_eq!(limits.turn_at(app, first, Duration::ZERO, opened), None);
+        assert_eq!(
+            limits.turn_at(app, second, Duration::ZERO, opened),
+            Some(FIRST_GAP)
+        );
+        assert_eq!(
+            limits.turn_at(app, second, Duration::ZERO, opened + FIRST_GAP),
+            None
+        );
+    }
+
+    #[test]
+    fn a_database_cooldown_lines_waiters_up_even_without_a_read_limit() {
+        let limits = AppReadLimits::default();
+        let app = Uuid::now_v7();
+        let now = Instant::now();
+        let cooldown = Duration::from_secs(1800);
+
+        assert_eq!(
+            limits.turn_at(app, waiter(20), cooldown, now),
+            Some(cooldown)
+        );
+        assert_eq!(
+            limits.turn_at(app, waiter(20), cooldown, now + Duration::from_millis(1)),
+            Some(cooldown + FIRST_GAP)
+        );
+    }
+
+    #[test]
+    fn a_longer_database_cooldown_overrides_the_read_pause() {
+        let limits = AppReadLimits::default();
+        let app = Uuid::now_v7();
+        let now = Instant::now();
+        limits.limited_at(app, PAUSE, now);
+
+        assert_eq!(
+            limits.turn_at(app, waiter(20), PAUSE * 3, now),
+            Some(PAUSE * 3)
+        );
     }
 
     #[test]

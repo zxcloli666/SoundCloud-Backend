@@ -129,7 +129,7 @@ fn a_rate_limited_collection_never_gives_up() {
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn an_owner_only_collection_of_a_signed_out_owner_fails_as_auth_required(
+async fn a_signed_out_owner_finishes_every_owner_collection_unverified(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let (job, mut payload, writer) = setup(&pool).await?;
@@ -139,20 +139,24 @@ async fn an_owner_only_collection_of_a_signed_out_owner_fails_as_auth_required(
         writer,
         pool: pool.clone(),
     };
-    state::begin(&pool, &job, &payload).await?;
-    state::abandon_apiv2(&pool, &job, &payload).await?;
-    handler.refresh(&job, payload.clone()).await?;
-    assert!(synced_at(&pool, "liked-tracks").await?.is_some());
+    for collection in [
+        CatalogCollection::LikedTracks,
+        CatalogCollection::LikedPlaylists,
+        CatalogCollection::OwnedPlaylists,
+        CatalogCollection::OwnedTracks,
+    ] {
+        payload.collection = collection;
+        state::begin(&pool, &job, &payload).await?;
+        state::abandon_apiv2(&pool, &job, &payload).await?;
 
-    payload.collection = CatalogCollection::LikedPlaylists;
-    let error = handler
-        .refresh(&job, payload)
-        .await
-        .err()
-        .ok_or_else(|| anyhow::anyhow!("a signed-out owner cannot finish the pass"))?;
+        handler.refresh(&job, payload.clone()).await?;
 
-    assert_eq!(failure_of(&error), Some(CollectionFailure::AuthRequired));
-    assert_eq!(synced_at(&pool, "liked-playlists").await?, None);
+        assert!(
+            synced_at(&pool, collection.as_str()).await?.is_some(),
+            "{}",
+            collection.as_str()
+        );
+    }
     Ok(())
 }
 
