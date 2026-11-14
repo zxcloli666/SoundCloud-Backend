@@ -189,6 +189,13 @@ pub async fn install_catalog(pg: &PgPool, tracks: &[TrackSeed]) -> anyhow::Resul
         .execute(pg)
         .await?;
         sqlx::query(
+            "INSERT INTO track_sync_stamps (track_id, sc_synced_at)
+             SELECT id, sc_synced_at FROM tracks WHERE id = $1",
+        )
+        .bind(track_id)
+        .execute(pg)
+        .await?;
+        sqlx::query(
             "INSERT INTO track_artists (track_id, artist_id, role, source)
              VALUES ($1, $2, 'primary', 'test')",
         )

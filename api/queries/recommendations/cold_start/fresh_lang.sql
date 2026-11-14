@@ -1,8 +1,9 @@
-SELECT sc_track_id
-FROM tracks
-WHERE sc_synced_at > NOW() - make_interval(days => $2::int)
-  AND language = ANY ($1)
-  AND sharing = 'public'
-  AND superseded_by IS NULL
-ORDER BY sc_synced_at DESC
+SELECT track.sc_track_id
+FROM track_sync_stamps AS stamp
+JOIN tracks AS track ON track.id = stamp.track_id
+WHERE stamp.sc_synced_at > NOW() - make_interval(days => $2::int)
+  AND track.language = ANY ($1)
+  AND track.sharing = 'public'
+  AND track.superseded_by IS NULL
+ORDER BY stamp.sc_synced_at DESC
     LIMIT $3

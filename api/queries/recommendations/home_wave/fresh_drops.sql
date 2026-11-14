@@ -22,13 +22,14 @@ HAVING COUNT (*) >= 2
 SELECT it.sc_track_id AS "sc_track_id!"
 FROM track_artists ta
          JOIN tracks it ON it.id = ta.track_id
+         JOIN track_sync_stamps stamp ON stamp.track_id = it.id
 WHERE ta.artist_id IN (SELECT artist_id FROM user_artists)
   AND ta.role = 'primary'
   AND it.sharing = 'public'
   AND it.superseded_by IS NULL
   AND it.storage_state = 'ok'
   AND it.needs_duration_resolve = false
-  AND it.sc_synced_at > NOW() - INTERVAL '30 days'
+  AND stamp.sc_synced_at > NOW() - INTERVAL '30 days'
   AND NOT (it.sc_track_id = ANY ($2))
-ORDER BY it.sc_synced_at DESC
+ORDER BY stamp.sc_synced_at DESC
     LIMIT $3
