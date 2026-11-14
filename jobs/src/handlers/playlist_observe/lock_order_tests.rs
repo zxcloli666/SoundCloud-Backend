@@ -461,6 +461,46 @@ async fn a_week_old_hydrated_track_that_changed_nothing_moves_only_its_stamp(
     Ok(())
 }
 
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn before_core_has_0354_a_week_old_unchanged_track_is_rewritten_as_before(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let core = split_core(&pool).await?;
+    let mut payload = hydrated(&["930".to_owned()]);
+    payload[0]["sc_last_modified"] = json!("2026-09-01T00:00:00Z");
+    payload[0]["play_count_sc"] = json!(5);
+    upsert(&core, &payload, 1).await?;
+    sqlx::query(
+        "UPDATE tracks SET sc_synced_at = sc_synced_at - interval '8 days' WHERE sc_track_id = '930'",
+    )
+    .execute(&core)
+    .await?;
+    sqlx::query(
+        "UPDATE track_sync_stamps SET sc_synced_at = sc_synced_at - interval '8 days'
+         WHERE track_id = (SELECT id FROM tracks WHERE sc_track_id = '930')",
+    )
+    .execute(&core)
+    .await?;
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 354")
+        .execute(&core)
+        .await?;
+
+    upsert(&core, &payload, 20_000_000).await?;
+
+    let row: (bool, bool) = sqlx::query_as(
+        "SELECT track.sc_synced_at > now() - interval '1 day',
+                stamp.sc_synced_at = track.sc_synced_at
+         FROM tracks AS track
+         JOIN track_sync_stamps AS stamp ON stamp.track_id = track.id
+         WHERE track.sc_track_id = '930'",
+    )
+    .fetch_one(&core)
+    .await?;
+    assert_eq!(row, (true, true));
+    Ok(())
+}
+
 async fn upsert(
     core: &PgPool,
     payload: &serde_json::Value,
