@@ -69,7 +69,7 @@ pub(crate) async fn upsert_user_at(
         .is_some_and(|user| user.was_new))
 }
 
-pub async fn unchanged_users_in(
+pub async fn users_looking_the_same_in(
     connection: &mut PgConnection,
     payloads: &[&Value],
 ) -> Result<HashSet<String>, sqlx::Error> {
@@ -80,10 +80,10 @@ pub async fn unchanged_users_in(
     if seen.is_empty() {
         return Ok(HashSet::new());
     }
-    let unchanged = sqlx::query_file_scalar!("queries/users/unchanged.sql", Value::Array(seen))
+    let same = sqlx::query_file_scalar!("queries/users/look_the_same.sql", Value::Array(seen))
         .fetch_all(connection)
         .await?;
-    Ok(unchanged.into_iter().collect())
+    Ok(same.into_iter().collect())
 }
 
 fn observed_row(payload: &Value) -> Option<Value> {
