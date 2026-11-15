@@ -314,7 +314,7 @@ fn both_reply_formats_ask_to_write_a_hard_name_with_how_it_is_said() {
         );
         assert_eq!(rules.matches("[[name|reading]]").count(), 1);
         assert!(rules.contains(
-            "Examples for a reply in Russian: [[Psychosis|Сайкозис]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]."
+            "Examples for a reply in Russian: [[Psychosis|Психоз]], [[$uicideboy$|Суисайдбойз]], [[6ix9ine|Сикс Найн]]."
         ));
     }
     assert!(
