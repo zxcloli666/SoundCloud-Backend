@@ -503,12 +503,14 @@
         "internal_error",
         "engine_restarted",
         "worker_lost",
-        "public_node_timeout"
+        "public_node_timeout",
+        "separation_skipped"
       ],
       "reopenable": [
         "engine_restarted",
         "worker_lost",
-        "public_node_timeout"
+        "public_node_timeout",
+        "separation_skipped"
       ],
       "result_max_bytes": 524288,
       "result_object_template": null,
@@ -536,7 +538,8 @@
         "out_of_memory",
         "download_failed",
         "internal_error",
-        "engine_restarted"
+        "engine_restarted",
+        "separation_skipped"
       ]
     }
   },
@@ -578,7 +581,8 @@
     "reopenable": [
       "engine_restarted",
       "worker_lost",
-      "public_node_timeout"
+      "public_node_timeout",
+      "separation_skipped"
     ],
     "transient": [
       "deadline_exceeded",
@@ -614,7 +618,8 @@
       "internal_error",
       "engine_restarted",
       "worker_lost",
-      "public_node_timeout"
+      "public_node_timeout",
+      "separation_skipped"
     ],
     "missing": [
       "audio_not_found",
@@ -1181,7 +1186,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -1412,7 +1418,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -1677,7 +1684,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -1922,7 +1930,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -2177,7 +2186,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -2507,7 +2517,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -2804,7 +2815,8 @@
             "internal_error",
             "engine_restarted",
             "worker_lost",
-            "public_node_timeout"
+            "public_node_timeout",
+            "separation_skipped"
           ],
           "type": "string"
         },
@@ -2947,7 +2959,8 @@
                   "internal_error",
                   "engine_restarted",
                   "worker_lost",
-                  "public_node_timeout"
+                  "public_node_timeout",
+                  "separation_skipped"
                 ]
               }
             },

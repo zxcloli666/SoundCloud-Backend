@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -19,17 +20,19 @@ from worker.domain.ports import (
     Float32Array,
     Int16Array,
     LanguageGuess,
+    Separation,
     Span,
     TextKind,
     TokenSpan,
 )
+from worker.fetch_models import FASTTEXT_HOME_ENV
 from worker.runtime.protocol import BadInput, ModelSlot, SlotSpec
 from worker.settings import Settings
 
 SYNC_SLOTS = ("sep", "asr", "align", "mms")
 MEMOIZED_METHODS = frozenset({"separate", "vad", "draft"})
 SINGLE_PROCESS_BATCH = {"sep": 1}
-LID_PATH = Path.home() / ".cache" / "fasttext" / "lid.176.bin"
+LID_FILE = "lid.176.bin"
 
 Invocation = tuple[Mapping[str, np.ndarray], Mapping[str, object]]
 
@@ -70,19 +73,25 @@ class LocalEngines:
         vad.load(self._spec("cpu-tools", "cpu"))
         vad.warmup()
         self._slots["cpu-tools"] = vad
-        if LID_PATH.is_file():
+        lid_path = lid_weights()
+        if lid_path.is_file():
             import fasttext
 
-            self._lid = fasttext.load_model(str(LID_PATH))
+            self._lid = fasttext.load_model(str(lid_path))
 
     def unload(self) -> None:
         for slot in self._slots.values():
             slot.unload()
         self._slots.clear()
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array:
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Separation:
+        started = time.perf_counter()
         arrays, _ = self._invoke("sep", "separate", {"mix": mix_stereo_44k}, {})
-        return np.asarray(arrays["vocals"], dtype=np.float32)
+        return Separation(
+            np.asarray(arrays["vocals"], dtype=np.float32), time.perf_counter() - started
+        )
 
     async def vad(
         self,
@@ -276,3 +285,10 @@ def alignment_of(result: Mapping[str, object]) -> Alignment:
         for start, end, score in list(result["spans"])
     )
     return Alignment(spans, float(result["score"]))
+
+
+def lid_weights() -> Path:
+    home = os.environ.get(FASTTEXT_HOME_ENV, "")
+    if home:
+        return Path(home) / LID_FILE
+    return Path.home() / ".cache" / "fasttext" / LID_FILE
