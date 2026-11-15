@@ -23,7 +23,9 @@ SHORT_TRACK_SCORE = 0.5
 CHROMA_LOW_HZ = 55.0
 CHROMA_HIGH_HZ = 5_000.0
 NOVELTY_SPAN = 4
-BOUNDARY_REACH = 1
+BOUNDARY_REACH = 2
+SNAP_REACH = 5
+CHROMA_GAIN = 100.0
 ENERGY_FLOOR = 1e-10
 NORM_FLOOR = 1e-9
 FloatMatrix = np.ndarray[tuple[int, int], np.dtype[np.float64]]
@@ -44,6 +46,12 @@ class Frames:
     chroma: FloatMatrix
 
 
+@dataclass(frozen=True)
+class Edges:
+    novelty: FloatVector
+    peaks: np.ndarray[tuple[int], np.dtype[np.bool_]]
+
+
 def find_moment(mono: Float32Array, sample_rate: int) -> Moment:
     signal = decode.resample(mono, sample_rate, ANALYSIS_RATE)
     duration_s = signal.shape[0] / ANALYSIS_RATE
@@ -53,19 +61,24 @@ def find_moment(mono: Float32Array, sample_rate: int) -> Moment:
     if count <= window:
         return Moment(0, round(duration_s * 1000), SHORT_TRACK_SCORE)
     starts: IntVector = np.arange(0, count - window + 1, round(STEP_S / FRAME_S), dtype=np.int64)
-    scores = window_scores(frames, starts, window, count)
+    edges = boundaries(frames)
+    scores = window_scores(frames, edges, starts, window, count)
     best = int(np.argmax(scores))
-    start_s = float(starts[best]) * FRAME_S
+    start_s = snapped(edges, int(starts[best]), count - window) * FRAME_S
     length_s = min(WINDOW_S, duration_s - start_s)
     return Moment(round(start_s * 1000), round(length_s * 1000), float(scores[best]))
 
 
-def window_scores(frames: Frames, starts: IntVector, window: int, count: int) -> FloatVector:
+def window_scores(
+    frames: Frames, edges: Edges, starts: IntVector, window: int, count: int
+) -> FloatVector:
     loudness = normalized(np.array([np.median(frames.energy_db[s : s + window]) for s in starts]))
     repetition = normalized(repetition_of(frames.chroma, starts, window))
-    peaks = boundaries(frames)
     boundary = np.array(
-        [float(peaks[max(0, s - BOUNDARY_REACH) : s + BOUNDARY_REACH + 1].any()) for s in starts]
+        [
+            float(edges.peaks[max(0, s - BOUNDARY_REACH) : s + BOUNDARY_REACH + 1].any())
+            for s in starts.tolist()
+        ]
     )
     blend = LOUDNESS_WEIGHT * loudness + REPETITION_WEIGHT * repetition + BOUNDARY_WEIGHT * boundary
     intro = starts < INTRO_SHARE * count
@@ -89,8 +102,10 @@ def frame_features(signal: Float32Array, rate: int) -> Frames:
     chroma = np.zeros((count, 12))
     for pitch_class in range(12):
         chroma[:, pitch_class] = spectrum[:, usable][:, classes == pitch_class].sum(axis=1)
-    norms = np.linalg.norm(chroma, axis=1, keepdims=True)
-    return Frames(energy_db, chroma / np.maximum(norms, NORM_FLOOR))
+    peak = np.maximum(chroma.max(axis=1, keepdims=True), NORM_FLOOR)
+    compressed = np.log1p(CHROMA_GAIN * chroma / peak)
+    norms = np.linalg.norm(compressed, axis=1, keepdims=True)
+    return Frames(energy_db, compressed / np.maximum(norms, NORM_FLOOR))
 
 
 def repetition_of(chroma: FloatMatrix, starts: IntVector, window: int) -> FloatVector:
@@ -112,7 +127,16 @@ def repetition_of(chroma: FloatMatrix, starts: IntVector, window: int) -> FloatV
     return best
 
 
-def boundaries(frames: Frames) -> np.ndarray[tuple[int], np.dtype[np.bool_]]:
+def snapped(edges: Edges, start: int, last: int) -> int:
+    low = max(0, start - SNAP_REACH)
+    high = min(last, start + SNAP_REACH)
+    near = [frame for frame in range(low, high + 1) if edges.peaks[frame]]
+    if not near:
+        return start
+    return max(near, key=lambda frame: (edges.novelty[frame], -abs(frame - start)))
+
+
+def boundaries(frames: Frames) -> Edges:
     count = frames.energy_db.shape[0]
     novelty = np.zeros(count)
     energy = normalized(frames.energy_db)
@@ -128,7 +152,7 @@ def boundaries(frames: Frames) -> np.ndarray[tuple[int], np.dtype[np.bool_]]:
     for frame in range(count):
         around = novelty[max(0, frame - NOVELTY_SPAN) : frame + NOVELTY_SPAN + 1]
         peaks[frame] = novelty[frame] > threshold and novelty[frame] >= around.max()
-    return peaks
+    return Edges(novelty, peaks)
 
 
 def normalized(values: FloatVector) -> FloatVector:

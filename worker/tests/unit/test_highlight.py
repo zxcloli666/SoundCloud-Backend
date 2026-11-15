@@ -94,6 +94,84 @@ def test_the_window_never_runs_past_the_end() -> None:
     assert found.length_ms == 30_000
 
 
+def test_the_start_lands_on_the_section_edge_off_the_step_grid() -> None:
+    track = song(
+        (21.3, INTRO, QUIET),
+        (30, VERSE, MEDIUM),
+        (30, CHORUS, LOUD),
+        (30, VERSE, MEDIUM),
+        (30, CHORUS, LOUD),
+        (20, OUTRO, QUIET),
+    )
+
+    found = moment.find_moment(track, RATE)
+
+    assert any(abs(found.start_ms / 1000 - start) <= 0.6 for start in (51.3, 111.3))
+
+
+def test_a_slightly_louder_bridge_still_loses_to_the_chorus() -> None:
+    track = song(
+        (20, INTRO, QUIET),
+        (30, VERSE, MEDIUM),
+        (30, CHORUS, LOUD),
+        (30, VERSE, MEDIUM),
+        (30, BRIDGE, LOUD * 1.15),
+        (30, CHORUS, LOUD),
+        (20, OUTRO, QUIET),
+    )
+
+    found = moment.find_moment(track, RATE)
+
+    assert starts_in(found, 50, 140)
+
+
+def test_a_loud_unique_intro_riff_never_wins() -> None:
+    track = song(
+        (25, INTRO, LOUD * 1.2),
+        (30, VERSE, MEDIUM),
+        (30, CHORUS, LOUD),
+        (30, VERSE, MEDIUM),
+        (30, CHORUS, LOUD),
+        (20, OUTRO, QUIET),
+    )
+
+    found = moment.find_moment(track, RATE)
+
+    assert starts_in(found, 55, 115)
+
+
+def test_leading_silence_never_wins() -> None:
+    track = np.concatenate(
+        [
+            np.zeros(RATE * 15, dtype=np.float32),
+            song((30, VERSE, MEDIUM), (30, CHORUS, LOUD), (30, VERSE, MEDIUM), (30, CHORUS, LOUD)),
+        ]
+    )
+
+    found = moment.find_moment(track, RATE)
+
+    assert starts_in(found, 45, 105)
+
+
+def test_a_track_just_past_the_window_keeps_a_full_window_inside() -> None:
+    found = moment.find_moment(section(31, CHORUS, LOUD, 2), RATE)
+
+    assert found.length_ms == 30_000
+    assert 0 <= found.start_ms <= 1_000
+
+
+def test_a_track_exactly_one_window_long_plays_whole() -> None:
+    found = moment.find_moment(section(30, CHORUS, LOUD, 3), RATE)
+
+    assert found == moment.Moment(0, 30_000, moment.SHORT_TRACK_SCORE)
+
+
+def test_the_same_audio_gives_the_same_moment() -> None:
+    track = song((20, INTRO, QUIET), (30, VERSE, MEDIUM), (30, CHORUS, LOUD), (30, VERSE, MEDIUM))
+
+    assert moment.find_moment(track, RATE) == moment.find_moment(track.copy(), RATE)
+
+
 class Harness:
     def __init__(
         self,
