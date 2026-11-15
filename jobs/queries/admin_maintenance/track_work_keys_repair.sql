@@ -1,10 +1,7 @@
 WITH locked AS MATERIALIZED (
     SELECT track.id,
            track.primary_artist_id,
-           track.superseded_by IS NOT NULL AS superseded,
-           track.work_key,
-           track.recording_key,
-           track.work_normalizer_version
+           track.superseded_by IS NOT NULL AS superseded
     FROM tracks AS track
     WHERE track.id = ANY ($1)
     ORDER BY track.id
@@ -15,15 +12,8 @@ WITH locked AS MATERIALIZED (
       AND NOT EXISTS (SELECT 1 FROM locked WHERE locked.id = keys.track_id)
     RETURNING keys.track_id
 ), written AS (
-    INSERT INTO track_work_keys AS stored (
-        track_id, primary_artist_id, superseded, work_key, recording_key, work_normalizer_version
-    )
-    SELECT locked.id,
-           locked.primary_artist_id,
-           locked.superseded,
-           locked.work_key,
-           locked.recording_key,
-           locked.work_normalizer_version
+    INSERT INTO track_work_keys AS stored (track_id, primary_artist_id, superseded)
+    SELECT locked.id, locked.primary_artist_id, locked.superseded
     FROM locked
     ORDER BY locked.id
     ON CONFLICT (track_id) DO UPDATE

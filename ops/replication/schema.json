@@ -2463,7 +2463,6 @@
     {"default": null, "generated": false, "name": "primary_artist_id", "notnull": false, "type": "uuid"},
     {"default": null, "generated": false, "name": "quality_model_version", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "quality_score", "notnull": false, "type": "real"},
-    {"default": null, "generated": false, "name": "recording_key", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "release_date", "notnull": false, "type": "date"},
     {"default": null, "generated": false, "name": "release_year", "notnull": false, "type": "smallint"},
     {"default": null, "generated": false, "name": "reposts_count_sc", "notnull": false, "type": "bigint"},
@@ -2495,9 +2494,7 @@
     {"default": null, "generated": false, "name": "uploader_urn", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "uploader_username", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "urn", "notnull": true, "type": "text"},
-    {"default": null, "generated": false, "name": "waveform_url", "notnull": false, "type": "text"},
-    {"default": null, "generated": false, "name": "work_key", "notnull": false, "type": "text"},
-    {"default": null, "generated": false, "name": "work_normalizer_version", "notnull": false, "type": "smallint"}
+    {"default": null, "generated": false, "name": "waveform_url", "notnull": false, "type": "text"}
    ],
    "fks": [
     {"cols": ["album_id"], "name": "tracks_album_id_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "albums"},
