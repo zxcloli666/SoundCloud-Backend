@@ -8,6 +8,8 @@ use crate::config::VoiceChatCfg;
 const MAX_PERSONA_CHARS: usize = 64;
 const MAX_HISTORY_ITEM_CHARS: usize = 2_000;
 const MAX_NOTE_CHARS: usize = 300;
+const MAX_LISTENER_NAME_CHARS: usize = 40;
+const MAX_RELATION_CHARS: usize = 300;
 const MAX_BLOCK_BYTES: usize = 8 * 1024;
 const MAX_RESULTS: usize = 16;
 const JSON_BYTES_PER_COUNTED: usize = 4;
@@ -33,6 +35,56 @@ pub struct ChatBody {
     results: Vec<ToolResult>,
     #[serde(default)]
     quiet: bool,
+    #[serde(default)]
+    listener: Option<Listener>,
+    #[serde(default)]
+    relation: Option<Relation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Gender {
+    Male,
+    Female,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Address {
+    Informal,
+    Formal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Preset {
+    Friend,
+    Assistant,
+    Butler,
+    Mentor,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct Listener {
+    #[serde(default)]
+    pub gender: Option<Gender>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub address: Option<Address>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Relation {
+    Preset(Preset),
+    Own(String),
+}
+
+impl Listener {
+    pub fn is_empty(&self) -> bool {
+        self.gender.is_none() && self.name.is_none() && self.address.is_none()
+    }
 }
 
 #[derive(Deserialize)]
@@ -68,6 +120,8 @@ pub struct Turn {
     pub tools: Tools,
     pub results: Option<String>,
     pub quiet: bool,
+    pub listener: Listener,
+    pub relation: Option<Relation>,
 }
 
 impl ChatBody {
@@ -107,6 +161,8 @@ impl ChatBody {
                 tools
             },
             quiet: self.quiet && self.results.is_empty(),
+            listener: listener(self.listener.unwrap_or_default())?,
+            relation: relation(self.relation)?,
             results: results(self.results)?,
         })
     }
@@ -139,6 +195,38 @@ fn language(code: &str) -> Result<Option<String>, String> {
         true => Ok(Some(code.to_owned())),
         false => Err("language is not a language code".to_owned()),
     }
+}
+
+fn listener(listener: Listener) -> Result<Listener, String> {
+    let name = typed_text(listener.name, MAX_LISTENER_NAME_CHARS, "listener name")?;
+    Ok(Listener { name, ..listener })
+}
+
+fn relation(relation: Option<Relation>) -> Result<Option<Relation>, String> {
+    match relation {
+        Some(Relation::Own(text)) => {
+            let own = typed_text(Some(text), MAX_RELATION_CHARS, "relation")?;
+            Ok(own.map(Relation::Own))
+        }
+        other => Ok(other),
+    }
+}
+
+fn typed_text(text: Option<String>, most: usize, what: &str) -> Result<Option<String>, String> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.chars().count() > most {
+        return Err(format!("{what} is longer than {most} characters"));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(format!("{what} has a control character"));
+    }
+    Ok(Some(text.to_owned()))
 }
 
 fn context(context: Value) -> Result<Option<String>, String> {
