@@ -28,15 +28,9 @@ WITH locked AS MATERIALIZED (
     ORDER BY locked.id
     ON CONFLICT (track_id) DO UPDATE
     SET primary_artist_id = EXCLUDED.primary_artist_id,
-        superseded = EXCLUDED.superseded,
-        work_key = EXCLUDED.work_key,
-        recording_key = EXCLUDED.recording_key,
-        work_normalizer_version = EXCLUDED.work_normalizer_version
-    WHERE (stored.primary_artist_id, stored.superseded, stored.work_key, stored.recording_key,
-           stored.work_normalizer_version)
-          IS DISTINCT FROM
-          (EXCLUDED.primary_artist_id, EXCLUDED.superseded, EXCLUDED.work_key, EXCLUDED.recording_key,
-           EXCLUDED.work_normalizer_version)
+        superseded = EXCLUDED.superseded
+    WHERE (stored.primary_artist_id, stored.superseded)
+          IS DISTINCT FROM (EXCLUDED.primary_artist_id, EXCLUDED.superseded)
     RETURNING stored.track_id
 )
 SELECT (SELECT count(*) FROM removed) AS "removed!",

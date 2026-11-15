@@ -1,9 +1,9 @@
 SELECT primary_artist_id AS "primary_artist_id!",
        recording_key     AS "recording_key!"
-FROM tracks
+FROM track_work_keys
 WHERE recording_key IS NOT NULL
   AND primary_artist_id IS NOT NULL
-  AND superseded_by IS NULL
+  AND NOT superseded
   AND ($1::uuid IS NULL OR (primary_artist_id, recording_key) > ($1::uuid, $2::text))
 GROUP BY primary_artist_id, recording_key
 HAVING count(*) > 1
