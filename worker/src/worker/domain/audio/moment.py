@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+from threadpoolctl import threadpool_limits
 
 from worker.domain.audio import decode
 from worker.domain.ports import Float32Array
 
-VERSION = 1
+VERSION = 2
 ANALYSIS_RATE = 16_000
 FRAME_S = 0.5
 WINDOW_S = 30.0
@@ -28,6 +30,12 @@ SNAP_REACH = 5
 CHROMA_GAIN = 100.0
 ENERGY_FLOOR = 1e-10
 NORM_FLOOR = 1e-9
+CHORUS_WEIGHT = 0.2
+REPLAY_WEIGHT = 0.1
+COMMENT_WEIGHT = 0.1
+CUE_LEAD_S = 2.5
+CUE_REACH_S = 15.0
+MIN_COMMENTS = 3
 FloatMatrix = np.ndarray[tuple[int, int], np.dtype[np.float64]]
 FloatVector = np.ndarray[tuple[int], np.dtype[np.float64]]
 IntVector = np.ndarray[tuple[int], np.dtype[np.int64]]
@@ -38,6 +46,16 @@ class Moment:
     start_ms: int
     length_ms: int
     score: float
+
+
+@dataclass(frozen=True)
+class Hints:
+    chorus_ms: Sequence[int] = ()
+    comment_ms: Sequence[int] = ()
+    replay_ms: Sequence[int] = ()
+
+
+NO_HINTS = Hints()
 
 
 @dataclass(frozen=True)
@@ -52,7 +70,31 @@ class Edges:
     peaks: np.ndarray[tuple[int], np.dtype[np.bool_]]
 
 
-def find_moment(mono: Float32Array, sample_rate: int) -> Moment:
+def hints_of(request: Mapping[str, object]) -> Hints:
+    raw = request.get("hints")
+    if not isinstance(raw, Mapping):
+        return NO_HINTS
+    return Hints(
+        chorus_ms=positions(raw.get("chorus_ms")),
+        comment_ms=positions(raw.get("comment_ms")),
+        replay_ms=positions(raw.get("replay_ms")),
+    )
+
+
+def positions(raw: object) -> tuple[int, ...]:
+    if not isinstance(raw, list):
+        return ()
+    return tuple(value for value in raw if type(value) is int and value >= 0)
+
+
+def find_moment_single_thread(
+    mono: Float32Array, sample_rate: int, hints: Hints = NO_HINTS
+) -> Moment:
+    with threadpool_limits(1):
+        return find_moment(mono, sample_rate, hints)
+
+
+def find_moment(mono: Float32Array, sample_rate: int, hints: Hints = NO_HINTS) -> Moment:
     signal = decode.resample(mono, sample_rate, ANALYSIS_RATE)
     duration_s = signal.shape[0] / ANALYSIS_RATE
     frames = frame_features(signal, ANALYSIS_RATE)
@@ -62,9 +104,13 @@ def find_moment(mono: Float32Array, sample_rate: int) -> Moment:
         return Moment(0, round(duration_s * 1000), SHORT_TRACK_SCORE)
     starts: IntVector = np.arange(0, count - window + 1, round(STEP_S / FRAME_S), dtype=np.int64)
     edges = boundaries(frames)
-    scores = window_scores(frames, edges, starts, window, count)
+    scores = np.clip(
+        window_scores(frames, edges, starts, window, count) + hint_bonus(hints, starts, window),
+        0.0,
+        1.0,
+    )
     best = int(np.argmax(scores))
-    start_s = snapped(edges, int(starts[best]), count - window) * FRAME_S
+    start_s = placed(edges, hints, int(starts[best]), count - window) * FRAME_S
     length_s = min(WINDOW_S, duration_s - start_s)
     return Moment(round(start_s * 1000), round(length_s * 1000), float(scores[best]))
 
@@ -86,6 +132,46 @@ def window_scores(
     penalty = EDGE_PENALTY * (intro.astype(np.float64) + outro.astype(np.float64))
     scored: FloatVector = np.clip(blend - penalty, 0.0, 1.0)
     return scored
+
+
+def hint_bonus(hints: Hints, starts: IntVector, window: int) -> FloatVector:
+    starts_s = starts.astype(np.float64) * FRAME_S
+    chorus = CHORUS_WEIGHT * cue_closeness(hints.chorus_ms, starts_s)
+    replay = REPLAY_WEIGHT * cue_closeness(hints.replay_ms, starts_s)
+    comments = COMMENT_WEIGHT * comment_density(hints.comment_ms, starts_s, window * FRAME_S)
+    bonus: FloatVector = chorus + replay + comments
+    return bonus
+
+
+def cue_closeness(cues_ms: Sequence[int], starts_s: FloatVector) -> FloatVector:
+    closeness = np.zeros(starts_s.shape[0])
+    for cue_s in np.asarray(cues_ms, dtype=np.float64) / 1000.0:
+        lead = cue_s - starts_s
+        near = np.where(lead < -CUE_LEAD_S, 0.0, 1.0 - np.maximum(lead, 0.0) / CUE_REACH_S)
+        closeness = np.maximum(closeness, np.clip(near, 0.0, 1.0))
+    return closeness
+
+
+def comment_density(
+    comments_ms: Sequence[int], starts_s: FloatVector, span_s: float
+) -> FloatVector:
+    if len(comments_ms) < MIN_COMMENTS:
+        return np.zeros(starts_s.shape[0])
+    at = np.sort(np.asarray(comments_ms, dtype=np.float64) / 1000.0)
+    inside = np.searchsorted(at, starts_s + span_s) - np.searchsorted(at, starts_s)
+    peak = int(inside.max())
+    if peak < MIN_COMMENTS:
+        return np.zeros(starts_s.shape[0])
+    density: FloatVector = inside.astype(np.float64) / peak
+    return density
+
+
+def placed(edges: Edges, hints: Hints, start: int, last: int) -> int:
+    cues = [round(cue / 1000 / FRAME_S) for cue in [*hints.chorus_ms, *hints.replay_ms]]
+    near = [cue for cue in cues if abs(cue - start) <= SNAP_REACH and 0 <= cue <= last]
+    if near:
+        return min(near, key=lambda cue: abs(cue - start))
+    return snapped(edges, start, last)
 
 
 def frame_features(signal: Float32Array, rate: int) -> Frames:

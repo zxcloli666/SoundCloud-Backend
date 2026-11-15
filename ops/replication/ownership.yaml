@@ -281,6 +281,7 @@ tables:
     note: "chat_bind has its own version, so a touch on another node never puts back an older bind"
   subscriptions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   track_artist_blocks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  track_seeks: {class: A, delete: none, insert_only: true, least: [created_at], note: "player seeks from POST /events; jobs on core reads the landings as the replay hint of the moment"}
   user_auras: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
   user_blocked_artists: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_events: {class: A, delete: none, insert_only: true, least: [created_at], note: "playlist adds carry the operation's id on every node"}

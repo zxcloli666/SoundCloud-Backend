@@ -3,7 +3,11 @@
 mod tests;
 
 use anyhow::ensure;
-use backend_contracts::pipeline::{AudioIndexRequest, INDEX_AUDIO, StorageTrackUploaded};
+use std::collections::HashMap;
+
+use backend_contracts::pipeline::{
+    AudioIndexRequest, INDEX_AUDIO, MomentHints, StorageTrackUploaded,
+};
 use backend_contracts::reasons::{FailureClass, WorkerReason, reasons_in};
 use backend_contracts::{JobKind, StoredAudioDispatchPayload, Versioned};
 use chrono::Utc;
@@ -12,6 +16,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::bus::{Bus, DeliveryContext};
+use crate::handlers::highlights::hints;
 use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier};
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
@@ -109,11 +114,16 @@ impl StorageUploadHandler {
             return Ok(());
         };
 
-        self.publish_audio_index(&AudioDispatch {
-            sc_track_id: payload.sc_track_id,
-            upload_generation: payload.uploaded_generation,
-            attempt,
-        })
+        let mut hints = self.moment_hints(&[payload.sc_track_id.clone()]).await;
+        let hints = hints.remove(&payload.sc_track_id);
+        self.publish_audio_index(
+            &AudioDispatch {
+                sc_track_id: payload.sc_track_id,
+                upload_generation: payload.uploaded_generation,
+                attempt,
+            },
+            hints,
+        )
         .await
     }
 
@@ -135,24 +145,48 @@ impl StorageUploadHandler {
         .await
         .map_err(JobError::retryable)?;
 
+        let ids: Vec<String> = reopened
+            .iter()
+            .map(|dispatch| dispatch.sc_track_id.clone())
+            .collect();
+        let mut hints = self.moment_hints(&ids).await;
         let mut first_failure = None;
         let count = i64::try_from(reopened.len()).unwrap_or(i64::MAX);
         for dispatch in reopened {
+            let hints = hints.remove(&dispatch.sc_track_id);
             tracing::info!(
                 track = %dispatch.sc_track_id,
                 generation = dispatch.upload_generation,
                 attempt = dispatch.attempt,
                 "audio index dispatch was reopened with a new attempt"
             );
-            if let Err(error) = self.publish_audio_index(&dispatch).await {
+            if let Err(error) = self.publish_audio_index(&dispatch, hints).await {
                 first_failure.get_or_insert(error);
             }
         }
         first_failure.map_or(Ok(count), Err)
     }
 
-    async fn publish_audio_index(&self, dispatch: &AudioDispatch) -> JobResult {
-        let published = match audio_index_request(&self.storage_url, dispatch) {
+    async fn moment_hints(&self, sc_track_ids: &[String]) -> HashMap<String, MomentHints> {
+        match hints::load(&self.pool, sc_track_ids).await {
+            Ok(hints) => hints,
+            Err(error) => {
+                tracing::warn!(
+                    tracks = sc_track_ids.len(),
+                    error = %error,
+                    "moment hints failed to load, the audio index goes out without them"
+                );
+                HashMap::new()
+            }
+        }
+    }
+
+    async fn publish_audio_index(
+        &self,
+        dispatch: &AudioDispatch,
+        hints: Option<MomentHints>,
+    ) -> JobResult {
+        let published = match audio_index_request(&self.storage_url, dispatch, hints) {
             Ok(request) => self
                 .bus
                 .publish_dedup(INDEX_AUDIO, &request, &audio_index_message_id(dispatch))
@@ -170,12 +204,14 @@ impl StorageUploadHandler {
 fn audio_index_request(
     storage_url: &Url,
     dispatch: &AudioDispatch,
+    hints: Option<MomentHints>,
 ) -> anyhow::Result<AudioIndexRequest> {
     Ok(AudioIndexRequest {
         s3_url: canonical_storage_url(storage_url, &dispatch.sc_track_id)?,
         sc_track_id: dispatch.sc_track_id.clone(),
         upload_generation: dispatch.upload_generation,
         attempt: i64::from(dispatch.attempt),
+        hints,
     })
 }
 

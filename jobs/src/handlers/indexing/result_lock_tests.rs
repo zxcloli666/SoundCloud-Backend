@@ -76,6 +76,7 @@ fn indexed() -> anyhow::Result<AudioIndex> {
         mert: Some(vec![0.25; TRACKS_MERT_DIMENSIONS as usize]),
         clap: Some(vec![0.5; TRACKS_CLAP_DIMENSIONS as usize]),
         fingerprint: Some(FINGERPRINT.to_owned()),
+        moment: None,
     };
     match validate_result(result)? {
         AudioResult::Indexed(index) => Ok(index),

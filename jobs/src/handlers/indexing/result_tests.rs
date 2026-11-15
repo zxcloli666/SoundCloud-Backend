@@ -276,6 +276,7 @@ fn result() -> AudioIndexResult {
         mert: Some(vec![0.25; TRACKS_MERT_DIMENSIONS as usize]),
         clap: Some(vec![0.5; TRACKS_CLAP_DIMENSIONS as usize]),
         fingerprint: Some(" fingerprint ".to_owned()),
+        moment: None,
     }
 }
 
@@ -297,6 +298,7 @@ fn lost_task(generation: i64, attempt: i64) -> anyhow::Result<Vec<u8>> {
         s3_url: "https://storage.example/soundcloud_tracks_42.m4a".to_owned(),
         upload_generation: generation,
         attempt,
+        hints: None,
     })?)
 }
 

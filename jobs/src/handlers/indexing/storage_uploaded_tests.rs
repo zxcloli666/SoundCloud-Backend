@@ -530,7 +530,7 @@ fn an_audio_index_task_names_its_generation_and_attempt() -> anyhow::Result<()> 
         attempt: 2,
     };
 
-    let request = audio_index_request(&storage_url, &dispatch)?;
+    let request = audio_index_request(&storage_url, &dispatch, None)?;
 
     assert_eq!(audio_index_message_id(&dispatch), "storage-audio:42:3:2");
     assert_eq!(

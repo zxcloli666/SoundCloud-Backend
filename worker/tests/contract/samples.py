@@ -20,6 +20,7 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "s3_url": "https://storage.example/audio/98765.opus",
             "upload_generation": 3,
             "attempt": 1,
+            "hints": {"chorus_ms": [61000, 121000], "comment_ms": [62000], "replay_ms": []},
         },
         "lyrics": {
             "sc_track_id": "98765",
@@ -65,7 +66,8 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "sc_track_id": "98765",
             "s3_url": "https://storage.example/audio/98765.opus",
             "attempt": 2,
-            "version": 1,
+            "version": 2,
+            "hints": {"chorus_ms": [61000], "comment_ms": [], "replay_ms": [60500]},
         },
     }
 )
@@ -307,7 +309,12 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
     match lane:
         case "audio":
             if ok:
-                return {"mert": vector(1024), "clap": vector(512), "fingerprint": "AQAD" * 16}
+                return {
+                    "mert": vector(1024),
+                    "clap": vector(512),
+                    "fingerprint": "AQAD" * 16,
+                    "moment": {"version": 2, "start_ms": 52500, "length_ms": 30000, "score": 0.83},
+                }
             return {}
         case "lyrics":
             if ok:
@@ -330,7 +337,7 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
             return taste_fields() if ok else {"dim": 128}
         case "highlight":
             if ok:
-                return {"version": 1, "start_ms": 52500, "length_ms": 30000, "score": 0.83}
+                return {"version": 2, "start_ms": 52500, "length_ms": 30000, "score": 0.83}
             return {}
     raise AssertionError(f"no fields for lane {lane}")
 

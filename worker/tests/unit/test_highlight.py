@@ -172,6 +172,114 @@ def test_the_same_audio_gives_the_same_moment() -> None:
     assert moment.find_moment(track, RATE) == moment.find_moment(track.copy(), RATE)
 
 
+AMBIGUOUS = (
+    (20, INTRO, QUIET),
+    (30, VERSE, MEDIUM),
+    (30, CHORUS, LOUD),
+    (30, BRIDGE, LOUD),
+    (30, VERSE, MEDIUM),
+    (20, OUTRO, QUIET),
+)
+
+
+RUNNER_UP_MS = 80_000
+
+
+def runner_up(track: np.ndarray) -> int:
+    assert not starts_in(moment.find_moment(track, RATE), RUNNER_UP_MS / 1000)
+    return RUNNER_UP_MS
+
+
+def test_no_hints_keep_the_v1_pick() -> None:
+    track = song(*AMBIGUOUS)
+
+    plain = moment.find_moment(track, RATE)
+
+    assert moment.find_moment(track, RATE, moment.Hints()) == plain
+    assert moment.find_moment(track, RATE, moment.Hints(comment_ms=(55_000, 56_000))) == plain
+
+
+def test_a_lyric_repeat_moves_an_ambiguous_pick_to_the_chorus() -> None:
+    track = song(*AMBIGUOUS)
+    other = runner_up(track)
+
+    found = moment.find_moment(track, RATE, moment.Hints(chorus_ms=(other,)))
+
+    assert found.start_ms == other
+
+
+def test_a_comment_cluster_nudges_an_ambiguous_pick() -> None:
+    track = song(*AMBIGUOUS)
+    other = runner_up(track)
+    cluster = tuple(other + offset for offset in range(2_000, 20_000, 1_500))
+
+    found = moment.find_moment(track, RATE, moment.Hints(comment_ms=(5_000, *cluster)))
+
+    assert starts_in(found, other / 1000)
+
+
+def test_replay_landings_nudge_an_ambiguous_pick() -> None:
+    track = song(*AMBIGUOUS)
+    other = runner_up(track)
+
+    found = moment.find_moment(
+        track, RATE, moment.Hints(replay_ms=(other,), comment_ms=(other,) * 3)
+    )
+
+    assert found.start_ms == other
+
+
+def test_a_clear_chorus_beats_hints_on_a_quiet_verse() -> None:
+    track = song(
+        (20, INTRO, QUIET),
+        (30, VERSE, QUIET),
+        (30, CHORUS, LOUD),
+        (30, VERSE, QUIET),
+        (30, CHORUS, LOUD),
+        (20, OUTRO, QUIET),
+    )
+    hints = moment.Hints(
+        chorus_ms=(20_000,), comment_ms=(21_000, 22_000, 25_000), replay_ms=(20_000,)
+    )
+
+    found = moment.find_moment(track, RATE, hints)
+
+    assert starts_in(found, 50, 110)
+
+
+def test_hints_past_the_end_or_on_a_short_track_change_nothing() -> None:
+    track = song(*AMBIGUOUS)
+    late = moment.Hints(chorus_ms=(900_000,), comment_ms=(900_000,) * 5, replay_ms=(901_000,))
+    short = section(24, CHORUS, LOUD, 1)
+
+    assert moment.find_moment(track, RATE, late) == moment.find_moment(track, RATE)
+    assert moment.find_moment(short, RATE, late) == moment.Moment(
+        0, 24_000, moment.SHORT_TRACK_SCORE
+    )
+
+
+def test_hints_are_read_leniently_from_the_request() -> None:
+    request = {
+        "hints": {
+            "chorus_ms": [61_000, -5, True, "x", 121_000],
+            "comment_ms": "nope",
+        }
+    }
+
+    assert moment.hints_of(request) == moment.Hints(chorus_ms=(61_000, 121_000))
+    assert moment.hints_of({}) == moment.NO_HINTS
+    assert moment.hints_of({"hints": None}) == moment.NO_HINTS
+
+
+def test_the_single_thread_entry_gives_the_same_moment() -> None:
+    track = song(*AMBIGUOUS)
+    hints = moment.Hints(chorus_ms=(80_000,))
+
+    assert moment.find_moment_single_thread(track, RATE, hints) == moment.find_moment(
+        track, RATE, hints
+    )
+
+
 class Harness:
     def __init__(
         self,
@@ -192,10 +300,19 @@ class Harness:
         )
         self.lane = HighlightLane(source, Workspace(work_dir, counters), audio, counters)
 
-    async def run(self, body: bytes, path: str = "/ok.wav") -> Outcome:
+    async def run(
+        self, body: bytes, path: str = "/ok.wav", hints: dict[str, list[int]] | None = None
+    ) -> Outcome:
         self.server.body = body
-        request = {"sc_track_id": "98765", "s3_url": self.server.url(path), "attempt": 1}
-        return await self.lane.process({**request, "version": 1}, Deadline.after(60))
+        request: dict[str, object] = {
+            "sc_track_id": "98765",
+            "s3_url": self.server.url(path),
+            "attempt": 1,
+            "version": moment.VERSION,
+        }
+        if hints is not None:
+            request["hints"] = hints
+        return await self.lane.process(request, Deadline.after(60))
 
 
 @pytest.fixture
@@ -213,6 +330,18 @@ async def test_the_lane_publishes_the_moment_with_its_algorithm_version(harness:
     assert outcome.fields["version"] == moment.VERSION
     assert outcome.fields["length_ms"] == 30_000
     assert 0 <= int(str(outcome.fields["start_ms"])) <= 90_000
+
+
+async def test_the_lane_follows_a_chorus_hint(harness: Harness) -> None:
+    track = song(*AMBIGUOUS)
+    other = runner_up(track)
+
+    outcome = await harness.run(
+        wav_bytes(np.stack([track, track], axis=1), RATE), hints={"chorus_ms": [other]}
+    )
+
+    assert outcome.status is Status.OK
+    assert abs(int(str(outcome.fields["start_ms"])) - other) <= 100
 
 
 async def test_silence_has_no_moment(harness: Harness) -> None:

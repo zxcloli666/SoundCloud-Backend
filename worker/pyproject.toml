@@ -7,6 +7,7 @@ dependencies = [
     "aiohttp==3.14.4",
     "orjson==3.12.0",
     "numpy>=2,<3",
+    "threadpoolctl>=3.5",
     "jsonschema>=4.23",
     "soxr>=0.5",
     "soundfile>=0.13",
@@ -162,5 +163,6 @@ module = [
     "ml_collections.*",
     "ctc_forced_aligner.*",
     "gensim.*",
+    "threadpoolctl",
 ]
 ignore_missing_imports = true

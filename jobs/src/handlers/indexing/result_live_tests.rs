@@ -164,6 +164,7 @@ fn result(point: u64, generation: i64) -> AudioIndexResult {
         mert: Some(vec![0.25; TRACKS_MERT_DIMENSIONS as usize]),
         clap: Some(vec![0.5; TRACKS_CLAP_DIMENSIONS as usize]),
         fingerprint: None,
+        moment: None,
     }
 }
 

@@ -141,6 +141,7 @@ SELECT v.cls FROM (VALUES
     ('track_highlight_dispatch', 'P'),
     ('track_highlights', 'C'),
     ('track_search', 'C'),
+    ('track_seeks', 'A'),
     ('track_storage_failures', 'P'),
     ('track_sync_stamps', 'C'),
     ('track_work_aliases', 'P'),
@@ -311,6 +312,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_highlights', jsonb_build_object('track_id', t.track_id) FROM public.track_highlights t ON CONFLICT DO NOTHING;
         WHEN 'track_search' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_search', jsonb_build_object('id', t.id) FROM public.track_search t ON CONFLICT DO NOTHING;
+        WHEN 'track_seeks' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_seeks', jsonb_build_object('id', t.id) FROM public.track_seeks t ON CONFLICT DO NOTHING;
         WHEN 'track_sync_stamps' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_sync_stamps', jsonb_build_object('track_id', t.track_id) FROM public.track_sync_stamps t ON CONFLICT DO NOTHING;
         WHEN 'tracks' THEN
@@ -425,6 +428,7 @@ BEGIN
         ('track_comments', 'C'),
         ('track_highlights', 'C'),
         ('track_search', 'C'),
+        ('track_seeks', 'A'),
         ('track_sync_stamps', 'C'),
         ('tracks', 'C'),
         ('user_auras', 'A'),

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::pipeline::{HIGHLIGHT_VERSION, HighlightResult, Producer};
+use backend_contracts::pipeline::{HIGHLIGHT_VERSION, HighlightResult, MomentHints, Producer};
 use backend_contracts::reasons::{WorkerReason, WorkerStatus};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
@@ -306,5 +306,75 @@ async fn a_switched_off_sweep_waits_for_shutdown_instead_of_exiting(
 
     cancellation.cancel();
     tokio::time::timeout(Duration::from_secs(5), sweep).await???;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_moment_from_the_audio_index_settles_the_track_without_a_fetch(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    track(&pool, "41", 100, true).await?;
+    let indexed = |version: i16, start_ms: i32| {
+        sqlx::query(include_str!("../../../queries/highlights/indexed.sql"))
+            .bind("41")
+            .bind(start_ms)
+            .bind(30_000_i32)
+            .bind(0.6_f32)
+            .bind(version)
+    };
+
+    indexed(HIGHLIGHT_VERSION, 61_000).execute(&pool).await?;
+    indexed(HIGHLIGHT_VERSION - 1, 5_000).execute(&pool).await?;
+    walk(&pool, Uuid::nil(), 100).await?;
+
+    assert_eq!(
+        stored(&pool, "41").await?,
+        Some((61_000, 30_000, 0.6, HIGHLIGHT_VERSION))
+    );
+    assert_eq!(dispatch_state(&pool, "41").await?.0, "done");
+    assert!(claim(&pool, 4).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn hints_carry_chorus_returns_comments_and_shared_replay_landings(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    track(&pool, "51", 100, true).await?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, synced_lrc, source)
+         VALUES ('51', E'[00:10.00]First verse here\\n[00:30.00]Hold me now\\n[01:30.00]Hold me now', 'lrclib')",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO track_comments (id, sc_track_id, user_urn, body, track_position_ms)
+         SELECT gen_random_uuid(), '51', 'soundcloud:users:' || g, 'x', 60000 + g * 100
+         FROM generate_series(1, 4) AS g",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO track_seeks (id, sc_user_id, sc_track_id, position_ms, from_ms, source)
+         SELECT gen_random_uuid(), 'u' || g, '51', 61000 + g * 10, 120000, 'player'
+         FROM generate_series(1, 3) AS g
+         UNION ALL
+         SELECT gen_random_uuid(), 'm' || g, '51', 20000, 0, 'moment'
+         FROM generate_series(1, 5) AS g
+         UNION ALL
+         SELECT gen_random_uuid(), 'solo', '51', 150000, 0, 'player'",
+    )
+    .execute(&pool)
+    .await?;
+
+    let hints = super::hints::load(&pool, &["51".to_owned(), "52".to_owned()])
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let found = hints.get("51").cloned().unwrap_or_default();
+
+    assert_eq!(found.chorus_ms, [30_000, 90_000]);
+    assert_eq!(found.comment_ms, [60_100, 60_200, 60_300, 60_400]);
+    assert_eq!(found.replay_ms, [61_020]);
+    assert_eq!(hints.get("52"), Some(&MomentHints::default()));
     Ok(())
 }

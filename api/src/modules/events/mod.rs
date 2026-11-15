@@ -1,4 +1,5 @@
 pub mod handlers;
+pub mod seek;
 pub mod service;
 
 pub use handlers::router;

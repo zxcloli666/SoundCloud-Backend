@@ -1066,6 +1066,18 @@ AS $f$
 SELECT md5(ROW(t.duration_ms, t.id, t.metadata_artist, t.play_count_sc, t.sc_track_id, t.title, t.title_normalized, t.uploader_sc_user_id, t.uploader_username, t.variant)::text) FROM public.track_search t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_seeks(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.created_at, t.from_ms, t.id, t.position_ms, t.sc_track_id, t.sc_user_id, t.source)::text) FROM public.track_seeks t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_storage_failures(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1586,6 +1598,8 @@ BEGIN
             RETURN public.scd_row_hash_track_highlights(k);
         WHEN 'track_search' THEN
             RETURN public.scd_row_hash_track_search(k);
+        WHEN 'track_seeks' THEN
+            RETURN public.scd_row_hash_track_seeks(k);
         WHEN 'track_storage_failures' THEN
             RETURN public.scd_row_hash_track_storage_failures(k);
         WHEN 'track_sync_stamps' THEN
