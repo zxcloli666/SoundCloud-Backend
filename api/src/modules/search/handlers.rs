@@ -200,5 +200,7 @@ async fn resolve(
             &body.fuller,
         )
         .await?;
-    Ok(Json(json!({ "results": found })))
+    Ok(Json(
+        json!({ "results": found.results, "partial": found.partial }),
+    ))
 }

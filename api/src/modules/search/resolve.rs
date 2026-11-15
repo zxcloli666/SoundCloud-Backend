@@ -68,6 +68,11 @@ impl Resolved {
     }
 }
 
+pub struct Resolution {
+    pub results: BTreeMap<Kind, Vec<Resolved>>,
+    pub partial: bool,
+}
+
 struct Asked {
     variant: usize,
     q: String,
@@ -150,6 +155,10 @@ pub fn past_deadline(found: Vec<Resolved>) -> AppResult<Vec<Resolved>> {
     }
 }
 
+fn cut_short(found: Vec<Resolved>) -> (Vec<Resolved>, bool) {
+    (found, true)
+}
+
 pub fn keep_on_timeout(found: Vec<Resolved>, error: AppError) -> AppResult<Vec<Resolved>> {
     let error = failure::map(error);
     match Shed::of(&error) {
@@ -198,14 +207,14 @@ impl SearchService {
         per_kind: i64,
         known: bool,
         fuller: &[String],
-    ) -> AppResult<BTreeMap<Kind, Vec<Resolved>>> {
+    ) -> AppResult<Resolution> {
         let queries = clean_variants(variants);
         let known = known && first_kept(variants, &queries);
         let fuller = clean_variants(fuller);
         let kinds = clean_kinds(kinds);
         let per_kind = per_kind.clamp(1, MAX_PER_KIND);
         let soft = Instant::now() + SOFT_BUDGET;
-        let found = self
+        let (found, partial) = self
             .guarded(|| async {
                 let mut lanes = self.lanes(kinds.len()).await?;
                 let mut found = Vec::new();
@@ -256,15 +265,18 @@ impl SearchService {
                                 });
                             }
                         }
-                        Ok(Err(error)) => return keep_on_timeout(found, error),
-                        Err(_) => return past_deadline(found),
+                        Ok(Err(error)) => return keep_on_timeout(found, error).map(cut_short),
+                        Err(_) => return past_deadline(found).map(cut_short),
                     }
                 }
                 try_join_all(lanes.into_iter().map(|lane| lane.tx.commit())).await?;
-                Ok::<Vec<Resolved>, crate::error::AppError>(found)
+                Ok::<(Vec<Resolved>, bool), crate::error::AppError>((found, false))
             })
             .await?;
-        Ok(merge(found, per_kind as usize))
+        Ok(Resolution {
+            results: merge(found, per_kind as usize),
+            partial,
+        })
     }
 
     async fn resolve_variant(

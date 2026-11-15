@@ -122,7 +122,7 @@ async fn found_of(pool: &PgPool, kinds: &[Kind], said: &[&str]) -> anyhow::Resul
     let found = service(pool)?
         .resolve(&variants, kinds, 5, false, &[])
         .await?;
-    Ok(found.into_values().flatten().collect())
+    Ok(found.results.into_values().flatten().collect())
 }
 
 async fn found_of_a_known_name(
@@ -137,7 +137,7 @@ async fn found_of_a_known_name(
     let found = service(pool)?
         .resolve(&variants, kinds, 5, true, &fuller)
         .await?;
-    Ok(found.into_values().flatten().collect())
+    Ok(found.results.into_values().flatten().collect())
 }
 
 async fn artists_of_a_known_name(pool: &PgPool, said: &[&str]) -> anyhow::Result<Vec<Resolved>> {
@@ -513,7 +513,7 @@ async fn a_kind_that_cannot_answer_in_time_does_not_hold_back_the_other_kinds(
 ) -> anyhow::Result<()> {
     seed_a_name_and_its_other_form(&pool, 0.5).await?;
     let mut locked = pool.begin().await?;
-    sqlx::query("LOCK TABLE tracks IN ACCESS EXCLUSIVE MODE")
+    sqlx::query("LOCK TABLE track_search IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *locked)
         .await?;
     let own = a_pool_with_idle(&pool, IDLE_KEPT + 2).await?;
@@ -524,11 +524,13 @@ async fn a_kind_that_cannot_answer_in_time_does_not_hold_back_the_other_kinds(
     own.close().await;
     let found = found?;
     let ids: Vec<&str> = found
+        .results
         .values()
         .flatten()
         .map(|hit| hit.id.as_str())
         .collect();
-    assert_eq!(ids, [WHOLE], "{found:?}");
+    assert_eq!(ids, [WHOLE], "{:?}", found.results);
+    assert!(found.partial);
     Ok(())
 }
 
@@ -546,6 +548,8 @@ async fn with_no_connection_to_spare_every_kind_is_still_asked(pool: PgPool) -> 
     own.close().await;
     assert_eq!(lanes?, 1);
     let found = found?;
+    assert!(!found.partial);
+    let found = found.results;
     assert_eq!(found[&Kind::Artist][0].id, WHOLE, "{found:?}");
     assert_eq!(
         found[&Kind::Track][0].id,
