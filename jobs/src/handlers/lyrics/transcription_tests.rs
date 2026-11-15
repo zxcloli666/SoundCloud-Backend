@@ -543,7 +543,10 @@ async fn aligned_result_replaces_an_lrclib_sync(pool: PgPool) -> anyhow::Result<
     );
     assert_eq!(
         sync_provenance(&pool).await?,
-        (Some("self_gen".to_owned()), Some("s2.aaaa.bbbb.cccc".to_owned()))
+        (
+            Some("self_gen".to_owned()),
+            Some("s2.aaaa.bbbb.cccc".to_owned())
+        )
     );
     Ok(())
 }
