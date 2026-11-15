@@ -117,6 +117,8 @@ class TranscribeLane:
         vocals, separated = await self._vocals(task, deadline)
         regions = await self._regions(vocals, deadline)
         if region_tools.total_speech_s(regions) < MIN_SPEECH_S:
+            if not separated:
+                return self._unseparated(Reason.NO_VOCAL_DETECTED)
             return self._rejected(
                 Reason.NO_VOCAL_DETECTED,
                 f"speech_s={region_tools.total_speech_s(regions):.1f}",
@@ -390,6 +392,8 @@ class TranscribeLane:
         )
         if not verdict.accepted:
             reason = verdict.reason or Reason.LOW_CONFIDENCE
+            if not verdict.metrics.separated:
+                return self._unseparated(reason)
             return self._rejected(
                 reason,
                 rejection_detail(reason, verdict),
@@ -413,6 +417,12 @@ class TranscribeLane:
         track: str | None,
     ) -> Outcome:
         return Outcome.of(reason, detail, **self._metric_fields(metrics, confidence, track))
+
+    def _unseparated(self, verdict_reason: Reason) -> Outcome:
+        self._counters.inc("unseparated_rejection_total", reason=verdict_reason.value)
+        return self._outcome(
+            Reason.SEPARATION_SKIPPED, f"would reject on the mix: {verdict_reason.value}"
+        )
 
     def _metric_fields(
         self, metrics: quality.Metrics, confidence: float, track: str | None

@@ -147,7 +147,7 @@ async def test_global_ctc_score_under_the_wrong_text_ceiling_is_a_mismatch(
         harness.request(UKRAINIAN, language="uk"), Deadline.after(60)
     )
     assert (outcome.status, outcome.reason) == (Status.REJECTED, Reason.LYRICS_MISMATCH)
-    assert outcome.detail == "anchor_agreement=0.29 language_agreement=None"
+    assert outcome.detail == "anchor_agreement=0.22 language_agreement=None"
 
 
 @pytest.mark.parametrize(
@@ -216,6 +216,29 @@ async def test_separator_failure_falls_back_to_the_mix(harness: LaneHarness) -> 
     outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
     assert outcome.status is Status.OK, outcome.detail
     assert harness.counters.value("separation_fallback_total") == 1
+
+
+async def test_no_speech_on_the_mix_waits_for_a_separated_run(harness: LaneHarness) -> None:
+    harness.engines.fail("separate", EngineUnavailable("sep", "restarting"))
+    harness.engines.regions = []
+    outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
+    assert (outcome.status, outcome.reason) == (Status.FAILED, Reason.SEPARATION_SKIPPED)
+    assert outcome.detail == "would reject on the mix: no_vocal_detected"
+    assert harness.counters.value("unseparated_rejection_total", reason="no_vocal_detected") == 1
+
+
+async def test_a_rejection_on_the_mix_waits_for_a_separated_run(harness: LaneHarness) -> None:
+    harness.engines.fail("separate", EngineUnavailable("sep", "restarting"))
+    harness.engines.drafts = [
+        Draft("we walked along the river when the city lights went down", "en", 0.99),
+        Draft("every word you never said still echoes in this town", "en", 0.99),
+        Draft("hold me closer than the night and never let me go", "en", 0.99),
+        Draft("the morning comes too early", "en", 0.99),
+        Draft("and the evening comes too slow", "en", 0.99),
+    ]
+    outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
+    assert (outcome.status, outcome.reason) == (Status.FAILED, Reason.SEPARATION_SKIPPED)
+    assert outcome.detail == "would reject on the mix: lyrics_mismatch"
 
 
 async def test_separation_gets_half_of_the_remaining_deadline(harness: LaneHarness) -> None:

@@ -92,10 +92,11 @@ pub enum WorkerReason {
     EngineRestarted,
     WorkerLost,
     PublicNodeTimeout,
+    SeparationSkipped,
 }
 
 impl WorkerReason {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::EmptyText,
         Self::EmptyReferenceText,
         Self::SilentAudio,
@@ -129,6 +130,7 @@ impl WorkerReason {
         Self::EngineRestarted,
         Self::WorkerLost,
         Self::PublicNodeTimeout,
+        Self::SeparationSkipped,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -166,6 +168,7 @@ impl WorkerReason {
             Self::EngineRestarted => "engine_restarted",
             Self::WorkerLost => "worker_lost",
             Self::PublicNodeTimeout => "public_node_timeout",
+            Self::SeparationSkipped => "separation_skipped",
         }
     }
 
@@ -207,9 +210,10 @@ impl WorkerReason {
             | Self::DownloadFailed
             | Self::ObjectStoreUnavailable
             | Self::InternalError => Some(FailureClass::Transient),
-            Self::EngineRestarted | Self::WorkerLost | Self::PublicNodeTimeout => {
-                Some(FailureClass::Reopenable)
-            }
+            Self::EngineRestarted
+            | Self::WorkerLost
+            | Self::PublicNodeTimeout
+            | Self::SeparationSkipped => Some(FailureClass::Reopenable),
             _ => None,
         }
     }
@@ -288,6 +292,7 @@ impl WorkerLane {
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
                 WorkerReason::PublicNodeTimeout,
+                WorkerReason::SeparationSkipped,
             ],
             Self::Encode => &[
                 WorkerReason::EmptyText,
@@ -357,10 +362,16 @@ impl WorkerLane {
 
     pub const fn reopenable(self) -> &'static [WorkerReason] {
         match self {
-            Self::Audio | Self::Transcribe => &[
+            Self::Audio => &[
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
                 WorkerReason::PublicNodeTimeout,
+            ],
+            Self::Transcribe => &[
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::PublicNodeTimeout,
+                WorkerReason::SeparationSkipped,
             ],
             Self::Lyrics | Self::Collab | Self::Taste | Self::Highlight => {
                 &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost]
@@ -438,7 +449,15 @@ mod tests {
         let two = ["engine_restarted", "worker_lost"];
 
         assert_eq!(names(WorkerLane::Audio), three);
-        assert_eq!(names(WorkerLane::Transcribe), three);
+        assert_eq!(
+            names(WorkerLane::Transcribe),
+            [
+                "engine_restarted",
+                "worker_lost",
+                "public_node_timeout",
+                "separation_skipped"
+            ]
+        );
         assert_eq!(names(WorkerLane::Lyrics), two);
         assert_eq!(names(WorkerLane::Collab), two);
         assert_eq!(names(WorkerLane::Taste), two);

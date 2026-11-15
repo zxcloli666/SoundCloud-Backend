@@ -403,6 +403,11 @@ mod tests {
                 Some(WorkerReason::PublicNodeTimeout),
                 Outcome::Reopenable,
             ),
+            (
+                WorkerStatus::Failed,
+                Some(WorkerReason::SeparationSkipped),
+                Outcome::Reopenable,
+            ),
         ];
         for (status, reason, expected) in cases {
             assert_eq!(validate(result(status, reason))?.outcome, expected);

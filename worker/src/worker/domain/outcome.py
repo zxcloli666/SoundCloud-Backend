@@ -50,6 +50,7 @@ class Reason(StrEnum):
     ENGINE_RESTARTED = "engine_restarted"
     WORKER_LOST = "worker_lost"
     PUBLIC_NODE_TIMEOUT = "public_node_timeout"
+    SEPARATION_SKIPPED = "separation_skipped"
 
 
 EMPTY_REASONS = frozenset(
@@ -99,7 +100,12 @@ TRANSIENT_FAILURES = frozenset(
     }
 )
 REOPENABLE_FAILURES = frozenset(
-    {Reason.ENGINE_RESTARTED, Reason.WORKER_LOST, Reason.PUBLIC_NODE_TIMEOUT}
+    {
+        Reason.ENGINE_RESTARTED,
+        Reason.WORKER_LOST,
+        Reason.PUBLIC_NODE_TIMEOUT,
+        Reason.SEPARATION_SKIPPED,
+    }
 )
 FAILED_REASONS = DETERMINISTIC_FAILURES | TRANSIENT_FAILURES | REOPENABLE_FAILURES
 
