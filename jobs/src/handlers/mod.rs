@@ -24,6 +24,7 @@ mod egress;
 mod encode;
 mod enrich;
 mod external;
+pub(crate) mod highlights;
 mod indexing;
 mod lyrics;
 mod maintenance;

@@ -56,11 +56,36 @@ impl SeedKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WaveMode {
+    #[default]
+    Full,
+    Moments,
+}
+
+impl WaveMode {
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("moments") => Self::Moments,
+            _ => Self::Full,
+        }
+    }
+
+    fn key_suffix(self) -> &'static str {
+        match self {
+            Self::Full => "",
+            Self::Moments => ":moments",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaveCursor {
     pub handle: String,
     pub seed_kind: SeedKind,
     pub seed_key: String,
+    #[serde(default)]
+    pub mode: WaveMode,
     pub served: u32,
     pub seen_tracks: VecDeque<u64>,
     pub seen_artists: VecDeque<Uuid>,
@@ -78,6 +103,7 @@ impl WaveCursor {
             handle,
             seed_kind,
             seed_key,
+            mode: WaveMode::Full,
             served: 0,
             seen_tracks: VecDeque::with_capacity(SEEN_TRACKS_CAP),
             seen_artists: VecDeque::with_capacity(ARTIST_WINDOW),
@@ -87,10 +113,16 @@ impl WaveCursor {
         }
     }
 
+    pub fn in_mode(mut self, mode: WaveMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
     pub fn redis_key(&self, owner: &str) -> String {
         format!(
-            "smartwave:cursor:{}:{}:{}:{}",
+            "smartwave:cursor:{}{}:{}:{}:{}",
             self.seed_kind.as_str(),
+            self.mode.key_suffix(),
             owner,
             self.seed_key,
             self.handle
@@ -165,11 +197,13 @@ pub async fn load_or_new(
     token: Option<&str>,
     seed_kind: SeedKind,
     seed_key: &str,
+    mode: WaveMode,
 ) -> WaveCursor {
     if let Some(t) = token
         && let Some(mut c) = read(redis, owner, t).await
         && c.seed_kind == seed_kind
         && c.seed_key == seed_key
+        && c.mode == mode
     {
         let pending = match redis.get().await {
             Ok(mut conn) => conn
@@ -188,7 +222,7 @@ pub async fn load_or_new(
         }
         return c;
     }
-    WaveCursor::new(seed_kind, seed_key.to_string())
+    WaveCursor::new(seed_kind, seed_key.to_string()).in_mode(mode)
 }
 
 pub async fn save(redis: &RedisPool, owner: &str, cursor: &WaveCursor) -> Option<String> {
@@ -301,7 +335,23 @@ mod tests {
 
         assert!(cursor.contains(70));
         assert_eq!(cursor.history_until, None);
+        assert_eq!(cursor.mode, WaveMode::Full);
         Ok(())
+    }
+
+    #[test]
+    fn the_moments_feed_keeps_its_own_cursor_key() {
+        let full = WaveCursor::new(SeedKind::User, "17".into());
+        let moments = full.clone().in_mode(WaveMode::Moments);
+
+        assert_ne!(full.redis_key("17"), moments.redis_key("17"));
+        assert_eq!(
+            full.redis_key("17"),
+            format!("smartwave:cursor:user:17:17:{}", full.handle)
+        );
+        assert_eq!(WaveMode::parse(Some("moments")), WaveMode::Moments);
+        assert_eq!(WaveMode::parse(Some("full")), WaveMode::Full);
+        assert_eq!(WaveMode::parse(None), WaveMode::Full);
     }
 
     #[test]

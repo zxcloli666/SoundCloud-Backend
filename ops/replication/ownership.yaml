@@ -82,6 +82,7 @@ tables:
   taste_model_versions: {class: C}
   track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}}}
   track_comments: {class: C, reassert: always, note: "sc_comment_id filled by core"}
+  track_highlights: {class: C, note: "the moment of a track (start_ms, length_ms, score of its catchiest window) by highlight algorithm version; written on core only by the jobs highlight result consumer, read by the api track projection and the moments wave"}
   track_search: {class: C, note: "narrow copy of the searchable tracks rows (public, not deleted, not superseded) for the full-text search, written on core only by the track_search triggers on tracks and the admin track_search backfill"}
   track_sync_stamps: {class: C, note: "tracks.sc_synced_at in a narrow row, so a sync that changes nothing else stops rewriting the tracks row; written with the stamp by observe.tracks and the jobs playlist observe upsert (a sync that changes nothing moves only the stamp), filled by the admin track_sync_stamps backfill"}
   tracks:
@@ -151,6 +152,7 @@ tables:
   storage_event_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   subscription_snapshot_state: {class: P}
   taste_schedule: {class: P}
+  track_highlight_dispatch: {class: P, note: "core-private highlight lane state per track: queue order by popularity, attempt, failures and backoff; jobs fills it from a walk over the playable tracks and settles it from done.highlight"}
   track_storage_failures: {class: P, note: "core-private time of the last write that left a tracks row in storage_state failed, kept by track_storage_failures_sync; the failed-storage retry waits 24 h from it"}
   track_work_aliases: {class: P}
   track_work_keys: {class: P, note: "core-private work and recording keys of a tracks row, one row per track kept by the track_work_keys triggers on tracks (primary_artist_id and superseded mirrored for the duplicate scan); jobs writes the keys, the admin track_work_keys backfill fills the rows of older tracks"}

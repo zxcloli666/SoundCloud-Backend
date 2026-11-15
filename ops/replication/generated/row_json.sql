@@ -1018,6 +1018,30 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.track_comments t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_track_highlight_dispatch(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.track_highlight_dispatch t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_track_highlights(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.track_highlights t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_track_search(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1542,6 +1566,10 @@ BEGIN
             RETURN public.scd_row_json_track_artists(k);
         WHEN 'track_comments' THEN
             RETURN public.scd_row_json_track_comments(k);
+        WHEN 'track_highlight_dispatch' THEN
+            RETURN public.scd_row_json_track_highlight_dispatch(k);
+        WHEN 'track_highlights' THEN
+            RETURN public.scd_row_json_track_highlights(k);
         WHEN 'track_search' THEN
             RETURN public.scd_row_json_track_search(k);
         WHEN 'track_storage_failures' THEN

@@ -137,6 +137,8 @@ SELECT v.cls FROM (VALUES
     ('track_artist_blocks', 'A'),
     ('track_artists', 'C'),
     ('track_comments', 'C'),
+    ('track_highlight_dispatch', 'P'),
+    ('track_highlights', 'C'),
     ('track_search', 'C'),
     ('track_storage_failures', 'P'),
     ('track_sync_stamps', 'C'),
@@ -304,6 +306,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_artists', jsonb_build_object('track_id', t.track_id, 'artist_id', t.artist_id, 'role', t.role) FROM public.track_artists t ON CONFLICT DO NOTHING;
         WHEN 'track_comments' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_comments', jsonb_build_object('id', t.id) FROM public.track_comments t ON CONFLICT DO NOTHING;
+        WHEN 'track_highlights' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_highlights', jsonb_build_object('track_id', t.track_id) FROM public.track_highlights t ON CONFLICT DO NOTHING;
         WHEN 'track_search' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_search', jsonb_build_object('id', t.id) FROM public.track_search t ON CONFLICT DO NOTHING;
         WHEN 'track_sync_stamps' THEN
@@ -418,6 +422,7 @@ BEGIN
         ('track_artist_blocks', 'A'),
         ('track_artists', 'C'),
         ('track_comments', 'C'),
+        ('track_highlights', 'C'),
         ('track_search', 'C'),
         ('track_sync_stamps', 'C'),
         ('tracks', 'C'),

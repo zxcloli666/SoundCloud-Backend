@@ -21,7 +21,7 @@ ENV_REF_PREFIX = "env:"
 SECRET_KEYS = frozenset({"password", "api_key"})
 INTEGER = re.compile(r"[+-]?\d+")
 
-LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak")
+LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak", "highlight")
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
 DEVICES = ("auto", "cuda", "cpu")
@@ -54,6 +54,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "taste": ("train-taste",),
         "ai": (LOCAL_LLM_SLOT,),
         "speak": (TTS_SLOT,),
+        "highlight": (),
     }
 )
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})

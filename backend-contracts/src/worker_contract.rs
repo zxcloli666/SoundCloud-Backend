@@ -7,9 +7,10 @@ use crate::pipeline::{
     AI_COMPLETE, AI_MATCH_TRACK, AI_RESOLVE_ARTIST, AI_RPC_STREAM, AudioIndexRequest,
     AudioIndexResult, COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest,
     CollabTrainResult, CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS,
-    DONE_ENCODE, DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
-    EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest,
-    EncodeResult, HEADERS, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
+    DONE_ENCODE, DONE_HIGHLIGHT, DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE,
+    DONE_TRANSCRIBE, EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW,
+    EncodeModel, EncodeRequest, EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK,
+    HighlightRequest, HighlightResult, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
     LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_COMPLETE_MESSAGE_BYTES,
     MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
     MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
@@ -56,10 +57,11 @@ pub enum WorkerLane {
     Taste,
     Ai,
     Speak,
+    Highlight,
 }
 
 impl WorkerLane {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Audio,
         Self::Lyrics,
         Self::Transcribe,
@@ -68,6 +70,7 @@ impl WorkerLane {
         Self::Taste,
         Self::Ai,
         Self::Speak,
+        Self::Highlight,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -80,6 +83,7 @@ impl WorkerLane {
             Self::Taste => "taste",
             Self::Ai => "ai",
             Self::Speak => "speak",
+            Self::Highlight => "highlight",
         }
     }
 
@@ -93,6 +97,7 @@ impl WorkerLane {
             Self::Taste => &TASTE_LANE,
             Self::Ai => &AI_LANE,
             Self::Speak => &SPEAK_LANE,
+            Self::Highlight => &HIGHLIGHT_LANE,
         }
     }
 }
@@ -383,7 +388,29 @@ pub const SPEAK_LANE: WorkerLaneSpec = WorkerLaneSpec {
     }),
 };
 
-pub const WORKER_LANES: [WorkerLaneSpec; 8] = [
+pub const HIGHLIGHT_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::Highlight,
+    stream: HIGHLIGHT_STREAM,
+    durable: "highlight-workers",
+    filter_subject: HIGHLIGHT_TRACK,
+    done_subject: Some(DONE_HIGHLIGHT),
+    correlation_prefix: "highlight",
+    correlation: &["sc_track_id", "attempt"],
+    echo: &[("sc_track_id", "sc_track_id"), ("attempt", "attempt")],
+    deadline_s: 120,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 64,
+    nak: Some(NakBackoff {
+        base_s: 30,
+        cap_s: 600,
+    }),
+    result_max_bytes: 8 * 1024,
+    public: false,
+    priority_group: None,
+};
+
+pub const WORKER_LANES: [WorkerLaneSpec; 9] = [
     AUDIO_LANE,
     LYRICS_LANE,
     TRANSCRIBE_LANE,
@@ -392,6 +419,7 @@ pub const WORKER_LANES: [WorkerLaneSpec; 8] = [
     TASTE_LANE,
     AI_LANE,
     SPEAK_LANE,
+    HIGHLIGHT_LANE,
 ];
 
 pub const fn done_duplicate_window_seconds() -> u64 {
@@ -636,6 +664,8 @@ pub fn schemas() -> BTreeMap<String, Value> {
         rpc_reply::<CompleteData>(AI_COMPLETE),
         request::<SayRequest>(SPEAK_SAY),
         rpc_reply::<SayData>(SPEAK_SAY),
+        request::<HighlightRequest>(HIGHLIGHT_TRACK),
+        done::<HighlightResult>(WorkerLane::Highlight),
     ])
 }
 
@@ -744,6 +774,9 @@ fn required_on(lane: WorkerLane, status: WorkerStatus) -> Vec<&'static str> {
         (WorkerLane::Taste, WorkerStatus::Ok) => {
             vec!["version", "object", "items_count", "users_count", "metrics"]
         }
+        (WorkerLane::Highlight, WorkerStatus::Ok) => {
+            vec!["version", "start_ms", "length_ms", "score"]
+        }
         _ => Vec::new(),
     }
 }
@@ -817,6 +850,7 @@ mod tests {
             (WorkerLane::Encode, 6, 225, 86_625, None),
             (WorkerLane::Collab, 60, 19_800, 41_400, None),
             (WorkerLane::Taste, 60, 39_900, 126_300, None),
+            (WorkerLane::Highlight, 12, 1050, 87_450, None),
         ];
         for (lane, heartbeat, window, quarantine, bridge) in table {
             let spec = lane.spec();
@@ -1434,5 +1468,31 @@ mod tests {
 
         assert_eq!(listed.len(), WorkerReason::ALL.len());
         assert_eq!(contract()["reasons"]["ok"], json!([]));
+    }
+
+    #[test]
+    fn the_highlight_lane_is_private_and_an_ok_moment_carries_its_window() {
+        let schemas = schemas();
+        let exported = contract();
+        let lane = &exported["lanes"]["highlight"];
+        let ok = rule_of(&schemas, DONE_HIGHLIGHT, "ok");
+        let done = &schemas[DONE_HIGHLIGHT]["properties"];
+        let request = &schemas[HIGHLIGHT_TRACK];
+
+        assert_eq!(lane["stream"], "HIGHLIGHT");
+        assert_eq!(lane["durable"], "highlight-workers");
+        assert_eq!(lane["public"], false);
+        assert_eq!(lane["correlation"], json!(["sc_track_id", "attempt"]));
+        assert_eq!(
+            ok["required"],
+            json!(["version", "start_ms", "length_ms", "score"])
+        );
+        assert_eq!(rule_of(&schemas, DONE_HIGHLIGHT, "rejected"), &json!(false));
+        assert_eq!(done["score"]["maximum"], 1.0);
+        assert_eq!(done["length_ms"]["minimum"], 1);
+        assert_eq!(
+            request["required"],
+            json!(["sc_track_id", "s3_url", "attempt", "version"])
+        );
     }
 }

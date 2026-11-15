@@ -233,6 +233,72 @@
         "internal_error"
       ]
     },
+    "highlight": {
+      "ack_wait_s": 60,
+      "attempt_window_s": 1050,
+      "bridge_ttl_s": null,
+      "correlation": [
+        "sc_track_id",
+        "attempt"
+      ],
+      "correlation_prefix": "highlight",
+      "correlation_separator": ":",
+      "deadline_s": 120,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.highlight",
+      "durable": "highlight-workers",
+      "echo": {
+        "attempt": "attempt",
+        "sc_track_id": "sc_track_id"
+      },
+      "filter_subject": "highlight.track.new",
+      "heartbeat_s": 12,
+      "max_ack_pending": 64,
+      "max_deliver": 5,
+      "nak_base_s": 30,
+      "nak_cap_s": 600,
+      "public": false,
+      "quarantine_after_s": 87450,
+      "reasons": [
+        "silent_audio",
+        "audio_not_found",
+        "audio_forbidden",
+        "invalid_request",
+        "undecodable_audio",
+        "audio_too_long",
+        "audio_too_large",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "result_max_bytes": 8192,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "HIGHLIGHT",
+      "worker_reasons": [
+        "silent_audio",
+        "audio_not_found",
+        "audio_forbidden",
+        "invalid_request",
+        "undecodable_audio",
+        "audio_too_long",
+        "audio_too_large",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted"
+      ]
+    },
     "lyrics": {
       "ack_wait_s": 30,
       "attempt_window_s": 825,
@@ -1545,6 +1611,251 @@
       "title": "done.encode",
       "type": "object"
     },
+    "done.highlight": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "version",
+              "start_ms",
+              "length_ms",
+              "score"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "silent_audio"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "audio_not_found",
+                  "audio_forbidden"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "undecodable_audio",
+                  "audio_too_long",
+                  "audio_too_large",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "download_failed",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "length_ms": {
+          "format": "int32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "score": {
+          "format": "float",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "start_ms": {
+          "format": "int32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "version": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "status",
+        "producer"
+      ],
+      "title": "done.highlight",
+      "type": "object"
+    },
     "done.index_audio": {
       "$defs": {
         "Producer": {
@@ -2815,6 +3126,39 @@
       "title": "encode.text.new",
       "type": "object"
     },
+    "highlight.track.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "s3_url": {
+          "maxLength": 4096,
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "version": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "s3_url",
+        "attempt",
+        "version"
+      ],
+      "title": "highlight.track.new",
+      "type": "object"
+    },
     "index.audio.new": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -3145,6 +3489,18 @@
       "storage": "file",
       "subjects": [
         "encode.>"
+      ]
+    },
+    "HIGHLIGHT": {
+      "allow_direct": false,
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "storage": "file",
+      "subjects": [
+        "highlight.>"
       ]
     },
     "INDEX_AUDIO": {

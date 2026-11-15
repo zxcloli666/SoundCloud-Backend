@@ -82,8 +82,11 @@ pub(super) async fn load(
                 }
             }
             let uploader = user_projection(pg, row.uploader_sc_user_id.as_deref()).await?;
+            let highlights = tracks::highlight::by_track_ids(pg, &[row.id]).await?;
+            let mut value = tracks::project_to_sc_shape(&row, uploader.as_ref());
+            tracks::highlight::attach(&mut value, highlights.get(&row.id));
             Ok(LocalEntity {
-                value: tracks::project_to_sc_shape(&row, uploader.as_ref()),
+                value,
                 synced_at: row.sc_synced_at,
                 public,
                 owner: row.uploader_sc_user_id,

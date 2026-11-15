@@ -65,6 +65,8 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_taste_model_versions;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_taste_schedule;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_comments;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_highlight_dispatch;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_highlights;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_sync_stamps;
@@ -5764,6 +5766,79 @@ ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_highlight_dispatch FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_highlight_dispatch', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_highlights FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_highlights', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_owner_track_highlights()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.track_id IS DISTINCT FROM OLD.track_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                    INSERT INTO public.track_highlights (computed_at, length_ms, score, start_ms, track_id, version) VALUES (NEW.computed_at, NEW.length_ms, NEW.score, NEW.start_ms, NEW.track_id, NEW.version);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                DELETE FROM public.track_highlights t WHERE t.track_id = OLD.track_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.track_highlights t WHERE t.track_id = NEW.track_id FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.track_highlights t SET computed_at = NEW.computed_at, length_ms = NEW.length_ms, score = NEW.score, start_ms = NEW.start_ms, version = NEW.version WHERE t.track_id = NEW.track_id;
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.track_highlights (computed_at, length_ms, score, start_ms, track_id, version)
+        VALUES (NEW.computed_at, NEW.length_ms, NEW.score, NEW.start_ms, NEW.track_id, NEW.version)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.track_highlights still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_highlights FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_highlights();
+ALTER TABLE public.track_highlights ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_highlights FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.track_highlights ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_search FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_search', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_track_search()
@@ -7930,6 +8005,8 @@ FROM (VALUES
     ('guard', 'taste_schedule', 'scd_guard_taste_schedule'),
     ('guard', 'track_artists', 'scd_guard_track_artists'),
     ('guard', 'track_comments', 'scd_guard_track_comments'),
+    ('guard', 'track_highlight_dispatch', 'scd_guard_track_highlight_dispatch'),
+    ('guard', 'track_highlights', 'scd_guard_track_highlights'),
     ('guard', 'track_search', 'scd_guard_track_search'),
     ('guard', 'track_storage_failures', 'scd_guard_track_storage_failures'),
     ('guard', 'track_sync_stamps', 'scd_guard_track_sync_stamps'),
@@ -8230,6 +8307,10 @@ BEGIN
             ('track_comments', 'zz_guard'),
             ('track_comments', 'zz_owner'),
             ('track_comments', 'zzz_suppress'),
+            ('track_highlight_dispatch', 'zz_guard'),
+            ('track_highlights', 'zz_guard'),
+            ('track_highlights', 'zz_owner'),
+            ('track_highlights', 'zzz_suppress'),
             ('track_search', 'zz_guard'),
             ('track_search', 'zz_owner'),
             ('track_search', 'zzz_suppress'),

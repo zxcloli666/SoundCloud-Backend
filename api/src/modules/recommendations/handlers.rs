@@ -13,7 +13,7 @@ use crate::error::AppResult;
 use crate::modules::recommendations::home_wave::HomeRequest;
 use crate::modules::recommendations::projected;
 use crate::modules::recommendations::smart_wave::{
-    self, SmartWaveRequest, SmartWaveResponse, SmartWaveSeed,
+    self, SmartWaveRequest, SmartWaveResponse, SmartWaveSeed, WaveMode,
 };
 use crate::state::AppState;
 
@@ -217,6 +217,8 @@ struct WaveQuery {
     cursor: Option<String>,
     #[serde(default)]
     hide_listened: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -256,6 +258,7 @@ async fn wave_user(
         cursor_token: q.cursor.as_deref(),
         seed: SmartWaveSeed::User,
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
+        mode: WaveMode::parse(q.mode.as_deref()),
     };
     let response = smart_wave::build(&st.recommendations, req).await?;
     wave_payload(&st, &ctx.sc_user_id, response).await
@@ -284,6 +287,7 @@ async fn wave_track(
         cursor_token: q.cursor.as_deref(),
         seed: SmartWaveSeed::Track(seed),
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
+        mode: WaveMode::parse(q.mode.as_deref()),
     };
     let response = smart_wave::build(&st.recommendations, req).await?;
     wave_payload(&st, &ctx.sc_user_id, response).await
@@ -309,6 +313,7 @@ async fn wave_artist(
         cursor_token: q.cursor.as_deref(),
         seed: SmartWaveSeed::Artist(artist_id, &top_tracks),
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
+        mode: WaveMode::parse(q.mode.as_deref()),
     };
     let response = smart_wave::build(&st.recommendations, req).await?;
     wave_payload(&st, &ctx.sc_user_id, response).await

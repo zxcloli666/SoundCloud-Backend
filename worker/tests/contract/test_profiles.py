@@ -80,6 +80,7 @@ DESIGN = {
             "collab": 1,
             "taste": 1,
             "ai": 16,
+            "highlight": 2,
         },
         dict.fromkeys(SYNC_X2, 1),
         local_llm=True,
