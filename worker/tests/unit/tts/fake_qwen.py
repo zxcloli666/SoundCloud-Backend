@@ -15,6 +15,12 @@ CHUNK = 800
 CHUNKS = 3
 SLOW_CHUNKS = 20
 SLOW_PAUSE_S = 0.05
+HISS_LEVEL = 0.009
+HISS_EVERY = 4
+QUIET_CHUNKS = 2000
+LEAD_QUIET_CHUNKS = 100
+PAUSE_SAMPLES = 33_600
+PAUSE_PIECE = 777
 BALLAST_MIB = 64
 JOURNAL = "journal.jsonl"
 
@@ -73,9 +79,50 @@ def answer(
     if mode == "slow":
         speak_slowly(out, number, frames)
         return
+    if mode == "goes_quiet":
+        go_quiet(out, number, frames, hiss=False)
+        return
+    if mode == "goes_hiss":
+        go_quiet(out, number, frames, hiss=True)
+        return
+    if mode == "quiet_first":
+        send_samples(out, number, 0.0, CHUNK * LEAD_QUIET_CHUNKS, CHUNK)
+    if mode == "pause":
+        send_samples(out, number, 0.25, CHUNK * CHUNKS, CHUNK)
+        send_samples(out, number, 0.0, PAUSE_SAMPLES, PAUSE_PIECE)
     for _ in range(CHUNKS):
         send(out, "A", number, struct.pack(f"<{CHUNK}f", *([0.25] * CHUNK)))
     send(out, "D", number)
+
+
+def go_quiet(
+    out: BinaryIO,
+    number: int,
+    frames: queue.Queue[tuple[str, int, bytes] | None],
+    hiss: bool,
+) -> None:
+    send_samples(out, number, 0.25, CHUNK * CHUNKS, CHUNK)
+    for _ in range(QUIET_CHUNKS):
+        if hiss:
+            send_hiss(out, number)
+        else:
+            send_samples(out, number, 0.0, CHUNK, CHUNK)
+        time.sleep(0.001)
+        if cancelled(number, frames):
+            break
+    send(out, "D", number)
+
+
+def send_hiss(out: BinaryIO, number: int) -> None:
+    hiss = [HISS_LEVEL if index % HISS_EVERY == 0 else 0.0 for index in range(CHUNK)]
+    send(out, "A", number, struct.pack(f"<{CHUNK}f", *hiss))
+
+
+def send_samples(out: BinaryIO, number: int, level: float, count: int, size: int) -> None:
+    while count > 0:
+        piece = min(size, count)
+        send(out, "A", number, struct.pack(f"<{piece}f", *([level] * piece)))
+        count -= piece
 
 
 def speak_slowly(

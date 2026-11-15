@@ -15,6 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worker.models.tts import wire
+from worker.models.tts.quiet import Quiet
 from worker.observability.logging import JsonLog
 from worker.settings import TTS_SLOT
 
@@ -91,6 +92,12 @@ class Line:
 
 
 @dataclass(frozen=True)
+class Said:
+    audio: Samples
+    cut: bool
+
+
+@dataclass(frozen=True)
 class Ended:
     detail: str
 
@@ -136,14 +143,16 @@ class VoiceProcess:
     def alive(self) -> bool:
         return self._process.poll() is None
 
-    def say(self, line: Line, expires_at: float) -> Samples:
+    def say(self, line: Line, expires_at: float) -> Said:
         self._last += 1
         number = self._last
         self._send(wire.Frame(wire.TUNE, number, line.manner.payload()))
         self._send(wire.Frame(wire.SAY, number, line.payload()))
         chunks: list[Samples] = []
         give_up_at = time.monotonic() + STALL_S
+        quiet = Quiet(RATE)
         cancelled = False
+        cut = False
         while True:
             if not cancelled and time.monotonic() >= expires_at:
                 self._send(wire.Frame(wire.CANCEL, number))
@@ -161,10 +170,15 @@ class VoiceProcess:
                 give_up_at = time.monotonic() + STALL_S
             if frame.kind == wire.AUDIO and not cancelled:
                 chunks.append(self._samples(frame))
+                if quiet.fell_silent(chunks[-1]):
+                    self._send(wire.Frame(wire.CANCEL, number))
+                    cancelled = cut = True
+                    give_up_at = time.monotonic() + CANCEL_S
             elif frame.kind == wire.DONE:
-                if cancelled:
+                if cancelled and not cut:
                     raise SayCancelled(f"cancelled after {len(chunks)} audio frames")
-                return np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
+                audio = np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
+                return Said(audio[: quiet.kept()] if cut else audio, cut)
             elif frame.kind == wire.FAILED:
                 raise EngineRefused(wire.text(frame.payload, DETAIL_CHARS))
 

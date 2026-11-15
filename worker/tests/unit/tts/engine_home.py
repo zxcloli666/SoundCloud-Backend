@@ -12,8 +12,20 @@ OPTIONS = {
     "program": f"{ENGINE}/scd-qwen",
     "codec": "codec.gguf",
     "voices": {
-        "loli": {"talker": "loli.gguf", "speaker": "loli"},
-        "moriarty": {"talker": "moriarty.gguf", "speaker": "moriarty"},
+        "loli": {
+            "talker": "loli.gguf",
+            "speaker": "loli",
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "sub_temperature": 0.6,
+        },
+        "moriarty": {
+            "talker": "moriarty.gguf",
+            "speaker": "moriarty",
+            "temperature": 0.9,
+            "top_p": 1.0,
+            "sub_temperature": 0.9,
+        },
     },
 }
 SPOKEN = fake_qwen.CHUNK * fake_qwen.CHUNKS

@@ -142,6 +142,18 @@ def test_the_speech_models_addresses_follow_the_host_in_their_order(
     assert moved.tts.base_urls == ("https://models.example/voice", "https://mirror.example/v")
 
 
+def test_every_voice_has_its_own_manner_of_reading(base_env: dict[str, str]) -> None:
+    shipped = s.load(CONFIG_DIR, base_env).tts.voices
+    tuned = s.load(CONFIG_DIR, {**base_env, "WORKER__TTS__VOICES__LOLI__TOP_P": "0.8"}).tts.voices
+
+    assert [(v.temperature, v.top_p, v.sub_temperature) for v in shipped.values()] == [
+        (0.6, 0.9, 0.6),
+        (0.9, 1.0, 0.9),
+    ]
+    assert tuned["loli"].top_p == 0.8
+    assert tuned["moriarty"] == shipped["moriarty"]
+
+
 def test_the_old_single_address_key_is_a_start_error(base_env: dict[str, str]) -> None:
     with pytest.raises(s.SettingsError, match="base_url"):
         s.load(CONFIG_DIR, {**base_env, "WORKER__TTS__BASE_URL": "https://models.example/voice"})
@@ -167,6 +179,18 @@ def test_the_old_single_address_key_is_a_start_error(base_env: dict[str, str]) -
         ({"WORKER__TTS__CODEC__PATH": "/models/codec.gguf"}, "not a plain relative path"),
         ({"WORKER__TTS__CODEC__SHA256": "ABC"}, "tts sha256 values must be 64 lowercase hex"),
         ({"WORKER__TTS__VOICES__LOLI__SPEAKER": "Loli"}, r"tts\.voices\.loli\.speaker"),
+        ({"WORKER__TTS__VOICES__LOLI__TEMPERATURE": "2.1"}, r"tts\.voices\.loli\.temperature"),
+        ({"WORKER__TTS__VOICES__LOLI__TEMPERATURE": "-0.1"}, r"tts\.voices\.loli\.temperature"),
+        ({"WORKER__TTS__VOICES__LOLI__TOP_P": "0"}, r"tts\.voices\.loli\.top_p"),
+        ({"WORKER__TTS__VOICES__MORIARTY__TOP_P": "1.1"}, r"tts\.voices\.moriarty\.top_p"),
+        (
+            {"WORKER__TTS__VOICES__MORIARTY__SUB_TEMPERATURE": "3"},
+            r"tts\.voices\.moriarty\.sub_temperature",
+        ),
+        (
+            {"WORKER__TTS__VOICES__LOLI__SUB_TEMPERATURE": "-1"},
+            r"tts\.voices\.loli\.sub_temperature",
+        ),
     ],
 )
 def test_speech_settings_are_checked_at_start(

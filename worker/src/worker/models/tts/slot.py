@@ -9,6 +9,7 @@ from pathlib import Path
 
 from worker.fetch_models import TTS_HOME_ENV
 from worker.models.tts.process import (
+    RATE,
     EngineLost,
     EngineRefused,
     Launch,
@@ -23,7 +24,7 @@ from worker.settings import TTS_DEVICES, TTS_METHOD, TTS_SLOT
 
 SEED = 1
 LANG = "auto"
-MANNER = Manner(temperature=0.6, top_p=0.9, sub_temperature=0.6)
+MANNER_KEYS = ("temperature", "top_p", "sub_temperature")
 LEAD_S = 0.3
 CHARS_PER_S = 11.0
 FRAMES_PER_S = 12.5
@@ -41,6 +42,7 @@ log = JsonLog(component=TTS_SLOT)
 class Voice:
     talker: Path
     speaker: str
+    manner: Manner
 
 
 @dataclass(frozen=True)
@@ -119,9 +121,9 @@ class TtsSlot:
             raise BadInput(f"{TTS_SLOT} has no voice {name!r}")
         process, load_s = self._process_for(name, voice, self._options)
         CALL_GUARD.check()
-        line = Line(SEED, max_tokens(text), voice.speaker, LANG, text, MANNER)
+        line = Line(SEED, max_tokens(text), voice.speaker, LANG, text, voice.manner)
         try:
-            audio = process.say(line, CALL_GUARD.expires_at)
+            said = process.say(line, CALL_GUARD.expires_at)
         except SayCancelled as cancelled:
             log.info("tts_say_cancelled", voice=name, text_chars=len(text))
             raise CallExpired("the deadline cancelled the speech") from cancelled
@@ -132,8 +134,15 @@ class TtsSlot:
         except EngineRefused as refused:
             log.warning("tts_say_refused", voice=name, detail=str(refused))
             raise RuntimeError(f"the speech engine refused the line: {refused}") from refused
+        if said.cut:
+            log.info(
+                "tts_line_cut",
+                voice=name,
+                text_chars=len(text),
+                seconds=round(said.audio.size / RATE, 2),
+            )
         loaded = load_s is not None
-        return {AUDIO: audio}, {"loaded": loaded, "load_s": round(load_s or 0.0, 3)}
+        return {AUDIO: said.audio}, {"loaded": loaded, "load_s": round(load_s or 0.0, 3)}
 
     def _process_for(
         self, name: str, voice: Voice, options: Options
@@ -193,8 +202,23 @@ def models_home(environ: Mapping[str, str]) -> Path:
 
 
 def voice_option(home: Path, name: object, raw: object) -> Voice:
-    talker = raw.get("talker") if isinstance(raw, Mapping) else None
-    speaker = raw.get("speaker") if isinstance(raw, Mapping) else None
+    if not isinstance(raw, Mapping):
+        raise RuntimeError(f"{TTS_SLOT} voice {name} needs options")
+    talker, speaker = raw.get("talker"), raw.get("speaker")
     if not isinstance(talker, str) or not isinstance(speaker, str):
         raise RuntimeError(f"{TTS_SLOT} voice {name} needs the text options talker and speaker")
-    return Voice(home / talker, speaker)
+    return Voice(home / talker, speaker, manner_option(name, raw))
+
+
+def manner_option(name: object, raw: Mapping[str, object]) -> Manner:
+    temperature, top_p, sub_temperature = (number(raw.get(key)) for key in MANNER_KEYS)
+    if temperature is None or top_p is None or sub_temperature is None:
+        keys = ", ".join(MANNER_KEYS)
+        raise RuntimeError(f"{TTS_SLOT} voice {name} needs the number options {keys}")
+    return Manner(temperature, top_p, sub_temperature)
+
+
+def number(value: object) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return None
