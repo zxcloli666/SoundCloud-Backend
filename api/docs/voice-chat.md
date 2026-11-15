@@ -69,7 +69,7 @@ The system text has three sections, the most shared first:
 
 1. the same for every user of one app version: setting, `instructions`, reply format, the rule about silence when the request has `quiet`, tool list in the order the app sent it, the rule about data;
 2. per character: persona prompt, language;
-3. per turn: notes, app state.
+3. per turn: who the user is and who the assistant is to them, notes, app state.
 
 A provider that caches by prefix reuses sections 1 and 2. With `prefix_cache` set, sections 1 and 2 each end with a cache mark: a turn of a known character reads both from the cache, a new character reads section 1 and writes its own section 2.
 `openai_compatible` and `worker` get the same text joined in the same order.
@@ -90,6 +90,8 @@ Header `x-session-id`. The user needs Star. The Star check and the per-user limi
   "context": { "volume": 40 },
   "history": [ { "role": "user", "text": "hi" }, { "role": "assistant", "text": "hello" } ],
   "notes": [ "likes jazz" ],
+  "listener": { "gender": "female", "name": "Anna", "address": "formal" },
+  "relation": { "preset": "butler" },
   "tools": [
     {
       "name": "volume_set",
@@ -104,6 +106,7 @@ Header `x-session-id`. The user needs Star. The Star check and the per-user limi
 ```
 
 - `persona`: a `[voice_chat.personas.<id>]` id, an unknown one gets `default`. `language`: the language the app listens and speaks in, the reply is written in it; without it the reply follows the language of `text`.
+- `listener`: who the user is, every field optional: `gender` (`male` or `female`), `name` (at most 40 characters, no control characters), `address` (`informal` or `formal`). `relation`: who the assistant is to the user, either `{"preset": "friend" | "assistant" | "butler" | "mentor"}` or `{"own": "<text>"}` (at most 300 characters, no control characters). Both are trimmed, an empty `name` or `own` counts as not set, and without them the system text is the same as before. An unknown `gender`, `address` or `preset` is refused. `own` and `name` reach the model as quoted data and only shape the manner of speech, never the actions, the reply format or the rules.
 - Tool and argument names: `^[a-z][a-z0-9_]{0,31}$`, unique. Arguments are flat: `string`, `integer`, `number`, `boolean` or `enum` of strings; `description`, `minimum` and `maximum` are read, other keywords are ignored. At most 16 arguments per tool.
 - `context` and `results`: at most 8 KiB each as JSON, at most 16 results. A description: at most 600 characters.
 - `history` and `notes`: only the newest `max_history` items and `max_notes` notes are kept; a longer history item is cut to 2000 characters, a note to 300. A wrong shape is still refused.
