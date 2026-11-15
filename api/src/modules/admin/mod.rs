@@ -63,6 +63,10 @@ pub fn router() -> Router<AppState> {
             post(maintenance::track_work_keys),
         )
         .route(
+            "/admin/maintenance/track-enrich-queue",
+            post(maintenance::track_enrich_queue),
+        )
+        .route(
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
         )

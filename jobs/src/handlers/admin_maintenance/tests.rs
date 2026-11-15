@@ -92,6 +92,7 @@ pub(super) fn handler(pool: &PgPool) -> AdminMaintenanceHandler {
             track_search_batch: 1_000,
             track_sync_stamps_batch: 5_000,
             track_work_keys_batch: 5_000,
+            track_enrich_queue_batch: 5_000,
         },
     )
 }
