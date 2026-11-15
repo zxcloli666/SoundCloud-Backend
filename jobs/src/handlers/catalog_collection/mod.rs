@@ -6,7 +6,9 @@ mod writer;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use backend_contracts::{CatalogCollectionPayload, CatalogEntity, CollectionFailure};
+use backend_contracts::{
+    CATALOG_REFRESH_BACKGROUND_PRIORITY, CatalogCollectionPayload, CatalogEntity, CollectionFailure,
+};
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -109,7 +111,7 @@ impl CatalogCollectionHandler {
             .persist(job, &payload, &snapshot, page, observation)
             .await?;
         if more {
-            Err(postpone(1, anyhow::anyhow!("collection has another page")))
+            Err(another_page(&payload))
         } else {
             Ok(())
         }
@@ -231,6 +233,15 @@ impl CatalogCollectionHandler {
             self.remote.public_get(job, path).await?
         };
         page::parse(payload, value, false)
+    }
+}
+
+fn another_page(payload: &CatalogCollectionPayload) -> JobError {
+    let wait = postpone(1, anyhow::anyhow!("collection has another page"));
+    if payload.owner {
+        wait
+    } else {
+        wait.stepping_down_to(CATALOG_REFRESH_BACKGROUND_PRIORITY)
     }
 }
 

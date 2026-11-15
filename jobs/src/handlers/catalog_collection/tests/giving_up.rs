@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use backend_contracts::{CatalogCollection, CollectionFailure};
+use backend_contracts::{CatalogCollection, CatalogCollectionPayload, CollectionFailure};
 use chrono::{Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 use wreq::StatusCode;
 
-use super::super::{CatalogCollectionHandler, give_up_or_wait, state};
+use super::super::{CatalogCollectionHandler, another_page, give_up_or_wait, state};
 use super::setup;
 use crate::handlers::catalog_read::PublicCatalogReader;
 use crate::handlers::catalog_remote::{CatalogRemote, owner_error, postpone, public_error};
@@ -68,6 +68,28 @@ fn delay_of(error: &JobError) -> Option<u64> {
         JobError::Postponed { delay, .. } => Some(delay.as_secs()),
         _ => None,
     }
+}
+
+fn floor_of(error: &JobError) -> Option<i16> {
+    match error {
+        JobError::Postponed { step_down_to, .. } => *step_down_to,
+        _ => None,
+    }
+}
+
+#[test]
+fn a_public_walk_gives_way_after_every_page_and_an_owner_walk_keeps_its_place() {
+    let likes_of = |owner| CatalogCollectionPayload {
+        collection: CatalogCollection::LikedTracks,
+        subject_id: "42".to_owned(),
+        owner,
+    };
+
+    let public = another_page(&likes_of(false));
+    let owner = another_page(&likes_of(true));
+
+    assert_eq!((delay_of(&public), floor_of(&public)), (Some(1), Some(5)));
+    assert_eq!((delay_of(&owner), floor_of(&owner)), (Some(1), None));
 }
 
 #[test]
