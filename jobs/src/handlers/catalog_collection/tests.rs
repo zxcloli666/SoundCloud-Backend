@@ -1614,4 +1614,99 @@ async fn a_page_waiting_on_a_track_does_not_hold_its_job_row(pool: PgPool) -> an
     Ok(())
 }
 
+fn fan(id: i64, username: &str, followers: i64) -> Value {
+    json!({"id": id, "urn": format!("soundcloud:users:{id}"), "username": username,
+        "last_modified": "2026-01-01T00:00:00Z", "followers_count": followers})
+}
+
+fn fans(items: Vec<Value>, next: Option<&str>) -> page::Page {
+    page::Page {
+        items,
+        next: next.map(str::to_owned),
+        liked_at: Vec::new(),
+        apiv2: true,
+    }
+}
+
+async fn age_users(pool: &PgPool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE users SET sc_synced_at = now() - interval '30 days'")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_likers_page_writes_new_and_changed_users_and_leaves_the_rest_alone(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, mut payload, writer) = setup(&pool).await?;
+    payload.collection = CatalogCollection::TrackFavoriters;
+    payload.owner = false;
+    let snapshot = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    let first = fans(
+        vec![fan(17, "Same", 1), fan(18, "Before", 1)],
+        Some("v2:/tracks/42/likers?offset=1"),
+    );
+    assert!(
+        writer
+            .persist(
+                &job,
+                &payload,
+                &snapshot,
+                first,
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+    age_users(&pool).await?;
+
+    let snapshot = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    let second = fans(
+        vec![fan(17, "Same", 2), fan(18, "After", 2), fan(19, "New", 2)],
+        None,
+    );
+    assert!(
+        !writer
+            .persist(
+                &job,
+                &payload,
+                &snapshot,
+                second,
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+
+    let users: Vec<(String, String, i64, bool)> = sqlx::query_as(
+        "SELECT sc_user_id, username, followers_count, sc_synced_at > now() - interval '1 day'
+         FROM users WHERE sc_user_id IN ('17', '18', '19') ORDER BY sc_user_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        users,
+        [
+            ("17".to_owned(), "Same".to_owned(), 1, false),
+            ("18".to_owned(), "After".to_owned(), 2, true),
+            ("19".to_owned(), "New".to_owned(), 2, true),
+        ]
+    );
+    let audience: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM catalog_audience WHERE subject_urn = 'soundcloud:tracks:42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(audience, 3);
+    Ok(())
+}
+
 mod giving_up;
