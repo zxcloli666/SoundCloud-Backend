@@ -165,6 +165,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 98. `0402`: `DROP INDEX CONCURRENTLY` of `tracks_enrich_claim_idx`; jobs claims from `track_enrich_queue` since 0399.
 99. `0403_scd_install`: the generated SQL again, on top of 0397: the tracks owner, row hash and publication list without the four columns, every trigger is kept.
 100. `0404_tracks_enrich_lease_drop`: takes the tracks lock the way 0349 does, drops the four columns and clears their unpublish marks. The admin kind `track_enrich_queue` inserts missing rows with the mirrors only and `next_run_at` = now() from then on.
+101. `0405_tracks_admin_meta_trgm_drop`: `DROP INDEX CONCURRENTLY` of `tracks_admin_meta_lower_trgm`; no query used it.
+102. `0406_tracks_admin_title_trgm_drop`: `DROP INDEX CONCURRENTLY` of `tracks_admin_title_lower_trgm`; `GET /admin/tracks` walks `tracks_sc_created_at_desc_idx` with the title filter from then on. Every non-HOT tracks update put trigrams of both into the GIN pending list, and each flush was a burst of random reads on the apply of main and star.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -191,6 +193,8 @@ Order for 0396-0398: core, main and star in any order (P: nothing is published, 
 Order for 0399: core, main and star in any order (the triggers fire only on core), core before the jobs of this release: an old jobs keeps the queue in sync through trigger v2, the new jobs writes the lease only to the queue. Jobs on core and the api on main and star only after the `track_enrich_queue` run finished clean and a recheck found no differing row. The api of this release requires 0396 on its node; its `in_flight` enrich counter reads the queue, which is empty on main and star.
 
 Order for 0400-0404: only after the jobs of 0399 runs on core and its api runs on main and star: an older writer still names the lease columns of `tracks`, and it fails on a dropped column. Then core first. Migrate main and star only after they applied core's stream past core's 0400 commit: a change from before it still carries the four columns, and the apply on a node without them fails with "missing replicated columns". If 0404 gives up on the lock on core, stop jobs on core for the minute it takes, as for 0291.
+
+Order for 0405-0406: any node, any time, no binary depends on them. Drop both indexes by hand first on core, main and star with the statements of the files and `lock_timeout` 0, then the migrations no-op. A drop that fails halfway leaves an INVALID index: run the same statement again.
 
 Order for 0307-0308: core, main and star first, then jobs on core. `background_job_failures` is C and its `lane` is published in `scd_core_pub`: the first lookup dead letter on core carries `lane = 'lookup'`, and the apply on a node with the old CHECK fails on every retry, which stops the whole core stream on that node. The api goes after jobs; until then an old api still enqueues lookups into `core_bulk`, and the jobs lane realignment moves them.
 
