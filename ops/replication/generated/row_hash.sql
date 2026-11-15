@@ -1018,6 +1018,18 @@ AS $f$
 SELECT md5(ROW(t.body, t.created_at, t.id, t.sc_comment_id, t.sc_created_at, t.sc_track_id, t.synced_at, t.track_position_ms, t.user_urn)::text) FROM public.track_comments t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_enrich_queue(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempts, t.enrich_state, t.error, t.index_priority, t.locked_at, t.next_run_at, t.track_id)::text) FROM public.track_enrich_queue t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_highlight_dispatch(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1566,6 +1578,8 @@ BEGIN
             RETURN public.scd_row_hash_track_artists(k);
         WHEN 'track_comments' THEN
             RETURN public.scd_row_hash_track_comments(k);
+        WHEN 'track_enrich_queue' THEN
+            RETURN public.scd_row_hash_track_enrich_queue(k);
         WHEN 'track_highlight_dispatch' THEN
             RETURN public.scd_row_hash_track_highlight_dispatch(k);
         WHEN 'track_highlights' THEN

@@ -116,6 +116,7 @@ pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminTrackSearch,
     JobKind::AdminTrackSyncStamps,
     JobKind::AdminTrackWorkKeys,
+    JobKind::AdminTrackEnrichQueue,
     JobKind::AdminWantedAliases,
     JobKind::CatalogRefresh,
     JobKind::CatalogCollection,
@@ -175,6 +176,7 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
             | JobKind::AdminTrackSearch
             | JobKind::AdminTrackSyncStamps
             | JobKind::AdminTrackWorkKeys
+            | JobKind::AdminTrackEnrichQueue
             | JobKind::AdminWantedAliases
             | JobKind::CollabTrain
             | JobKind::CatalogRefresh
@@ -533,6 +535,12 @@ impl JobHandlers {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
                 self.admin_maintenance
                     .backfill_track_work_keys(job, payload)
+                    .await
+            }
+            JobKind::AdminTrackEnrichQueue => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance
+                    .backfill_track_enrich_queue(job, payload)
                     .await
             }
             JobKind::AdminWantedAliases => {

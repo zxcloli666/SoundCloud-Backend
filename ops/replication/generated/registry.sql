@@ -137,6 +137,7 @@ SELECT v.cls FROM (VALUES
     ('track_artist_blocks', 'A'),
     ('track_artists', 'C'),
     ('track_comments', 'C'),
+    ('track_enrich_queue', 'P'),
     ('track_highlight_dispatch', 'P'),
     ('track_highlights', 'C'),
     ('track_search', 'C'),

@@ -12,6 +12,7 @@ use crate::harness::Pair;
 const DERIVED: &[&str] = &[
     "lyrics_lookup_queue",
     "lyrics_lookup_state",
+    "track_enrich_queue",
     "track_search",
     "track_work_keys",
 ];

@@ -926,6 +926,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_track_enrich_queue(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.track_id INTO p FROM public.track_enrich_queue t WHERE t.track_id = (k ->> 'track_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_enrich_queue t WHERE t.track_id = (k ->> 'track_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_track_highlight_dispatch(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1053,6 +1068,7 @@ BEGIN
     DELETE FROM public.storage_event_state c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.track_artist_blocks c WHERE c.track_id = p.id;
     DELETE FROM public.track_artists c WHERE c.track_id = p.id;
+    DELETE FROM public.track_enrich_queue c WHERE c.track_id = p.id;
     DELETE FROM public.track_highlight_dispatch c WHERE c.track_id = p.id;
     DELETE FROM public.track_highlights c WHERE c.track_id = p.id;
     DELETE FROM public.track_storage_failures c WHERE c.track_id = p.id;
@@ -1403,6 +1419,8 @@ BEGIN
             PERFORM public.scd_purge_track_artists(k);
         WHEN 'track_comments' THEN
             PERFORM public.scd_purge_track_comments(k);
+        WHEN 'track_enrich_queue' THEN
+            PERFORM public.scd_purge_track_enrich_queue(k);
         WHEN 'track_highlight_dispatch' THEN
             PERFORM public.scd_purge_track_highlight_dispatch(k);
         WHEN 'track_highlights' THEN
