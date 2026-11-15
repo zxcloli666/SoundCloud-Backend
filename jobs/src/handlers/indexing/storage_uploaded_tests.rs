@@ -25,6 +25,8 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              sc_track_id text PRIMARY KEY,
              synced_lrc text,
              plain_text text,
+             source varchar(16),
+             synced_source varchar(16),
              language varchar(8)
          );
          CREATE TABLE pipeline_event_receipts (

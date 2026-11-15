@@ -78,6 +78,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              synced_lrc text,
              plain_text text,
              source varchar(16) NOT NULL,
+             synced_source varchar(16),
              language varchar(8),
              language_confidence real,
              embedded_at timestamptz,
@@ -208,13 +209,15 @@ async fn the_alignment_room_goes_to_the_oldest_plain_lyrics_uploads(
     seed_lyrics(&pool, "55", "plain lyrics of the newest upload").await?;
     sqlx::query(
         "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, source, created_at)
-         VALUES ('52', 'plain lyrics', '[00:01.00] synced', 'lrclib',
+         VALUES ('52', 'plain lyrics', '[00:01.00] synced', 'musixmatch',
+                 (now() AT TIME ZONE 'UTC') - interval '1 hour'),
+                ('54', 'plain lyrics', '[00:01.00] synced', 'lrclib',
                  (now() AT TIME ZONE 'UTC') - interval '1 hour')",
     )
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_transcriptions(2).await?;
+    reaper(&pool).reap_transcriptions(3).await?;
 
     let picked: Vec<String> = sqlx::query_scalar(
         "SELECT dedup_key FROM background_jobs
@@ -223,7 +226,7 @@ async fn the_alignment_room_goes_to_the_oldest_plain_lyrics_uploads(
     )
     .fetch_all(&pool)
     .await?;
-    assert_eq!(picked, ["51", "53"]);
+    assert_eq!(picked, ["51", "53", "54"]);
     Ok(())
 }
 

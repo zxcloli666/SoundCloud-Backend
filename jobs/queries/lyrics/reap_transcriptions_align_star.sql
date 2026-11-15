@@ -19,7 +19,7 @@ JOIN lyrics_cache AS lyrics
 LEFT JOIN transcription_wire_state AS wire
   ON wire.sc_track_id = track.sc_track_id
 WHERE NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-  AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+  AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
   AND lyrics.created_at < (now() AT TIME ZONE 'UTC') - interval '10 minutes'
   AND event.updated_at < now() - interval '10 minutes'
   AND event.uploaded_generation > 0

@@ -18,7 +18,7 @@ WITH newest AS MATERIALIZED (
       AND track.storage_state = 'ok'
       AND NOT track.needs_duration_resolve
       AND NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-      AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+      AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
       AND (
           (
               wire.status = 'reopenable'

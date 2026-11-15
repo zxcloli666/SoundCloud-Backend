@@ -90,7 +90,7 @@ WITH watch AS (
                               )
                         )
                     AND NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-                    AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+                    AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
                ELSE false
            END AS align_due,
            coalesce(
@@ -163,7 +163,9 @@ WITH watch AS (
         SELECT cache.embedded_at,
                cache.embedding_state,
                cache.plain_text,
-               cache.synced_lrc
+               cache.synced_lrc,
+               cache.synced_source,
+               cache.source
         FROM lyrics_cache AS cache
         WHERE cache.sc_track_id = star.sc_track_id
         LIMIT 1

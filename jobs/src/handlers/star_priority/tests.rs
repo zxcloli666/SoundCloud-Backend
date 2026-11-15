@@ -135,7 +135,7 @@ async fn seed_uploaded_star_tracks(pool: &PgPool) -> anyhow::Result<()> {
          INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, source) VALUES
              ('304', 'plain lyrics waiting for alignment', NULL, 'genius'),
              ('305', 'plain lyrics waiting for a new upload', NULL, 'genius'),
-             ('306', 'plain lyrics already synced', '[00:01.00] synced', 'lrclib');
+             ('306', 'plain lyrics already synced', '[00:01.00] synced', 'musixmatch');
          UPDATE tracks SET transcribe_state = 'quarantined' WHERE sc_track_id = '305';
          INSERT INTO transcription_wire_state (
              sc_track_id, status, upload_generation, dispatched_at, quarantine_reason

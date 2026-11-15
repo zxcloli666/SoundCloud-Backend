@@ -25,7 +25,7 @@ FROM (
             FROM lyrics_cache AS lyrics
             WHERE lyrics.sc_track_id = walked.sc_track_id
               AND NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-              AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+              AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
               AND lyrics.created_at < (now() AT TIME ZONE 'UTC') - interval '10 minutes'
             LIMIT 1
         ) AS plain
@@ -46,7 +46,7 @@ FROM (
           AND wire.quarantine_reason IN ('new_upload_during_pending', 'reopen_superseded')
           AND wire.upload_generation < event.uploaded_generation
           AND NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-          AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+          AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
           AND lyrics.created_at < (now() AT TIME ZONE 'UTC') - interval '10 minutes'
           AND event.updated_at < now() - interval '10 minutes'
           AND event.uploaded_generation > 0

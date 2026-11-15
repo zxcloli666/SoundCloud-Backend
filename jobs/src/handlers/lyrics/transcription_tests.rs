@@ -480,7 +480,7 @@ async fn aligned_result_preserves_an_aggregator_winner(pool: PgPool) -> anyhow::
     seed_pending(&pool).await?;
     sqlx::query(
         "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, source, synced_source)
-         VALUES ('42', 'aggregator lyrics', '[00:02.00]aggregator lyrics', 'lrclib', 'lrclib')",
+         VALUES ('42', 'aggregator lyrics', '[00:02.00]aggregator lyrics', 'musixmatch', 'musixmatch')",
     )
     .execute(&pool)
     .await?;
@@ -502,13 +502,48 @@ async fn aligned_result_preserves_an_aggregator_winner(pool: PgPool) -> anyhow::
         (
             "aggregator lyrics".to_owned(),
             Some("[00:02.00]aggregator lyrics".to_owned()),
-            "lrclib".to_owned()
+            "musixmatch".to_owned()
         )
     );
     assert_eq!(jobs, 0);
     assert_eq!(
         sync_provenance(&pool).await?,
-        (Some("lrclib".to_owned()), None)
+        (Some("musixmatch".to_owned()), None)
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn aligned_result_replaces_an_lrclib_sync(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_pending(&pool).await?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, source)
+         VALUES ('42', 'aggregator lyrics', '[00:02.00]aggregator lyrics', 'lrclib')",
+    )
+    .execute(&pool)
+    .await?;
+
+    TranscriptionResultHandler::new(pool.clone())
+        .finish(aligned_result(), delivery(1))
+        .await?;
+
+    let lyrics = sqlx::query_as::<_, (String, Option<String>, String)>(
+        "SELECT plain_text, synced_lrc, source FROM lyrics_cache WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        lyrics,
+        (
+            "aggregator lyrics".to_owned(),
+            Some("[00:01.00]A sufficiently long generated lyrics line".to_owned()),
+            "lrclib".to_owned()
+        )
+    );
+    assert_eq!(
+        sync_provenance(&pool).await?,
+        (Some("self_gen".to_owned()), Some("s2.aaaa.bbbb.cccc".to_owned()))
     );
     Ok(())
 }

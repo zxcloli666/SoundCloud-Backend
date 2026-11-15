@@ -25,7 +25,10 @@ WITH candidates AS MATERIALIZED (
           OR track.storage_state <> 'ok'
           OR track.needs_duration_resolve
           OR NULLIF(btrim(lyrics.plain_text), '') IS NULL
-          OR NULLIF(btrim(lyrics.synced_lrc), '') IS NOT NULL
+          OR (
+              NULLIF(btrim(lyrics.synced_lrc), '') IS NOT NULL
+              AND COALESCE(lyrics.synced_source, lyrics.source) IS DISTINCT FROM 'lrclib'
+          )
       )
     ORDER BY wire.completed_at, wire.sc_track_id
     FOR UPDATE OF wire SKIP LOCKED

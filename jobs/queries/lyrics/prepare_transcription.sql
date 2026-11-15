@@ -22,7 +22,7 @@ WITH track AS MATERIALIZED (
     FROM lyrics_cache AS cache
     JOIN track ON track.sc_track_id = cache.sc_track_id
     WHERE NULLIF(btrim(cache.plain_text), '') IS NOT NULL
-      AND NULLIF(btrim(cache.synced_lrc), '') IS NULL
+      AND (NULLIF(btrim(cache.synced_lrc), '') IS NULL OR COALESCE(cache.synced_source, cache.source) = 'lrclib')
 ), superseded AS MATERIALIZED (
     SELECT state.sc_track_id
     FROM transcription_wire_state AS state
