@@ -2,7 +2,7 @@
 #[path = "lyrics_description_tests.rs"]
 mod tests;
 
-use super::track_search::{lagging, yielded, yielding};
+use super::track_search::{MAX_LAG_SECONDS, lagging, yielded, yielding};
 use super::{AdminMaintenanceHandler, LYRICS_DESCRIPTION, PhaseOutcome, RunState, SliceProgress};
 use crate::queue::{JobError, JobResult};
 
@@ -12,7 +12,7 @@ pub async fn execute(
     handler: &AdminMaintenanceHandler,
     state: &RunState,
 ) -> JobResult<PhaseOutcome> {
-    if lagging(handler).await? {
+    if lagging(handler, MAX_LAG_SECONDS).await? {
         return Ok(PhaseOutcome::Advanced);
     }
     let cursor = state.cursor_text.as_deref().unwrap_or("");

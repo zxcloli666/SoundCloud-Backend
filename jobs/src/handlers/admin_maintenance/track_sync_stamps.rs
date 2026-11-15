@@ -14,13 +14,14 @@ const BACKFILL: &str = "backfill";
 const CHECK: &str = "check";
 const RECHECK: &str = "recheck";
 const CHECK_ROWS: i64 = 20_000;
+const MAX_LAG_SECONDS: f64 = 60.0;
 
 pub async fn execute(
     handler: &AdminMaintenanceHandler,
     state: &RunState,
 ) -> JobResult<PhaseOutcome> {
     let cursor = state.cursor_uuid.unwrap_or(Uuid::nil());
-    if state.phase != RECHECK && lagging(handler).await? {
+    if state.phase != RECHECK && lagging(handler, MAX_LAG_SECONDS).await? {
         return Ok(PhaseOutcome::Advanced);
     }
     match state.phase.as_str() {
