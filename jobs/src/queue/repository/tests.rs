@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::*;
-use crate::queue::model::{ClaimOrder, NewJob};
+use crate::queue::model::{ClaimOrder, LeasedJob, NewJob};
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
@@ -117,7 +117,7 @@ async fn postponing_preserves_retry_budget_and_prevents_early_claim(
     assert_eq!(job.attempts, 1);
     assert_eq!(
         repository
-            .postpone(job, "refresh cooldown", Duration::from_secs(600))
+            .postpone(job, "refresh cooldown", Duration::from_secs(600), None)
             .await?,
         Completion::Completed
     );
@@ -137,7 +137,7 @@ async fn postponing_preserves_retry_budget_and_prevents_early_claim(
     assert_eq!(state, (0, true, true));
     assert_eq!(
         repository
-            .postpone(job, "duplicate", Duration::from_secs(1))
+            .postpone(job, "duplicate", Duration::from_secs(1), None)
             .await?,
         Completion::LostLease
     );
@@ -190,7 +190,7 @@ async fn postponing_cannot_overwrite_an_expired_lease_or_newer_generation(
         .await?;
     assert_eq!(
         repository
-            .postpone(job, "too late", Duration::from_secs(600))
+            .postpone(job, "too late", Duration::from_secs(600), None)
             .await?,
         Completion::LostLease
     );
@@ -202,7 +202,7 @@ async fn postponing_cannot_overwrite_an_expired_lease_or_newer_generation(
         .await?;
     assert_eq!(
         repository
-            .postpone(job, "old generation", Duration::from_secs(600))
+            .postpone(job, "old generation", Duration::from_secs(600), None)
             .await?,
         Completion::Superseded
     );
@@ -212,6 +212,68 @@ async fn postponing_cannot_overwrite_an_expired_lease_or_newer_generation(
             .fetch_one(&pool)
             .await?;
     assert_eq!(state, (0, true));
+    Ok(())
+}
+
+async fn claim_again(repository: &JobRepository, pool: &PgPool) -> anyhow::Result<LeasedJob> {
+    sqlx::query("UPDATE background_jobs SET available_at = now() - interval '1 second'")
+        .execute(pool)
+        .await?;
+    repository
+        .claim(
+            &[JobKind::CatalogCollection],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(60),
+        )
+        .await?
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("postponed job was lost"))
+}
+
+async fn priority_now(pool: &PgPool) -> anyhow::Result<i16> {
+    Ok(sqlx::query_scalar("SELECT priority FROM background_jobs")
+        .fetch_one(pool)
+        .await?)
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_postponed_job_steps_down_one_priority_at_a_time_and_stops_at_the_floor(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "step-down-test".into());
+    let walk = new_job(
+        JobKind::CatalogCollection,
+        Some("track-favoriters:1:public"),
+        7,
+        3,
+        Utc::now(),
+    );
+    repository.enqueue(&walk).await?;
+
+    let mut priorities = Vec::new();
+    for floor in [Some(5), Some(5), Some(5), None, Some(9)] {
+        let job = claim_again(&repository, &pool).await?;
+        repository
+            .postpone(&job, "another page", Duration::from_secs(1), floor)
+            .await?;
+        priorities.push(priority_now(&pool).await?);
+    }
+    assert_eq!(priorities, [6, 5, 5, 5, 5]);
+
+    let job = claim_again(&repository, &pool).await?;
+    sqlx::query("UPDATE background_jobs SET priority = 15")
+        .execute(&pool)
+        .await?;
+    repository
+        .postpone(&job, "another page", Duration::from_secs(1), Some(5))
+        .await?;
+    assert_eq!(
+        priority_now(&pool).await?,
+        14,
+        "a job asked for again during its lease steps down from the raised priority"
+    );
     Ok(())
 }
 
