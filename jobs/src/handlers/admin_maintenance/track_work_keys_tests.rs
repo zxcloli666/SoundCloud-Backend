@@ -15,30 +15,16 @@ const DRIFT: &str = "SELECT count(*)
     FULL JOIN track_work_keys AS keys ON keys.track_id = track.id
     WHERE track.id IS NULL
        OR keys.track_id IS NULL
-       OR (track.primary_artist_id, track.superseded_by IS NOT NULL, track.work_key,
-           track.recording_key, track.work_normalizer_version)
-          IS DISTINCT FROM
-          (keys.primary_artist_id, keys.superseded, keys.work_key, keys.recording_key,
-           keys.work_normalizer_version)";
+       OR (track.primary_artist_id, track.superseded_by IS NOT NULL)
+          IS DISTINCT FROM (keys.primary_artist_id, keys.superseded)";
 
-const STORE_KEYS: &str = "WITH updated AS (
-        UPDATE tracks
-        SET work_key = 'w' || sc_track_id,
-            recording_key = 'r' || sc_track_id,
-            work_normalizer_version = 1
-        WHERE sc_track_id = 's' || (1 + floor(random() * 30000))::int
-        RETURNING id, primary_artist_id, superseded_by IS NOT NULL AS superseded,
-                  work_key, recording_key
-    )
-    INSERT INTO track_work_keys AS stored (
-        track_id, primary_artist_id, superseded, work_key, recording_key, work_normalizer_version
-    )
-    SELECT id, primary_artist_id, superseded, work_key, recording_key, 1 FROM updated
-    ORDER BY id
-    ON CONFLICT (track_id) DO UPDATE
-    SET work_key = EXCLUDED.work_key,
-        recording_key = EXCLUDED.recording_key,
-        work_normalizer_version = EXCLUDED.work_normalizer_version";
+const STORE_KEYS: &str = "UPDATE track_work_keys
+    SET work_key = 'w' || track_id,
+        recording_key = 'r' || track_id,
+        work_normalizer_version = 1
+    WHERE track_id = (
+        SELECT id FROM tracks WHERE sc_track_id = (SELECT 's' || (1 + floor(random() * 30000))::int)
+    )";
 
 const MOVE_ARTIST: &str = "UPDATE tracks
     SET primary_artist_id = (SELECT id FROM artists ORDER BY random() LIMIT 1)
@@ -143,6 +129,7 @@ async fn the_backfill_and_the_check_repair_keys_missing_rows_and_mirrors(
     let totals = run(&pool).await?;
 
     assert_eq!(drift(&pool).await?, 0);
+    assert_eq!(copied(&pool).await?, 3000);
     assert_eq!(totals.status, "completed");
     assert_eq!(totals.skipped, 0);
     assert_eq!(totals.changed, 3050);
@@ -333,4 +320,16 @@ async fn execute(pool: &PgPool, sql: &str) -> anyhow::Result<()> {
 
 async fn drift(pool: &PgPool) -> anyhow::Result<i64> {
     Ok(sqlx::query_scalar(DRIFT).fetch_one(pool).await?)
+}
+
+async fn copied(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+         FROM track_work_keys AS keys
+         JOIN tracks AS track ON track.id = keys.track_id
+         WHERE keys.work_normalizer_version = 1
+           AND (keys.work_key, keys.recording_key) = (track.work_key, track.recording_key)",
+    )
+    .fetch_one(pool)
+    .await?)
 }

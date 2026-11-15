@@ -10,9 +10,12 @@ WITH members AS (SELECT track.id,
                                 track.created_at,
                                 track.id
                             ) AS rank
-                 FROM tracks AS track
-                 WHERE track.primary_artist_id = $1
-                   AND track.recording_key = $2
+                 FROM track_work_keys AS keys
+                          JOIN tracks AS track ON track.id = keys.track_id
+                 WHERE keys.primary_artist_id = $1
+                   AND keys.recording_key = $2
+                   AND NOT keys.superseded
+                   AND track.primary_artist_id = $1
                    AND track.superseded_by IS NULL),
      winner AS (SELECT id, duration_ms FROM members WHERE rank = 1 AND serving),
      losers AS (SELECT members.id

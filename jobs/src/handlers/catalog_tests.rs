@@ -108,6 +108,11 @@ async fn seed_track(
     .bind(artist)
     .execute(pool)
     .await?;
+    sqlx::query("INSERT INTO track_work_keys (track_id, primary_artist_id) VALUES ($1, $2)")
+        .bind(id)
+        .bind(artist)
+        .execute(pool)
+        .await?;
     Ok(id)
 }
 
@@ -241,7 +246,8 @@ async fn keys_are_written_once_and_aliases_follow_the_title(pool: PgPool) -> any
     run(&pool).await?;
 
     let keys = sqlx::query_as::<_, (Option<String>, Option<String>, Option<i16>)>(
-        "SELECT work_key, recording_key, work_normalizer_version FROM tracks WHERE id = $1",
+        "SELECT work_key, recording_key, work_normalizer_version
+         FROM track_work_keys WHERE track_id = $1",
     )
     .bind(track)
     .fetch_one(&pool)
@@ -249,15 +255,6 @@ async fn keys_are_written_once_and_aliases_follow_the_title(pool: PgPool) -> any
     assert_eq!(keys.0.as_deref(), Some("холод"));
     assert_eq!(keys.1.as_deref(), Some("холод"));
     assert_eq!(keys.2, Some(NORMALIZER_VERSION));
-
-    let mirrored = sqlx::query_as::<_, (Option<String>, Option<String>, Option<i16>)>(
-        "SELECT work_key, recording_key, work_normalizer_version
-         FROM track_work_keys WHERE track_id = $1",
-    )
-    .bind(track)
-    .fetch_one(&pool)
-    .await?;
-    assert_eq!(mirrored, keys);
 
     let aliases = sqlx::query_scalar::<_, String>(
         "SELECT alias_key FROM track_work_aliases WHERE track_id = $1 ORDER BY alias_key",

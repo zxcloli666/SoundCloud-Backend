@@ -10,16 +10,18 @@ WITH due AS (SELECT id, primary_artist_id, work_key, recording_key, duration_ms
      matched AS (SELECT DISTINCT ON (due.id) due.id                                       AS wanted_track_id,
                                              track.id                                     AS track_id,
                                              CASE
-                                                 WHEN due.recording_key IS NOT DISTINCT FROM track.recording_key
+                                                 WHEN due.recording_key IS NOT DISTINCT FROM keys.recording_key
                                                      THEN 'recording'
-                                                 WHEN due.work_key = track.work_key THEN 'work'
+                                                 WHEN due.work_key = keys.work_key THEN 'work'
                                                  ELSE 'alias' END                         AS match_reason,
-                                             track.work_key                               AS matched_key
+                                             keys.work_key                                AS matched_key
                  FROM due
                           JOIN tracks AS track
                                ON track.primary_artist_id = due.primary_artist_id
-                                   AND track.work_key IS NOT NULL
-                                   AND (track.work_key = due.work_key
+                          JOIN track_work_keys AS keys
+                               ON keys.track_id = track.id
+                                   AND keys.work_key IS NOT NULL
+                                   AND (keys.work_key = due.work_key
                                        OR EXISTS (SELECT 1
                                                   FROM track_work_aliases AS alias
                                                   WHERE alias.track_id = track.id
@@ -27,13 +29,13 @@ WITH due AS (SELECT id, primary_artist_id, work_key, recording_key, duration_ms
                                        OR EXISTS (SELECT 1
                                                   FROM wanted_track_work_aliases AS alias
                                                   WHERE alias.wanted_track_id = due.id
-                                                    AND alias.alias_key = track.work_key))
+                                                    AND alias.alias_key = keys.work_key))
                                    AND (due.duration_ms IS NULL
                                        OR track.duration_ms IS NULL
                                        OR abs(track.duration_ms - due.duration_ms) <= 7000)
                  ORDER BY due.id,
-                          (due.recording_key IS NOT DISTINCT FROM track.recording_key) DESC,
-                          (due.work_key = track.work_key) DESC,
+                          (due.recording_key IS NOT DISTINCT FROM keys.recording_key) DESC,
+                          (due.work_key = keys.work_key) DESC,
                           track.created_at),
      linked AS (
          UPDATE wanted_tracks
