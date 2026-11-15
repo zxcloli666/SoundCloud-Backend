@@ -30,16 +30,10 @@ WITH locked AS MATERIALIZED (
     ORDER BY locked.id
     ON CONFLICT (track_id) DO UPDATE
     SET enrich_state = EXCLUDED.enrich_state,
-        index_priority = EXCLUDED.index_priority,
-        next_run_at = EXCLUDED.next_run_at,
-        locked_at = EXCLUDED.locked_at,
-        attempts = EXCLUDED.attempts,
-        error = EXCLUDED.error
-    WHERE (stored.enrich_state, stored.index_priority, stored.next_run_at, stored.locked_at, stored.attempts,
-           stored.error)
+        index_priority = EXCLUDED.index_priority
+    WHERE (stored.enrich_state, stored.index_priority)
           IS DISTINCT FROM
-          (EXCLUDED.enrich_state, EXCLUDED.index_priority, EXCLUDED.next_run_at, EXCLUDED.locked_at,
-           EXCLUDED.attempts, EXCLUDED.error)
+          (EXCLUDED.enrich_state, EXCLUDED.index_priority)
     RETURNING stored.track_id
 )
 SELECT (SELECT count(*) FROM removed) AS "removed!",

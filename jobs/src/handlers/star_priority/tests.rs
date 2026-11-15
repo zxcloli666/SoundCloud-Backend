@@ -249,10 +249,11 @@ async fn the_refresh_marks_star_tracks_claimable_for_artist_links_and_a_better_c
          UPDATE tracks SET hq_upgrade_pending = true WHERE sc_track_id IN ('101', '102', '106');
          UPDATE tracks SET hq_upgrade_last_at = now() - interval '1 hour' WHERE sc_track_id = '102';
          UPDATE tracks SET enrich_state = 'done' WHERE sc_track_id = '102';
-         UPDATE tracks SET enrich_state = 'failed', enrich_attempts = 5 WHERE sc_track_id = '104';
-         UPDATE tracks
-         SET enrich_state = 'failed', enrich_next_run_at = now() + interval '1 hour'
-         WHERE sc_track_id = '106';",
+         UPDATE tracks SET enrich_state = 'failed' WHERE sc_track_id IN ('104', '106');
+         UPDATE track_enrich_queue AS queue SET attempts = 5
+         FROM tracks AS track WHERE track.id = queue.track_id AND track.sc_track_id = '104';
+         UPDATE track_enrich_queue AS queue SET next_run_at = now() + interval '1 hour'
+         FROM tracks AS track WHERE track.id = queue.track_id AND track.sc_track_id = '106';",
     )
     .execute(&pool)
     .await?;
@@ -325,7 +326,8 @@ async fn writes_after_a_sweep_reach_the_flags_through_their_marks(
          UPDATE lyrics_lookup_state SET next_run_at = now() + interval '30 days'
          WHERE sc_track_id = '301';
          UPDATE audio_index_wire_state SET upload_generation = 2 WHERE sc_track_id = '302';
-         UPDATE tracks SET enrich_next_run_at = now() + interval '1 day' WHERE sc_track_id = '302';
+         UPDATE track_enrich_queue AS queue SET next_run_at = now() + interval '1 day'
+         FROM tracks AS track WHERE track.id = queue.track_id AND track.sc_track_id = '302';
          UPDATE audio_index_wire_state SET dispatched_at = now() - interval '7 days'
          WHERE sc_track_id = '303';
          UPDATE tracks SET hq_upgrade_pending = true, storage_quality = 'sq'
@@ -496,13 +498,19 @@ async fn an_applied_change_marks_on_core_in_split_and_waits_for_the_sweep_in_leg
         "tracks",
         "transcription_wire_state",
     ];
-    let expected: Vec<(String, String, String)> = tables
+    let mut expected: Vec<(String, String, String)> = tables
         .iter()
         .flat_map(|table| {
             ["star_due_mark_row", "star_due_mark_update"]
                 .map(|name| ((*table).to_owned(), name.to_owned(), "A".to_owned()))
         })
         .collect();
+    expected.push((
+        "track_enrich_queue".to_owned(),
+        "star_due_mark_update".to_owned(),
+        "A".to_owned(),
+    ));
+    expected.sort();
     assert_eq!(triggers, expected);
 
     sqlx::raw_sql(
@@ -619,9 +627,11 @@ async fn every_dirty_pass_leaves_the_flags_of_the_old_full_pass(
     seed_uploaded_star_tracks(&pool).await?;
     sqlx::raw_sql(
         "UPDATE tracks SET index_state = 'ok' WHERE sc_track_id = '301';
-         UPDATE tracks SET enrich_state = 'failed', enrich_attempts = 5 WHERE sc_track_id = '302';
-         UPDATE tracks SET enrich_state = 'failed', enrich_next_run_at = now() + interval '1 hour'
-         WHERE sc_track_id = '303';
+         UPDATE tracks SET enrich_state = 'failed' WHERE sc_track_id IN ('302', '303');
+         UPDATE track_enrich_queue AS queue SET attempts = 5
+         FROM tracks AS track WHERE track.id = queue.track_id AND track.sc_track_id = '302';
+         UPDATE track_enrich_queue AS queue SET next_run_at = now() + interval '1 hour'
+         FROM tracks AS track WHERE track.id = queue.track_id AND track.sc_track_id = '303';
          UPDATE tracks SET hq_upgrade_pending = true, storage_quality = 'hq',
                            hq_upgrade_last_at = now() - interval '1 hour'
          WHERE sc_track_id = '304';
@@ -664,7 +674,8 @@ async fn every_dirty_pass_leaves_the_flags_of_the_old_full_pass(
         "UPDATE lyrics_lookup_state SET next_run_at = now() - interval '1 minute'
          WHERE sc_track_id = '305'",
         "DELETE FROM lyrics_lookup_state WHERE sc_track_id = '304'",
-        "UPDATE tracks SET enrich_next_run_at = now() - interval '1 minute' WHERE sc_track_id = '303'",
+        "UPDATE track_enrich_queue AS queue SET next_run_at = now() - interval '1 minute'
+         FROM tracks AS track WHERE track.id = queue.track_id AND track.sc_track_id = '303'",
         "UPDATE tracks SET hq_upgrade_pending = true, storage_quality = 'sq' WHERE sc_track_id = '306'",
         "UPDATE audio_index_wire_state
          SET status = 'terminal', upload_generation = 1, outcome_status = 'failed',
