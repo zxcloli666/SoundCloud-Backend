@@ -45,6 +45,7 @@ impl HighlightHandler {
     pub async fn sweep(self: Arc<Self>, cancellation: CancellationToken) -> anyhow::Result<()> {
         if self.config.in_flight <= 0 {
             info!("highlight sweep is off: HIGHLIGHT_IN_FLIGHT is 0");
+            cancellation.cancelled().await;
             return Ok(());
         }
         info!(
