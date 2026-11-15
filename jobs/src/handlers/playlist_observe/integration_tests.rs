@@ -248,7 +248,12 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
          CREATE TABLE track_sync_stamps (
              track_id uuid PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
              sc_synced_at timestamptz NOT NULL
-         );",
+         );
+         CREATE TABLE _sqlx_migrations (
+             version bigint PRIMARY KEY,
+             success boolean NOT NULL
+         );
+         INSERT INTO _sqlx_migrations (version, success) VALUES (354, true);",
     )
     .execute(pool)
     .await?;

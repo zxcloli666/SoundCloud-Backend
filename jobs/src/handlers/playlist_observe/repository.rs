@@ -1096,13 +1096,19 @@ pub(super) async fn upsert_hydrated_tracks(
     observation: i64,
 ) -> Result<(), RepositoryError> {
     let payload = catalog_ingest::without_nul(payload);
+    let sync_only = sqlx::query_scalar::<_, bool>(include_str!(
+        "../../../queries/playlist_observe/sync_only_applied.sql"
+    ))
+    .fetch_one(&mut **transaction)
+    .await?;
     let mut attempt = 1;
     loop {
         let mut savepoint = transaction.begin().await?;
         let upserted = sqlx::query_file!(
             "queries/playlist_observe/upsert_tracks.sql",
             &payload,
-            observation
+            observation,
+            sync_only
         )
         .execute(&mut *savepoint)
         .await;

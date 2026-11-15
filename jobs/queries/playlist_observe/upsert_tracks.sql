@@ -141,6 +141,7 @@ WITH payload AS (
                )) < now() - interval '7 days'
                AND (
                    tracks.sc_write_confirmed
+                   OR NOT $3::boolean
                    OR (
                        EXCLUDED.urn, EXCLUDED.title_normalized, EXCLUDED.description, EXCLUDED.genre,
                        EXCLUDED.tags, EXCLUDED.waveform_url,
@@ -198,6 +199,7 @@ WITH payload AS (
       AND track.sc_desired = '{}'::jsonb
       AND track.sc_synced_at < now() - interval '7 days'
       AND (stamp.track_id IS NULL OR stamp.sc_synced_at < now() - interval '7 days')
+      AND $3::boolean
       AND catalog_observation_is_current(
           track.sc_observation, track.sc_mutation_observation, $2,
           track.sc_last_modified,
