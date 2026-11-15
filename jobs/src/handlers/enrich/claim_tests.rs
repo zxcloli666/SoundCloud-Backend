@@ -114,8 +114,29 @@ async fn seed_exhausted_track(
 }
 
 async fn state_of(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<(String, Option<String>)> {
+    Ok(sqlx::query_as(
+        "SELECT track.enrich_state, queue.error
+         FROM tracks AS track
+         JOIN track_enrich_queue AS queue ON queue.track_id = track.id
+         WHERE track.sc_track_id = $1",
+    )
+    .bind(sc_track_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn version_of(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<String> {
     Ok(
-        sqlx::query_as("SELECT enrich_state, enrich_error FROM tracks WHERE sc_track_id = $1")
+        sqlx::query_scalar("SELECT xmin::text FROM tracks WHERE sc_track_id = $1")
+            .bind(sc_track_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn track_id_of(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<uuid::Uuid> {
+    Ok(
+        sqlx::query_scalar("SELECT id FROM tracks WHERE sc_track_id = $1")
             .bind(sc_track_id)
             .fetch_one(pool)
             .await?,
@@ -197,8 +218,10 @@ async fn the_repair_migration_resets_lost_attempts_and_leaves_live_work(
         .await?;
 
     let rows: Vec<(String, String, i16, bool, Option<String>)> = sqlx::query_as(
-        "SELECT sc_track_id, enrich_state, enrich_attempts, enrich_locked_at IS NULL, enrich_error
-         FROM tracks ORDER BY sc_track_id",
+        "SELECT track.sc_track_id, track.enrich_state, queue.attempts, queue.locked_at IS NULL, queue.error
+         FROM tracks AS track
+         JOIN track_enrich_queue AS queue ON queue.track_id = track.id
+         ORDER BY track.sc_track_id",
     )
     .fetch_all(&pool)
     .await?;
@@ -210,6 +233,44 @@ async fn the_repair_migration_resets_lost_attempts_and_leaves_live_work(
             ("3".into(), "pending".into(), 3, false, None),
             ("4".into(), "pending".into(), 5, false, None),
         ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_claim_leaves_the_track_row_and_a_repeated_failure_does_not_touch_it(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_unlinked_tracks(&pool).await?;
+    let before = version_of(&pool, "2").await?;
+
+    let claimed = claimed(&pool, 1, Turn::led_by(Tier::Rest)).await?;
+
+    assert_eq!(claimed, ["2"]);
+    assert_eq!(version_of(&pool, "2").await?, before);
+
+    let id = track_id_of(&pool, "2").await?;
+    let failed_at = |hours: i64, error: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_file!(
+                "queries/enrich/source/mark_failed.sql",
+                id,
+                chrono::Utc::now() + chrono::Duration::hours(hours),
+                Some(error)
+            )
+            .execute(&pool)
+            .await
+        }
+    };
+    failed_at(1, "timeout").await?;
+    let failed = version_of(&pool, "2").await?;
+    assert_ne!(failed, before);
+    failed_at(2, "timeout again").await?;
+    assert_eq!(version_of(&pool, "2").await?, failed);
+    assert_eq!(
+        state_of(&pool, "2").await?,
+        ("failed".to_owned(), Some("timeout again".to_owned()))
     );
     Ok(())
 }

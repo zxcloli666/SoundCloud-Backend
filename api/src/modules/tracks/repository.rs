@@ -55,7 +55,6 @@ pub struct TrackRow {
     pub comments_count_sc: Option<i64>,
 
     pub enrich_state: String,
-    pub enrich_attempts: i16,
     pub enrich_source: Option<String>,
     pub enrich_confidence: Option<f32>,
     pub enriched_at: Option<DateTime<Utc>>,

@@ -162,8 +162,13 @@ async fn an_enrich_retry_resets_one_track_or_every_failed_track(pool: PgPool) {
     let failed = track(&pool, None).await;
     let healthy = track(&pool, None).await;
     for (track, state) in [(single, "done"), (failed, "dead"), (healthy, "done")] {
-        sqlx::query("UPDATE tracks SET enrich_state = $1, enrich_attempts = 4 WHERE id = $2")
+        sqlx::query("UPDATE tracks SET enrich_state = $1 WHERE id = $2")
             .bind(state)
+            .bind(track)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE track_enrich_queue SET attempts = 4 WHERE track_id = $1")
             .bind(track)
             .execute(&pool)
             .await
@@ -173,7 +178,10 @@ async fn an_enrich_retry_resets_one_track_or_every_failed_track(pool: PgPool) {
         let pool = pool.clone();
         async move {
             sqlx::query_as::<_, (Option<String>, i32)>(
-                "SELECT enrich_state, enrich_attempts::int FROM tracks WHERE id = $1",
+                "SELECT track.enrich_state, queue.attempts::int
+                 FROM tracks AS track
+                 JOIN track_enrich_queue AS queue ON queue.track_id = track.id
+                 WHERE track.id = $1",
             )
             .bind(track)
             .fetch_one(&pool)

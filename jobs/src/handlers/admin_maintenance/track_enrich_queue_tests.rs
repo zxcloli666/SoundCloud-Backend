@@ -15,11 +15,9 @@ const DRIFT: &str = "SELECT count(*)
     FULL JOIN track_enrich_queue AS queue ON queue.track_id = track.id
     WHERE track.id IS NULL
        OR queue.track_id IS NULL
-       OR (track.enrich_state, track.index_priority, track.enrich_next_run_at, track.enrich_locked_at,
-           track.enrich_attempts, track.enrich_error)
+       OR (track.enrich_state, track.index_priority)
           IS DISTINCT FROM
-          (queue.enrich_state, queue.index_priority, queue.next_run_at, queue.locked_at,
-           queue.attempts, queue.error)";
+          (queue.enrich_state, queue.index_priority)";
 
 const CLAIM: &str = "UPDATE tracks
     SET enrich_locked_at = now(),
@@ -119,7 +117,7 @@ async fn the_backfill_and_the_check_repair_missing_and_stale_rows(
     .await?;
     execute(
         &pool,
-        "UPDATE track_enrich_queue SET attempts = 9, locked_at = now()
+        "UPDATE track_enrich_queue SET enrich_state = 'failed', index_priority = 1
          WHERE track_id IN (
              SELECT id FROM tracks WHERE substr(sc_track_id, 2)::int BETWEEN 5001 AND 5050
          )",

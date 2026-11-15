@@ -22,11 +22,16 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              enrich_state varchar(16) NOT NULL DEFAULT 'done',
              enrich_source varchar(16),
              enrich_confidence real,
-             enrich_error text,
-             enrich_attempts smallint NOT NULL DEFAULT 0,
-             enrich_locked_at timestamptz,
-             enrich_next_run_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
+         );
+         CREATE TABLE track_enrich_queue (
+             track_id uuid PRIMARY KEY,
+             enrich_state varchar(16) NOT NULL DEFAULT 'pending',
+             index_priority smallint NOT NULL DEFAULT 5,
+             next_run_at timestamptz NOT NULL DEFAULT now(),
+             locked_at timestamptz,
+             attempts smallint NOT NULL DEFAULT 0,
+             error text
          );
          CREATE TABLE track_artists (
              track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -82,6 +87,10 @@ async fn seed_track(
     .bind(enrich_source)
     .execute(pool)
     .await?;
+    sqlx::query("INSERT INTO track_enrich_queue (track_id, enrich_state) VALUES ($1, 'done')")
+        .bind(id)
+        .execute(pool)
+        .await?;
     sqlx::query(
         "INSERT INTO track_artists (track_id, artist_id, role, source, confidence)
          VALUES ($1, $2, 'primary', $3, 0.85)",
@@ -151,7 +160,7 @@ async fn locked_tracks_keep_their_credits_until_enrichment_releases_them(
     install_schema(&pool).await?;
     let artist = seed_artist(&pool, "Zemix").await?;
     let locked = seed_track(&pool, "10", artist, "walker", "heuristic").await?;
-    sqlx::query("UPDATE tracks SET enrich_locked_at = now() WHERE id = $1")
+    sqlx::query("UPDATE track_enrich_queue SET locked_at = now() WHERE track_id = $1")
         .bind(locked)
         .execute(&pool)
         .await?;

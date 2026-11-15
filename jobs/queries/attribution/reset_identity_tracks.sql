@@ -3,7 +3,10 @@ WITH doomed AS (SELECT track.id
                 WHERE track.uploader_sc_user_id = $2
                   AND track.primary_artist_id = $1
                   AND track.enrich_source = 'sc_verified'
-                  AND track.enrich_locked_at IS NULL
+                  AND NOT EXISTS (SELECT 1
+                                  FROM track_enrich_queue AS queue
+                                  WHERE queue.track_id = track.id
+                                    AND queue.locked_at IS NOT NULL)
                 ORDER BY track.id
                 LIMIT $3),
      credits AS MATERIALIZED (SELECT credit.track_id, credit.artist_id, credit.role
@@ -29,12 +32,16 @@ WITH doomed AS (SELECT track.id
              SET primary_artist_id = NULL,
                  enrich_state = 'pending',
                  enrich_source = NULL,
-                 enrich_confidence = NULL,
-                 enrich_error = NULL,
-                 enrich_attempts = 0,
-                 enrich_next_run_at = now() + random() * interval '30 minutes'
+                 enrich_confidence = NULL
              FROM locked
              WHERE track.id = locked.id
-             RETURNING track.id)
+             RETURNING track.id),
+     queued AS (
+         UPDATE track_enrich_queue AS queue
+             SET attempts = 0,
+                 error = NULL,
+                 next_run_at = now() + random() * interval '30 minutes'
+             FROM reset
+             WHERE queue.track_id = reset.id)
 SELECT (SELECT count(*) FROM removed) AS "credits_removed!",
        (SELECT count(*) FROM reset)   AS "tracks_reset!"

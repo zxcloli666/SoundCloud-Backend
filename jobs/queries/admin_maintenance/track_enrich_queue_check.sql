@@ -1,11 +1,7 @@
 WITH batch AS MATERIALIZED (
     SELECT track.id,
            track.enrich_state,
-           track.index_priority,
-           track.enrich_next_run_at,
-           track.enrich_locked_at,
-           track.enrich_attempts,
-           track.enrich_error
+           track.index_priority
     FROM tracks AS track
     WHERE track.id > $1
     ORDER BY track.id
@@ -21,11 +17,7 @@ WITH batch AS MATERIALIZED (
 ), stored AS MATERIALIZED (
     SELECT queue.track_id,
            queue.enrich_state,
-           queue.index_priority,
-           queue.next_run_at,
-           queue.locked_at,
-           queue.attempts,
-           queue.error
+           queue.index_priority
     FROM bounds
     JOIN track_enrich_queue AS queue ON queue.track_id > $1 AND queue.track_id <= bounds.upper
 )
@@ -37,11 +29,9 @@ SELECT bounds.last AS "last?",
            FULL JOIN stored ON stored.track_id = batch.id
            WHERE batch.id IS NULL
               OR stored.track_id IS NULL
-              OR (batch.enrich_state, batch.index_priority, batch.enrich_next_run_at, batch.enrich_locked_at,
-                  batch.enrich_attempts, batch.enrich_error)
+              OR (batch.enrich_state, batch.index_priority)
                  IS DISTINCT FROM
-                 (stored.enrich_state, stored.index_priority, stored.next_run_at, stored.locked_at,
-                  stored.attempts, stored.error)
+                 (stored.enrich_state, stored.index_priority)
            ORDER BY 1
        ) AS "mismatched!"
 FROM bounds

@@ -11,16 +11,14 @@ pub async fn retry(connection: &mut PgConnection, body: &EnrichRetry) -> Done {
     if let Some(raw) = body.sc_track_id.as_deref() {
         let sc_track_id = entity_ref::sc_track_id(raw)
             .ok_or_else(|| Refusal::bad_request("invalid sc_track_id"))?;
-        reset += sqlx::query_file!("queries/enrich/retry_by_sc_track_id.sql", &sc_track_id)
-            .execute(&mut *connection)
-            .await?
-            .rows_affected();
+        reset += sqlx::query_file_scalar!("queries/enrich/retry_by_sc_track_id.sql", &sc_track_id)
+            .fetch_one(&mut *connection)
+            .await? as u64;
     }
     if body.all_failed {
-        reset += sqlx::query_file!("queries/enrich/retry_all_failed.sql")
-            .execute(&mut *connection)
-            .await?
-            .rows_affected();
+        reset += sqlx::query_file_scalar!("queries/enrich/retry_all_failed.sql")
+            .fetch_one(&mut *connection)
+            .await? as u64;
     }
     Ok(json!({ "reset": reset }))
 }

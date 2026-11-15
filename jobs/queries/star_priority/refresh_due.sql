@@ -144,8 +144,8 @@ WITH watch AS (
     FROM targets AS star
     LEFT JOIN LATERAL (
         SELECT track.enrich_state,
-               track.enrich_next_run_at,
-               track.enrich_attempts,
+               queue.next_run_at AS enrich_next_run_at,
+               queue.attempts AS enrich_attempts,
                track.hq_upgrade_pending,
                track.storage_quality,
                track.hq_upgrade_last_at,
@@ -156,6 +156,8 @@ WITH watch AS (
                track.pipeline_held,
                track.transcribe_state
         FROM tracks AS track
+        LEFT JOIN track_enrich_queue AS queue
+          ON queue.track_id = track.id
         WHERE track.sc_track_id = star.sc_track_id
         LIMIT 1
     ) AS stored ON true
