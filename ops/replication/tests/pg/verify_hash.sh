@@ -7,7 +7,7 @@ SET session_replication_role = replica;
 INSERT INTO public.tracks (id, sc_track_id, urn, title, title_normalized, description, genre, tags, artwork_url, permalink_url, waveform_url,
     duration_ms, sharing, uploader_sc_user_id, uploader_urn, uploader_username, uploader_avatar_url, audio_fingerprint,
     likes_count_sc, play_count_sc, reposts_count_sc, comments_count_sc, sc_created_at, sc_last_modified, sc_synced_at, indexed_at, enriched_at,
-    sc_metadata, sc_desired, metadata_artist, isrc, release_date, work_key, recording_key)
+    sc_metadata, sc_desired, metadata_artist, isrc, release_date)
 SELECT md5('vh track ' || i)::uuid, (100000000 + i)::text, 'soundcloud:tracks:' || (100000000 + i), 'Track title number ' || i, 'track title number ' || i,
     CASE WHEN i % 3 <> 0 THEN repeat('Some description text with links and credits ', 1 + i % 12) END,
     'Electronic', ARRAY['house', 'deep house', 'tag ' || (i % 50), 'mix', 'set ' || (i % 7)],
@@ -21,7 +21,7 @@ SELECT md5('vh track ' || i)::uuid, (100000000 + i)::text, 'soundcloud:tracks:' 
      FROM generate_series(1, 40) k),
     CASE WHEN i % 4 = 0 THEN jsonb_build_object('title', 'Track title number ' || i, 'sharing', 'public') ELSE '{}'::jsonb END,
     CASE WHEN i % 5 = 0 THEN 'Label ' || (i % 300) END, CASE WHEN i % 5 = 0 THEN 'USRC1' || lpad(i::text, 7, '0') END,
-    CASE WHEN i % 5 = 0 THEN date '2020-01-01' + i % 1500 END, 'work:' || md5((i % 4000)::text), 'rec:' || md5(i::text)
+    CASE WHEN i % 5 = 0 THEN date '2020-01-01' + i % 1500 END
 FROM generate_series(1, 10000) i;
 INSERT INTO public.artists (id, name, normalized_name, source, genius_artist_id, bio, tags)
 SELECT md5('vh artist ' || i)::uuid, 'Artist ' || i, 'vh artist ' || i, 'sc', CASE WHEN i % 2 = 0 THEN 'g' || i END,

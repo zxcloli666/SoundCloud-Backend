@@ -94,17 +94,19 @@ async fn the_triggers_mirror_the_artist_and_the_superseded_flag(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn the_backfill_and_the_check_repair_keys_missing_rows_and_mirrors(
+async fn the_backfill_and_the_check_repair_missing_rows_and_mirrors_and_keep_the_keys(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     seed(&pool, 1, 12000).await?;
     execute(
         &pool,
-        "UPDATE tracks
-         SET work_key = 'w' || sc_track_id,
-             recording_key = 'r' || sc_track_id,
+        "UPDATE track_work_keys AS keys
+         SET work_key = 'w' || track.sc_track_id,
+             recording_key = 'r' || track.sc_track_id,
              work_normalizer_version = 1
-         WHERE substr(sc_track_id, 2)::int <= 3000",
+         FROM tracks AS track
+         WHERE track.id = keys.track_id
+           AND substr(track.sc_track_id, 2)::int <= 3000",
     )
     .await?;
     execute(
@@ -129,10 +131,10 @@ async fn the_backfill_and_the_check_repair_keys_missing_rows_and_mirrors(
     let totals = run(&pool).await?;
 
     assert_eq!(drift(&pool).await?, 0);
-    assert_eq!(copied(&pool).await?, 3000);
+    assert_eq!(kept(&pool).await?, 2950);
     assert_eq!(totals.status, "completed");
     assert_eq!(totals.skipped, 0);
-    assert_eq!(totals.changed, 3050);
+    assert_eq!(totals.changed, 100);
     assert_eq!(totals.merged, 50);
     assert_eq!(totals.scanned, 3 * 12000);
     Ok(())
@@ -322,13 +324,14 @@ async fn drift(pool: &PgPool) -> anyhow::Result<i64> {
     Ok(sqlx::query_scalar(DRIFT).fetch_one(pool).await?)
 }
 
-async fn copied(pool: &PgPool) -> anyhow::Result<i64> {
+async fn kept(pool: &PgPool) -> anyhow::Result<i64> {
     Ok(sqlx::query_scalar(
         "SELECT count(*)
          FROM track_work_keys AS keys
          JOIN tracks AS track ON track.id = keys.track_id
          WHERE keys.work_normalizer_version = 1
-           AND (keys.work_key, keys.recording_key) = (track.work_key, track.recording_key)",
+           AND (keys.work_key, keys.recording_key)
+               = ('w' || track.sc_track_id, 'r' || track.sc_track_id)",
     )
     .fetch_one(pool)
     .await?)
