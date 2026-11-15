@@ -28,4 +28,4 @@ pub use track_metadata::TrackUpdate;
 pub use upsert::{
     IngestResult, TrackPriority, bump_track_priority, upsert_from_sc, upsert_track_in,
 };
-pub use user::{unchanged_users_in, upsert_profile_in, upsert_user_from_sc, upsert_user_in};
+pub use user::{upsert_profile_in, upsert_user_from_sc, upsert_user_in, users_looking_the_same_in};

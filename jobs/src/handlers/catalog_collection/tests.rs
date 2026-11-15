@@ -1641,7 +1641,7 @@ async fn age_users(pool: &PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_likers_page_writes_new_and_changed_users_and_leaves_the_rest_alone(
+async fn a_likers_page_writes_new_and_renamed_users_and_leaves_the_rest_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let (job, mut payload, writer) = setup(&pool).await?;
@@ -1670,10 +1670,11 @@ async fn a_likers_page_writes_new_and_changed_users_and_leaves_the_rest_alone(
     let snapshot = state::begin(&pool, &job, &payload)
         .await?
         .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
-    let second = fans(
+    let mut second = fans(
         vec![fan(17, "Same", 2), fan(18, "After", 2), fan(19, "New", 2)],
         None,
     );
+    second.items[0]["last_modified"] = json!("2026-06-01T00:00:00Z");
     assert!(
         !writer
             .persist(

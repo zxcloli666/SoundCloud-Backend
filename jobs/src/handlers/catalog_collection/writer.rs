@@ -95,9 +95,9 @@ impl CollectionWriter {
             entities.push((entity, entity_json));
         }
         entities.sort_by(|(a, _), (b, _)| a.sc_id.cmp(&b.sc_id));
-        let unchanged = if payload.collection.entity() == CatalogEntity::User {
+        let same = if payload.collection.entity() == CatalogEntity::User {
             let seen: Vec<_> = entities.iter().map(|(_, user)| *user).collect();
-            catalog_ingest::unchanged_users_in(&mut tx, &seen)
+            catalog_ingest::users_looking_the_same_in(&mut tx, &seen)
                 .await
                 .map_err(JobError::retryable)?
         } else {
@@ -105,7 +105,7 @@ impl CollectionWriter {
         };
         let mut woken = Vec::new();
         for (entity, entity_json) in &entities {
-            if unchanged.contains(&entity.sc_id) {
+            if same.contains(&entity.sc_id) {
                 continue;
             }
             woken.extend(
