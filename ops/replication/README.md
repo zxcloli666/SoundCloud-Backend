@@ -168,6 +168,15 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 101. `0405_tracks_admin_meta_trgm_drop`: `DROP INDEX CONCURRENTLY` of `tracks_admin_meta_lower_trgm`; no query used it.
 102. `0406_tracks_admin_title_trgm_drop`: `DROP INDEX CONCURRENTLY` of `tracks_admin_title_lower_trgm`; `GET /admin/tracks` walks `tracks_sc_created_at_desc_idx` with the title filter from then on. Every non-HOT tracks update put trigrams of both into the GIN pending list, and each flush was a burst of random reads on the apply of main and star.
 103. `0407_job_enqueue_raise_runs_now`: `scd_cmd_job_enqueue` again: an enqueue that raises the priority of a queued job also makes it due (`available_at` becomes the earlier of its own and now). A repeated ask at the same priority leaves the wait alone, so a backoff still holds.
+104. `0408_users_username_lower_trgm_drop`: `DROP INDEX CONCURRENTLY` of `users_search_username_lower_trgm`; user search reads `users_search_doc_gin` and an exact username `users_username_norm_idx`.
+105. `0409_users_username_norm_trgm_drop`: the same for `users_search_username_norm_trgm`.
+106. `0410_playlists_owner_username_trgm_drop`: `DROP INDEX CONCURRENTLY` of `playlists_search_owner_username_trgm`; playlist search reads `playlists_search_doc_gin`.
+107. `0411_playlists_title_lower_trgm_drop`: the same for `playlists_search_title_lower_trgm`.
+108. `0412_playlists_title_norm_trgm_drop`: the same for `playlists_search_title_norm_trgm`. No query has read the five since the search moved to the doc indexes; every insert and non-HOT update of the two tables put trigrams into their GIN pending lists, and each flush was a burst of random reads on the apply of main and star.
+109. `0413_artists_name_trgm_drop`: `DROP INDEX CONCURRENTLY` of `artists_search_name_trgm`; the discover artist search ORs the name with a scan of `tags`, so it walks `artists_discover_*_idx` with a filter and never used it.
+110. `0414_artists_normalized_trgm_drop`: the same for `artists_search_normalized_trgm`.
+111. `0415_albums_normalized_trgm_drop`: `DROP INDEX CONCURRENTLY` of `albums_search_normalized_trgm`; the discover album search ORs the title with the name of the joined artist, so it walks `albums_discover_*_idx` with a filter and never used it.
+112. `0416_albums_title_trgm_drop`: the same for `albums_search_title_trgm`. `artists_tags_gin` stays: a rare tag filter reads it.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -198,6 +207,8 @@ Order for 0400-0404: only after the jobs of 0399 runs on core and its api runs o
 Order for 0405-0406: any node, any time, no binary depends on them. Drop both indexes by hand first on core, main and star with the statements of the files and `lock_timeout` 0, then the migrations no-op. A drop that fails halfway leaves an INVALID index: run the same statement again.
 
 Order for 0407: core, main and star in any order, no service restart. The command runs on core, so the effect starts with core.
+
+Order for 0408-0416: as for 0405-0406. Drop the nine indexes by hand first on core, main and star with the statements of the files and `lock_timeout` 0, then the migrations no-op.
 
 Order for 0307-0308: core, main and star first, then jobs on core. `background_job_failures` is C and its `lane` is published in `scd_core_pub`: the first lookup dead letter on core carries `lane = 'lookup'`, and the apply on a node with the old CHECK fails on every retry, which stops the whole core stream on that node. The api goes after jobs; until then an old api still enqueues lookups into `core_bulk`, and the jobs lane realignment moves them.
 
