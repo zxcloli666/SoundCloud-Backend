@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod auth_overview;
 pub mod catalog;
 pub mod credits;
@@ -19,6 +20,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/stats", get(stats::get_stats))
+        .route("/admin/activity", get(activity::activity))
         .route("/admin/rooms/handoff", post(rooms::handoff))
         .route("/admin/rooms/handoff/ack", post(rooms::handoff_ack))
         .route("/admin/sync-queue", get(sync_queue::get_stats))

@@ -243,7 +243,7 @@ pub async fn begin_long(
     begin_with_timeout(pool, LONG_STATEMENT_TIMEOUT).await
 }
 
-async fn begin_with_timeout(
+pub async fn begin_with_timeout(
     pool: &PgPool,
     timeout: Duration,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
