@@ -40,6 +40,7 @@ TTS_DEVICES: Mapping[str, str] = MappingProxyType({"cpu": "qwen-cpu", "cuda": "q
 MAX_NICE = 19
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 PATH_PART = re.compile(r"[A-Za-z0-9._-]+")
+MAX_TEMPERATURE = 2
 SPEAKER = re.compile(r"[a-z0-9_-]+")
 MIX_FALLBACK = "mix"
 
@@ -325,6 +326,9 @@ class TtsVoice:
     path: str
     sha256: str
     speaker: str
+    temperature: float
+    top_p: float
+    sub_temperature: float
 
 
 @dataclass(frozen=True)
@@ -773,6 +777,19 @@ def validate_tts(settings: Settings) -> list[str]:
         for name, voice in tts.voices.items()
         if not SPEAKER.fullmatch(voice.speaker)
     ]
+    for name, voice in tts.voices.items():
+        problems += validate_manner(name, voice)
+    return problems
+
+
+def validate_manner(name: str, voice: TtsVoice) -> list[str]:
+    problems = []
+    if not 0 <= voice.temperature <= MAX_TEMPERATURE:
+        problems.append(f"tts.voices.{name}.temperature must be within 0..{MAX_TEMPERATURE}")
+    if not 0 < voice.top_p <= 1:
+        problems.append(f"tts.voices.{name}.top_p must be above 0 and at most 1")
+    if not 0 <= voice.sub_temperature <= MAX_TEMPERATURE:
+        problems.append(f"tts.voices.{name}.sub_temperature must be within 0..{MAX_TEMPERATURE}")
     return problems
 
 

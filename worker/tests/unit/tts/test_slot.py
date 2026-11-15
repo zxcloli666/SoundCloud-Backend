@@ -6,6 +6,8 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy as np
+import orjson
 import pytest
 
 from tests.unit.tts import fake_qwen
@@ -57,6 +59,15 @@ def say(tts: TtsSlot, name: str = "loli", text: str = TEXT) -> tuple[int, dict[s
     return arrays["audio"].size, dict(info)
 
 
+def say_audio(tts: TtsSlot, text: str = TEXT) -> np.ndarray:
+    arrays, _ = tts.invoke(TTS_METHOD, {}, {"voice": "loli", "text": text})
+    return arrays["audio"]
+
+
+def events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
+    return [orjson.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
 def test_a_line_is_spoken_by_a_voice_process_started_in_the_engine_folder(
     tts: TtsSlot, home: Path
 ) -> None:
@@ -72,6 +83,26 @@ def test_a_line_is_spoken_by_a_voice_process_started_in_the_engine_folder(
     assert line["payload"] == f"1\n{slot.max_tokens(TEXT)}\nloli\nauto\n{TEXT}"
     [manner] = journal(home, "tune")
     assert (manner["id"], manner["payload"]) == (line["id"], "0.6\n0.9\n0.6")
+
+
+@pytest.mark.parametrize(
+    ("name", "manner"), [("loli", "0.6\n0.9\n0.6"), ("moriarty", "0.9\n1.0\n0.9")]
+)
+def test_each_voice_sends_its_own_manner(tts: TtsSlot, home: Path, name: str, manner: str) -> None:
+    say(tts, name)
+
+    [tune] = journal(home, "tune")
+    assert tune["payload"] == manner
+
+
+@pytest.mark.parametrize("missing", ["temperature", "top_p", "sub_temperature"])
+def test_a_voice_without_a_manner_number_is_refused_at_load(home: Path, missing: str) -> None:
+    voices = {name: dict(options) for name, options in OPTIONS["voices"].items()}
+    del voices["loli"][missing]
+    broken = SlotSpec(TTS_SLOT, "", "", "", TTS_DEVICES["cpu"], 1, 0, {**OPTIONS, "voices": voices})
+
+    with pytest.raises(RuntimeError, match="number options"):
+        TtsSlot().load(broken)
 
 
 def test_the_next_line_of_the_same_voice_reuses_the_process(tts: TtsSlot, home: Path) -> None:
@@ -118,6 +149,60 @@ def test_the_deadline_cancels_the_line_and_keeps_the_voice(tts: TtsSlot, home: P
     assert spoken == fake_qwen.CHUNK * fake_qwen.SLOW_CHUNKS
     assert info["loaded"] is False
     assert [cancel["id"] for cancel in journal(home, "cancel")] == [2]
+
+
+def test_a_line_that_falls_silent_after_speech_is_cut_a_tenth_of_a_second_past_the_sound(
+    tts: TtsSlot, home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    voice(home, "loli", "goes_quiet")
+
+    audio = say_audio(tts)
+
+    sound = fake_qwen.CHUNK * fake_qwen.CHUNKS
+    assert audio.size == sound + process.RATE // 10
+    assert np.all(audio[:sound] == 0.25) and not audio[sound:].any()
+    assert [cancel["id"] for cancel in journal(home, "cancel")] == [1]
+    [cut] = [event for event in events(capsys) if event["event"] == "tts_line_cut"]
+    assert (cut["voice"], cut["text_chars"], cut["seconds"]) == ("loli", len(TEXT), 0.2)
+    assert TEXT not in orjson.dumps(cut).decode()
+
+
+def test_a_faint_hiss_after_speech_counts_as_quiet(tts: TtsSlot, home: Path) -> None:
+    voice(home, "loli", "goes_hiss")
+
+    audio = say_audio(tts)
+
+    sound = fake_qwen.CHUNK * fake_qwen.CHUNKS
+    assert audio.size == sound + process.RATE // 10
+    assert [cancel["id"] for cancel in journal(home, "cancel")] == [1]
+
+
+def test_a_cut_line_keeps_the_voice_for_the_next_line(tts: TtsSlot, home: Path) -> None:
+    voice(home, "loli", "goes_quiet")
+    say(tts)
+    spoken, info = say(tts)
+
+    assert spoken == fake_qwen.CHUNK * fake_qwen.CHUNKS + process.RATE // 10
+    assert info["loaded"] is False
+    assert len(journal(home, "start")) == 1
+
+
+def test_quiet_before_any_sound_never_cancels_the_line(tts: TtsSlot, home: Path) -> None:
+    voice(home, "loli", "quiet_first")
+
+    spoken, _ = say(tts)
+
+    assert spoken == fake_qwen.CHUNK * fake_qwen.LEAD_QUIET_CHUNKS + SPOKEN
+    assert journal(home, "cancel") == []
+
+
+def test_a_pause_shorter_than_the_limit_loses_no_samples(tts: TtsSlot, home: Path) -> None:
+    voice(home, "loli", "pause")
+
+    spoken, _ = say(tts)
+
+    assert spoken == SPOKEN * 2 + fake_qwen.PAUSE_SAMPLES
+    assert journal(home, "cancel") == []
 
 
 def test_a_stalled_voice_is_killed_and_the_next_line_starts_a_new_one(

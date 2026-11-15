@@ -249,8 +249,14 @@ sha256 = "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94"
 path = "qwen-loli-q8/1/qwen-talker-1.7b-loli-Q8_0.gguf"
 sha256 = "6df827daebcac238f938f8d4ffca863ef61827ed9e52c2df38ea4471ab042d2a"
 speaker = "loli"
+temperature = 0.6
+top_p = 0.9
+sub_temperature = 0.6
 
 [tts.voices.moriarty]
 path = "qwen-moriarty-q8/1/qwen-talker-1.7b-moriarty-Q8_0.gguf"
 sha256 = "9988fba437f0a569f0532421079a06c6727c9ca37771989268a7a534b85c178e"
 speaker = "moriarty"
+temperature = 0.9
+top_p = 1.0
+sub_temperature = 0.9

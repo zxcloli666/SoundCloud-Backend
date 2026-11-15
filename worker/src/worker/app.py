@@ -909,7 +909,13 @@ def tts_options(tts: TtsSection) -> dict[str, object]:
         "program": tts.engine.path(tts.engine.program),
         "codec": tts.codec.path,
         "voices": {
-            name: {"talker": voice.path, "speaker": voice.speaker}
+            name: {
+                "talker": voice.path,
+                "speaker": voice.speaker,
+                "temperature": voice.temperature,
+                "top_p": voice.top_p,
+                "sub_temperature": voice.sub_temperature,
+            }
             for name, voice in tts.voices.items()
         },
     }
