@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
@@ -50,18 +52,11 @@ pub(crate) async fn upsert_user_at(
     observation: Observation,
     observed_at: DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
-    let payload = &without_nul(payload);
-    let Some(fields) = ScUserFields::from_sc(payload) else {
+    let Some(row) = observed_row(payload) else {
         return Err(sqlx::Error::Protocol(
             "invalid SoundCloud user payload".into(),
         ));
     };
-    let mut row = fields.row();
-    row["keys"] = REPLACED_WHEN_PRESENT
-        .iter()
-        .filter(|key| payload.get(**key).is_some())
-        .map(|key| Value::from(*key))
-        .collect();
     let upsert = ObserveUsers {
         mode: Mode::Upsert,
         observed_at,
@@ -72,6 +67,34 @@ pub(crate) async fn upsert_user_at(
         .await?
         .first()
         .is_some_and(|user| user.was_new))
+}
+
+pub async fn unchanged_users_in(
+    connection: &mut PgConnection,
+    payloads: &[&Value],
+) -> Result<HashSet<String>, sqlx::Error> {
+    let seen: Vec<Value> = payloads
+        .iter()
+        .filter_map(|payload| observed_row(payload))
+        .collect();
+    if seen.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let unchanged = sqlx::query_file_scalar!("queries/users/unchanged.sql", Value::Array(seen))
+        .fetch_all(connection)
+        .await?;
+    Ok(unchanged.into_iter().collect())
+}
+
+fn observed_row(payload: &Value) -> Option<Value> {
+    let payload = &without_nul(payload);
+    let mut row = ScUserFields::from_sc(payload)?.row();
+    row["keys"] = REPLACED_WHEN_PRESENT
+        .iter()
+        .filter(|key| payload.get(**key).is_some())
+        .map(|key| Value::from(*key))
+        .collect();
+    Some(row)
 }
 
 pub async fn upsert_profile_in(

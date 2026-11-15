@@ -3,10 +3,12 @@ use crate::handlers::catalog_refresh_writer::CatalogWriter;
 use crate::handlers::lyrics::wake;
 use crate::queue::{JobError, JobResult, LeasedJob};
 use backend_contracts::{
-    CatalogCollection, CatalogCollectionPayload, CatalogRefreshPayload, CollectionItem,
+    CatalogCollection, CatalogCollectionPayload, CatalogEntity, CatalogRefreshPayload,
+    CollectionItem,
 };
 use catalog_ingest::TrackPriority;
 use sqlx::PgPool;
+use std::collections::HashSet;
 
 pub(super) struct CollectionWriter {
     pool: PgPool,
@@ -93,8 +95,19 @@ impl CollectionWriter {
             entities.push((entity, entity_json));
         }
         entities.sort_by(|(a, _), (b, _)| a.sc_id.cmp(&b.sc_id));
+        let unchanged = if payload.collection.entity() == CatalogEntity::User {
+            let seen: Vec<_> = entities.iter().map(|(_, user)| *user).collect();
+            catalog_ingest::unchanged_users_in(&mut tx, &seen)
+                .await
+                .map_err(JobError::retryable)?
+        } else {
+            HashSet::new()
+        };
         let mut woken = Vec::new();
         for (entity, entity_json) in &entities {
+            if unchanged.contains(&entity.sc_id) {
+                continue;
+            }
             woken.extend(
                 self.entities
                     .persist_in(&mut tx, entity, entity_json, priority, observation)
