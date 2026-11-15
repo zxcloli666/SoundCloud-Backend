@@ -2298,6 +2298,7 @@
     {"cols": ["track_id"], "name": "track_highlight_dispatch_track_fk", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_highlight_dispatch_pkey", "primary": true, "where": null}
@@ -2316,6 +2317,9 @@
     {"cols": ["track_id"], "name": "track_highlights_track_fk", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_track_highlights", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_highlights_pkey", "primary": true, "where": null}

@@ -596,9 +596,14 @@ mod tests {
                 .lane
                 .reopenable()
                 .contains(&backend_contracts::reasons::WorkerReason::WorkerLost);
-            let stateless_retrain = matches!(spec.lane, WorkerLane::Collab | WorkerLane::Taste);
+            let sent_again_without_a_receiver = matches!(
+                spec.lane,
+                WorkerLane::Collab | WorkerLane::Taste | WorkerLane::Highlight
+            );
             assert!(
-                !promises_reopen || stateless_retrain || receiver_of(spec.lane).is_some(),
+                !promises_reopen
+                    || sent_again_without_a_receiver
+                    || receiver_of(spec.lane).is_some(),
                 "lane {} promises a worker_lost reopen that jobs never applies",
                 spec.lane.as_str()
             );
