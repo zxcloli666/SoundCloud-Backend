@@ -12,6 +12,7 @@ impl JobRepository {
         job: &LeasedJob,
         error: &str,
         delay: Duration,
+        step_down_to: Option<i16>,
     ) -> Result<Completion, QueueError> {
         let error = truncate(error, MAX_ERROR_LENGTH);
         let delay_milliseconds =
@@ -22,7 +23,8 @@ impl JobRepository {
             job.lease_id,
             job.generation,
             delay_milliseconds,
-            error
+            error,
+            step_down_to
         )
         .execute(&self.pool)
         .await?

@@ -75,6 +75,7 @@ pub enum JobError {
     Postponed {
         delay: std::time::Duration,
         error: anyhow::Error,
+        step_down_to: Option<i16>,
     },
     Settled {
         failure: CollectionFailure,
@@ -90,6 +91,18 @@ impl JobError {
                 std::time::Duration::from_secs(86400),
             ),
             error: error.into(),
+            step_down_to: None,
+        }
+    }
+
+    pub fn stepping_down_to(self, floor: i16) -> Self {
+        match self {
+            Self::Postponed { delay, error, .. } => Self::Postponed {
+                delay,
+                error,
+                step_down_to: Some(floor),
+            },
+            other => other,
         }
     }
 
