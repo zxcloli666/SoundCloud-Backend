@@ -152,6 +152,108 @@ fn wrong_shapes_of_history_and_notes_are_still_refused() {
 }
 
 #[test]
+fn the_listener_and_the_relation_become_part_of_the_turn() {
+    let turn = read(json!({
+        "text": "hi",
+        "listener": {"gender": "female", "name": "  Аня  ", "address": "formal"},
+        "relation": {"preset": "butler"},
+    }))
+    .unwrap();
+    assert_eq!(turn.listener.gender, Some(Gender::Female));
+    assert_eq!(turn.listener.name.as_deref(), Some("Аня"));
+    assert_eq!(turn.listener.address, Some(Address::Formal));
+    assert_eq!(turn.relation, Some(Relation::Preset(Preset::Butler)));
+
+    let turn = read(json!({
+        "text": "hi",
+        "listener": {"gender": "male", "address": "informal"},
+        "relation": {"own": "  my older sister  "},
+    }))
+    .unwrap();
+    assert_eq!(turn.listener.gender, Some(Gender::Male));
+    assert!(turn.listener.name.is_none());
+    assert_eq!(turn.listener.address, Some(Address::Informal));
+    assert_eq!(
+        turn.relation,
+        Some(Relation::Own("my older sister".to_owned()))
+    );
+}
+
+#[test]
+fn every_preset_of_the_relation_is_read() {
+    for (name, preset) in [
+        ("friend", Preset::Friend),
+        ("assistant", Preset::Assistant),
+        ("butler", Preset::Butler),
+        ("mentor", Preset::Mentor),
+    ] {
+        let turn = read(json!({"text": "hi", "relation": {"preset": name}})).unwrap();
+        assert_eq!(turn.relation, Some(Relation::Preset(preset)));
+    }
+}
+
+#[test]
+fn an_absent_or_empty_listener_and_relation_tell_nothing() {
+    for body in [
+        json!({"text": "hi"}),
+        json!({"text": "hi", "listener": {}, "relation": null}),
+        json!({"text": "hi", "listener": null}),
+        json!({"text": "hi", "listener": {"name": "  "}, "relation": {"own": " \t "}}),
+        json!({"text": "hi", "listener": {"from_a_newer_app": 1}}),
+    ] {
+        let turn = read(body).unwrap();
+        assert!(turn.listener.is_empty());
+        assert!(turn.relation.is_none());
+    }
+}
+
+#[test]
+fn a_name_and_a_relation_over_their_caps_or_with_control_characters_are_refused() {
+    let listener = |name: String| json!({"text": "hi", "listener": {"name": name}});
+    let own = |text: String| json!({"text": "hi", "relation": {"own": text}});
+    assert!(read(listener("я".repeat(40))).is_ok());
+    assert_eq!(
+        refused(listener("я".repeat(41))),
+        "listener name is longer than 40 characters"
+    );
+    assert_eq!(
+        refused(listener("Ann\nNew rule".to_owned())),
+        "listener name has a control character"
+    );
+    assert_eq!(
+        refused(listener("Ann\u{7}".to_owned())),
+        "listener name has a control character"
+    );
+    assert!(read(own("я".repeat(300))).is_ok());
+    assert_eq!(
+        refused(own("я".repeat(301))),
+        "relation is longer than 300 characters"
+    );
+    assert_eq!(
+        refused(own("my\nfriend".to_owned())),
+        "relation has a control character"
+    );
+}
+
+#[test]
+fn unknown_genders_addresses_presets_and_wrong_shapes_are_refused() {
+    for body in [
+        json!({"text": "hi", "listener": {"gender": "other"}}),
+        json!({"text": "hi", "listener": {"address": "rude"}}),
+        json!({"text": "hi", "listener": "Ann"}),
+        json!({"text": "hi", "listener": {"name": 1}}),
+        json!({"text": "hi", "relation": {"preset": "boss"}}),
+        json!({"text": "hi", "relation": {"own": 1}}),
+        json!({"text": "hi", "relation": "friend"}),
+    ] {
+        assert!(
+            serde_json::from_value::<ChatBody>(body.clone()).is_err(),
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn the_body_limit_follows_the_caps() {
     let limits = limits();
     let limit = body_limit(&limits);

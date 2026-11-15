@@ -8,6 +8,7 @@ use llm_ladder::{
 };
 
 use super::prompt;
+use super::readings::Readings;
 use super::reply::{self, Offered};
 use super::request::Turn;
 use super::tools::Tools;
@@ -84,12 +85,13 @@ impl Live {
 
     pub async fn answer(&self, request: Request, turn: Turn) -> Result<Response, LadderError> {
         let started = Instant::now();
+        let readings = Readings::of(&turn);
         let offered = Offered::new(turn.tools, turn.quiet);
         let answer = self
             .ladder
             .stream(request, reply::commit(offered.clone()))
             .await?;
-        Ok(reply::respond(answer, offered, started))
+        Ok(reply::respond(answer, offered, readings, started))
     }
 
     fn plain(&self, turn: &Turn) -> Option<Plain> {

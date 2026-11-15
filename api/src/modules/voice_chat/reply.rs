@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::answer::{Answer, Piece};
+use super::readings::Readings;
 use super::tools::{Action, Tools};
 
 const KEEPALIVE: Duration = Duration::from_secs(15);
@@ -26,10 +27,16 @@ pub fn commit(offered: Arc<Offered>) -> Commit {
     Arc::new(move |form, held| offered.accepts(form, held))
 }
 
-pub fn respond(answer: AnswerStream, offered: Arc<Offered>, started: Instant) -> Response {
+pub fn respond(
+    answer: AnswerStream,
+    offered: Arc<Offered>,
+    readings: Readings,
+    started: Instant,
+) -> Response {
     let reply = Reply {
         answer,
         parser: Answer::default(),
+        readings,
         offered,
         ready: VecDeque::new(),
         spoke: false,
@@ -112,6 +119,7 @@ fn only_speaks(pieces: Vec<Piece>) -> bool {
 struct Reply {
     answer: AnswerStream,
     parser: Answer,
+    readings: Readings,
     offered: Arc<Offered>,
     ready: VecDeque<Event>,
     spoke: bool,
@@ -138,6 +146,13 @@ impl Reply {
 
     fn take(&mut self, delta: &str) {
         for piece in self.parser.push(delta) {
+            let pieces = self.readings.pass(piece);
+            self.give(pieces);
+        }
+    }
+
+    fn give(&mut self, pieces: Vec<Piece>) {
+        for piece in pieces {
             match piece {
                 Piece::Say(text) if !self.spoke && text.trim().is_empty() => {}
                 Piece::Say(text) => {
@@ -159,7 +174,13 @@ impl Reply {
         }
     }
 
+    fn give_the_rest(&mut self) {
+        let pieces = self.readings.end();
+        self.give(pieces);
+    }
+
     fn finish(&mut self) {
+        self.give_the_rest();
         let silent = self.offered.quiet && !self.spoke && self.tally.actions == 0;
         if silent {
             self.send("quiet", json!({}));
@@ -172,6 +193,7 @@ impl Reply {
     }
 
     fn fail(&mut self, code: &'static str) {
+        self.give_the_rest();
         self.close(code, "error", json!({"code": code}));
     }
 
