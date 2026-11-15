@@ -61,14 +61,27 @@ UPDATE tracks AS track
        pipeline_held = star.c = 8 AND star.b IN (2, 3),
        transcribe_state = star.transcription,
        enrich_state = (ARRAY['pending', 'failed', 'dead', 'done', 'done', 'done', 'done', 'done', 'done', 'done'])[1 + star.d],
-       enrich_next_run_at = now() + (star.k % 3 - 1) * interval '1 hour',
-       enrich_attempts = star.k % 8,
        hq_upgrade_pending = star.k % 7 = 0,
        storage_quality = (ARRAY['sq', 'hq', 'uq'])[1 + star.k % 3],
        hq_upgrade_last_at = CASE WHEN star.k % 2 = 1 THEN now() - (star.k % 48) * interval '1 hour' END
   FROM planfixture_star AS star
  WHERE star.stored
    AND track.id = star.track_id;
+
+INSERT INTO track_enrich_queue (track_id, enrich_state, index_priority, next_run_at, attempts)
+SELECT track.id,
+       track.enrich_state,
+       track.index_priority,
+       now() + (star.k % 3 - 1) * interval '1 hour',
+       star.k % 8
+  FROM planfixture_star AS star
+  JOIN tracks AS track ON track.id = star.track_id
+ WHERE star.stored
+ON CONFLICT (track_id) DO UPDATE
+   SET enrich_state = EXCLUDED.enrich_state,
+       index_priority = EXCLUDED.index_priority,
+       next_run_at = EXCLUDED.next_run_at,
+       attempts = EXCLUDED.attempts;
 
 UPDATE tracks AS track
    SET storage_state = 'ok',

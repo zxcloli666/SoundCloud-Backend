@@ -183,10 +183,11 @@ async fn a_new_track_gets_the_same_v5_id_on_api_and_core() {
     assert_eq!(v5.get_version_num(), 5);
     let stamps: bool = scalar(
         &pair.core,
-        "SELECT created_at = '2026-10-30T10:00:00.123456Z'
-                AND sc_synced_at = created_at AND enrich_next_run_at = created_at
-                AND sc_observation = 28693349570866705 AND pipeline_held = false
-         FROM public.tracks",
+        "SELECT track.created_at = '2026-10-30T10:00:00.123456Z'
+                AND track.sc_synced_at = track.created_at AND queue.next_run_at = track.created_at
+                AND track.sc_observation = 28693349570866705 AND track.pipeline_held = false
+         FROM public.tracks AS track
+         JOIN public.track_enrich_queue AS queue ON queue.track_id = track.id",
     )
     .await;
     assert!(stamps);

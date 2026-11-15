@@ -19,17 +19,28 @@ const DRIFT: &str = "SELECT count(*)
           IS DISTINCT FROM
           (queue.enrich_state, queue.index_priority)";
 
-const CLAIM: &str = "UPDATE tracks
-    SET enrich_locked_at = now(),
-        enrich_attempts = enrich_attempts + 1
-    WHERE sc_track_id = 's' || (1 + floor(random() * 30000))::int";
+const CLAIM: &str = "UPDATE track_enrich_queue
+    SET locked_at = now(),
+        attempts = attempts + 1
+    WHERE track_id = (
+        SELECT id FROM tracks WHERE sc_track_id = (SELECT 's' || (1 + floor(random() * 30000))::int)
+    )";
 
-const FAIL: &str = "UPDATE tracks
-    SET enrich_state = 'failed',
-        enrich_locked_at = NULL,
-        enrich_next_run_at = now() + interval '1 hour',
-        enrich_error = 'timeout ' || floor(random() * 1000)::int
-    WHERE sc_track_id = 's' || (1 + floor(random() * 30000))::int";
+const FAIL: &str = "WITH picked AS MATERIALIZED (
+        SELECT id FROM tracks WHERE sc_track_id = (SELECT 's' || (1 + floor(random() * 30000))::int)
+    ), failed AS (
+        UPDATE tracks
+        SET enrich_state = 'failed'
+        FROM picked
+        WHERE tracks.id = picked.id
+        RETURNING tracks.id
+    )
+    UPDATE track_enrich_queue AS queue
+    SET locked_at = NULL,
+        next_run_at = now() + interval '1 hour',
+        error = 'timeout ' || floor(random() * 1000)::int
+    FROM failed
+    WHERE queue.track_id = failed.id";
 
 const INSERT: &str = "INSERT INTO tracks (
         sc_track_id, urn, title, title_normalized, duration_ms, sharing
@@ -48,7 +59,9 @@ struct Totals {
 type Lease = (String, i16, bool, i16, Option<String>);
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn the_triggers_copy_the_lease_of_every_track(pool: PgPool) -> anyhow::Result<()> {
+async fn the_triggers_mirror_state_and_priority_and_leave_the_lease_to_jobs(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     seed(&pool, 1, 2).await?;
     let first = track_id(&pool, 1).await?;
     let second = track_id(&pool, 2).await?;
@@ -62,9 +75,9 @@ async fn the_triggers_copy_the_lease_of_every_track(pool: PgPool) -> anyhow::Res
     execute_for(
         &pool,
         first,
-        "UPDATE tracks
-         SET enrich_locked_at = now(), enrich_attempts = enrich_attempts + 1
-         WHERE id = $1",
+        "UPDATE track_enrich_queue
+         SET locked_at = now(), attempts = attempts + 1
+         WHERE track_id = $1",
     )
     .await?;
     assert_eq!(
@@ -75,10 +88,15 @@ async fn the_triggers_copy_the_lease_of_every_track(pool: PgPool) -> anyhow::Res
     execute_for(
         &pool,
         first,
-        "UPDATE tracks
-         SET enrich_state = 'failed', enrich_locked_at = NULL, enrich_error = 'timeout',
-             enrich_next_run_at = now() + interval '1 hour', index_priority = 1
-         WHERE id = $1",
+        "UPDATE track_enrich_queue
+         SET locked_at = NULL, error = 'timeout', next_run_at = now() + interval '1 hour'
+         WHERE track_id = $1",
+    )
+    .await?;
+    execute_for(
+        &pool,
+        first,
+        "UPDATE tracks SET enrich_state = 'failed', index_priority = 1 WHERE id = $1",
     )
     .await?;
     assert_eq!(
