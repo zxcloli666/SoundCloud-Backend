@@ -61,15 +61,21 @@ WITH track AS MATERIALIZED (
 ), aligned AS (
     UPDATE lyrics_cache AS cache
     SET synced_lrc = CASE
-            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL THEN $13::text
+            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL
+                 OR COALESCE(cache.synced_source, cache.source) = 'lrclib'
+                THEN $13::text
             ELSE cache.synced_lrc
         END,
         synced_source = CASE
-            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL THEN 'self_gen'
+            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL
+                 OR COALESCE(cache.synced_source, cache.source) = 'lrclib'
+                THEN 'self_gen'
             ELSE cache.synced_source
         END,
         synced_version = CASE
-            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL THEN $12::varchar
+            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL
+                 OR COALESCE(cache.synced_source, cache.source) = 'lrclib'
+                THEN $12::varchar
             ELSE cache.synced_version
         END,
         language = COALESCE(cache.language, $19::varchar)

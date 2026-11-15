@@ -99,7 +99,7 @@ WITH track AS MATERIALIZED (
                    FROM lyrics_cache AS lyrics
                    WHERE lyrics.sc_track_id = track.sc_track_id
                      AND NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-                     AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+                     AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
                )
                AND NOT EXISTS (
                    SELECT 1

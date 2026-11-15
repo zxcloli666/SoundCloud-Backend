@@ -26,7 +26,7 @@ WHERE event.uploaded_generation > 0
   )
   AND (
       SELECT NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
-             AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
+             AND (NULLIF(btrim(lyrics.synced_lrc), '') IS NULL OR COALESCE(lyrics.synced_source, lyrics.source) = 'lrclib')
              AND lyrics.created_at < (now() AT TIME ZONE 'UTC') - interval '10 minutes'
       FROM lyrics_cache AS lyrics
       WHERE lyrics.sc_track_id = event.sc_track_id
