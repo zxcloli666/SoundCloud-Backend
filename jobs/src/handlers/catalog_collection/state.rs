@@ -92,7 +92,20 @@ pub(super) async fn advance(
     keys: &[String],
     next: Option<&str>,
     verified: bool,
-) -> JobResult {
+) -> JobResult<bool> {
+    let unseen = sqlx::query_file!(
+        "queries/catalog_collection/seen.sql",
+        &payload.subject_id,
+        payload.collection.as_str(),
+        payload.scope(),
+        snapshot.snapshot_id,
+        keys
+    )
+    .execute(&mut *connection)
+    .await
+    .map_err(JobError::retryable)?
+    .rows_affected();
+    let next = next.filter(|_| keys.is_empty() || unseen > 0);
     if let Some(cursor) = next {
         let inserted = sqlx::query_file!(
             "queries/catalog_collection/cursor.sql",
@@ -111,17 +124,6 @@ pub(super) async fn advance(
         }
     }
     sqlx::query_file!(
-        "queries/catalog_collection/seen.sql",
-        &payload.subject_id,
-        payload.collection.as_str(),
-        payload.scope(),
-        snapshot.snapshot_id,
-        keys
-    )
-    .execute(&mut *connection)
-    .await
-    .map_err(JobError::retryable)?;
-    sqlx::query_file!(
         "queries/catalog_collection/advance.sql",
         &payload.subject_id,
         payload.collection.as_str(),
@@ -134,7 +136,7 @@ pub(super) async fn advance(
     .execute(connection)
     .await
     .map_err(JobError::retryable)?;
-    Ok(())
+    Ok(next.is_some())
 }
 
 pub(super) async fn sweep_seen(
