@@ -1004,6 +1004,41 @@ async fn an_empty_page_with_a_continuation_moves_on_without_completing(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_page_that_brings_nothing_new_ends_the_walk(pool: PgPool) -> anyhow::Result<()> {
+    let (job, mut payload, writer) = setup(&pool).await?;
+    payload.collection = CatalogCollection::OwnedTracks;
+    payload.owner = false;
+    let mut went_on = Vec::new();
+    for (ids, next) in [
+        (&[1, 2][..], "v2:/users/42/tracks?offset=100"),
+        (&[3][..], "v2:/users/42/tracks?offset=200"),
+        (&[3][..], "v2:/users/42/tracks?offset=300"),
+    ] {
+        let snapshot = state::begin(&pool, &job, &payload).await?.unwrap();
+        went_on.push(
+            writer
+                .persist(
+                    &job,
+                    &payload,
+                    &snapshot,
+                    page(ids, Some(next)),
+                    catalog_ingest::Observation::begin(&pool).await?,
+                )
+                .await?,
+        );
+    }
+    let finished: (bool, Option<String>, i64) = sqlx::query_as(
+        "SELECT complete, next_cursor, page_count FROM catalog_collection_sync WHERE subject_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(went_on, [true, true, false]);
+    assert_eq!(finished, (true, None, 3));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_page_repeating_one_comment_still_commits(pool: PgPool) -> anyhow::Result<()> {
     let (job, mut payload, writer) = setup(&pool).await?;
     payload.collection = CatalogCollection::TrackComments;
