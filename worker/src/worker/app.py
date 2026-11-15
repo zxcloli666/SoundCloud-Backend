@@ -32,6 +32,7 @@ from worker.domain.complete import Completer
 from worker.domain.deadline import MonotonicClock
 from worker.domain.embed_lyrics import EmbedLyricsLane
 from worker.domain.encode_text import EncodeTextLane
+from worker.domain.highlight import HighlightLane
 from worker.domain.index_audio import IndexAudioLane
 from worker.domain.lyrics.transcribe import TranscribeLane
 from worker.domain.metadata.match import TrackMatcher
@@ -98,6 +99,7 @@ LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "taste": ("train-taste",),
     "ai": (),
     "speak": (settings_module.TTS_SLOT,),
+    "highlight": (),
 }
 PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "audio": {"mert": "muq", "clap": "mulan"},
@@ -106,6 +108,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "encode": {"mulan": "mulan", "lyrics": "text"},
     "collab": {},
     "taste": {},
+    "highlight": {},
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
@@ -117,7 +120,7 @@ ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
 MULAN_TOWERS = "towers"
-AUDIO_FETCH_LANES = frozenset({"audio", "transcribe"})
+AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight"})
 LLM_CALLS_PER_REQUEST = 2
 POOL_SPARE = 8
 EXIT_CRASHED = 1
@@ -439,6 +442,9 @@ class Node:
                 self.workspace,
                 self.counters,
                 settings.taste,
+            ),
+            "highlight": lambda: HighlightLane(
+                source, self.workspace, settings.audio, self.counters
             ),
         }
         rpc_methods: dict[str, Callable[[], Mapping[str, RpcMethod]]] = {

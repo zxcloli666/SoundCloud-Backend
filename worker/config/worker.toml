@@ -28,8 +28,8 @@ isolate_encode = false
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
-capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64, speak = 1 }
-required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true, speak = true }
+capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64, speak = 1, highlight = 2 }
+required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true, speak = true, highlight = true }
 required_grace_s = 300
 
 [slots.muq]

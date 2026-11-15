@@ -116,6 +116,7 @@ async fn page(
             cursor_token: cursor,
             seed,
             hide_listened: true,
+            mode: smart_wave::WaveMode::Full,
         },
     )
     .await?;

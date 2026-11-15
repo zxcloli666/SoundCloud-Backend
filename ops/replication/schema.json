@@ -2281,6 +2281,46 @@
     {"cols": ["sc_comment_id"], "expr": false, "keys": ["sc_comment_id"], "name": "track_comments_sc_comment_id_key", "primary": false, "where": null}
    ]
   },
+  "track_highlight_dispatch": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "attempt", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "dispatched_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "failures", "notnull": true, "type": "smallint"},
+    {"default": "now()", "generated": false, "name": "next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "popularity", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "reason", "notnull": false, "type": "text"},
+    {"default": "'queued'::text", "generated": false, "name": "state", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "version", "notnull": true, "type": "smallint"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "track_highlight_dispatch_track_fk", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_highlight_dispatch_pkey", "primary": true, "where": null}
+   ]
+  },
+  "track_highlights": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "computed_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "length_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "score", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "start_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "version", "notnull": true, "type": "smallint"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "track_highlights_track_fk", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_highlights_pkey", "primary": true, "where": null}
+   ]
+  },
   "track_search": {
    "columns": [
     {"default": null, "generated": false, "name": "duration_ms", "notnull": true, "type": "integer"},

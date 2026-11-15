@@ -29,6 +29,8 @@ use crate::config::IndexingConfig;
 use crate::qdrant::QdrantProvisioner;
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
+pub(crate) use storage_uploaded::canonical_storage_url;
+
 use self::client::{IndexingClient, TriggerOutcome};
 use self::duration::DurationResolver;
 use self::result::AudioIndexResultHandler;

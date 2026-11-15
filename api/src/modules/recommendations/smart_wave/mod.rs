@@ -2,6 +2,7 @@ pub mod artist_tracks;
 pub mod blocked;
 pub mod cursor;
 pub mod graph;
+pub mod moments;
 pub mod rank;
 #[cfg(test)]
 mod ranked_tests;
@@ -33,6 +34,7 @@ use crate::modules::superlikes::SUPERLIKE_WEIGHT;
 use crate::modules::superlikes::service::FREE_LIMIT;
 use crate::qdrant::collections;
 
+pub use cursor::WaveMode;
 use cursor::{SeedKind, WaveCursor};
 use graph::GraphSeed;
 use rank::TrackMeta;
@@ -71,6 +73,7 @@ pub struct SmartWaveRequest<'a> {
     pub cursor_token: Option<&'a str>,
     pub seed: SmartWaveSeed<'a>,
     pub hide_listened: bool,
+    pub mode: WaveMode,
 }
 
 pub struct SmartWaveResponse {
@@ -109,8 +112,15 @@ pub async fn build(
     } else {
         req.sc_user_id
     };
-    let mut wave_cursor =
-        cursor::load_or_new(&svc.redis, owner, req.cursor_token, seed_kind, &seed_key).await;
+    let mut wave_cursor = cursor::load_or_new(
+        &svc.redis,
+        owner,
+        req.cursor_token,
+        seed_kind,
+        &seed_key,
+        req.mode,
+    )
+    .await;
     wave_cursor
         .history_until
         .get_or_insert_with(|| signals.newest_at());
@@ -147,7 +157,7 @@ pub async fn build(
         &seed_boost,
         &negative_ids,
         filter.as_ref(),
-        MERT_POOL,
+        moments::widen(req.mode, MERT_POOL),
     );
     let (graph_res, mert, session_meta) =
         tokio::join!(graph_fut, mert_fut, load_track_meta(&svc.pg, &meta_ids));
@@ -172,14 +182,16 @@ pub async fn build(
         content_floor: CONTENT_FLOOR,
     };
     let (head, rest) = reach.split(&ranked);
+    let per_artist = moments::widen(req.mode, GRAPH_PER_ARTIST as usize) as i64;
+    let graph_total = moments::widen(req.mode, GRAPH_TRACKS_TOTAL);
     let mut graph_tracks = reach::read(
         &svc.artist_tracks,
         &svc.pg,
         head,
         &ranked,
         &exclude,
-        GRAPH_PER_ARTIST,
-        GRAPH_TRACKS_TOTAL,
+        per_artist,
+        graph_total,
     )
     .await;
 
@@ -220,6 +232,7 @@ pub async fn build(
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
     let mut cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
+    moments::keep_with_moment(&svc.pg, req.mode, &mut cands).await;
 
     let tail = reach.tail(rest, &cands, &settled);
     if !tail.is_empty() {
@@ -229,8 +242,8 @@ pub async fn build(
             &tail,
             &ranked,
             &exclude,
-            GRAPH_PER_ARTIST,
-            GRAPH_TRACKS_TOTAL.saturating_sub(graph_tracks.len()),
+            per_artist,
+            graph_total.saturating_sub(graph_tracks.len()),
         )
         .await;
         graph_tracks.extend(more);
@@ -241,13 +254,9 @@ pub async fn build(
             track_vectors(svc, &fresh_ids),
         );
         fresh.retain(|tid, _| !blocked.contains(tid));
-        cands.extend(score_candidates(
-            fresh,
-            &taste,
-            &skipped,
-            &sunk_artists,
-            [&fm, &fc, &fl],
-        ));
+        let mut fresh = score_candidates(fresh, &taste, &skipped, &sunk_artists, [&fm, &fc, &fl]);
+        moments::keep_with_moment(&svc.pg, req.mode, &mut fresh).await;
+        cands.extend(fresh);
     }
     let picked = reach.pick(&cands);
     let cand_count = cands.len();
@@ -287,6 +296,7 @@ pub async fn build(
     info!(
         user = %req.sc_user_id,
         kind = ?seed_kind,
+        mode = ?req.mode,
         served_total = wave_cursor.served,
         returned = tracks.len(),
         liked_now = session.positives.len(),
@@ -339,6 +349,7 @@ pub async fn cluster_tracks(
         cursor_token: None,
         seed,
         hide_listened,
+        mode: WaveMode::Full,
     };
     match Box::pin(build(svc, req)).await {
         Ok(resp) => resp,
@@ -1266,10 +1277,34 @@ mod tests {
         wave.mark_served(71, None);
         cursor::save(&redis, "17", &wave).await;
         let pinged = record_feedback(&redis, "17", &handle, 0, 0).await;
-        let lost = cursor::load_or_new(&redis, "17", Some(&handle), SeedKind::Track, "t7").await;
-        let stored = cursor::load_or_new(&redis, "17", Some(&handle), SeedKind::Track, "t7").await;
+        let lost = cursor::load_or_new(
+            &redis,
+            "17",
+            Some(&handle),
+            SeedKind::Track,
+            "t7",
+            WaveMode::Full,
+        )
+        .await;
+        let stored = cursor::load_or_new(
+            &redis,
+            "17",
+            Some(&handle),
+            SeedKind::Track,
+            "t7",
+            WaveMode::Full,
+        )
+        .await;
         cursor::save(&redis, "17", &stored).await;
-        let again = cursor::load_or_new(&redis, "17", Some(&handle), SeedKind::Track, "t7").await;
+        let again = cursor::load_or_new(
+            &redis,
+            "17",
+            Some(&handle),
+            SeedKind::Track,
+            "t7",
+            WaveMode::Full,
+        )
+        .await;
 
         assert_eq!(updated.as_deref(), Some(handle.as_str()));
         assert!(

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, ensure};
 use backend_contracts::pipeline::{
-    AudioIndexResult, EncodeResult, LyricsEmbeddingResult, StorageTrackRejected,
+    AudioIndexResult, EncodeResult, HighlightResult, LyricsEmbeddingResult, StorageTrackRejected,
     StorageTrackUploaded, TranscriptionResult,
 };
 use backend_contracts::{ImpressionBatch, JobCommand};
@@ -20,6 +20,7 @@ use crate::config::JobsConfig;
 use crate::db::Databases;
 use crate::handlers::admin_rpc::AdminCatalogRpc;
 use crate::handlers::auth_rpc::AuthRpc;
+use crate::handlers::highlights::HighlightHandler;
 use crate::handlers::taste::{TasteHandler, TasteResult};
 use crate::handlers::{
     CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, MAINTENANCE_KINDS, OPS_KINDS, accepts_ingress,
@@ -90,6 +91,13 @@ pub async fn run() -> anyhow::Result<()> {
         storage_uploads,
     } = bus.provision(&config.nats).await?;
     let taste_results = bus.taste_results(&config.nats).await?;
+    let highlight_results = bus.highlight_results(&config.nats).await?;
+    let highlights = Arc::new(HighlightHandler::new(
+        databases.main.bulk.clone(),
+        bus.clone(),
+        config.sync_queue.storage_url.clone(),
+        config.highlights.clone(),
+    ));
     let taste = Arc::new(TasteHandler::new(
         databases.maintenance.clone(),
         databases.analytics.clone(),
@@ -249,6 +257,15 @@ pub async fn run() -> anyhow::Result<()> {
         }),
     );
     supervisor.spawn("taste schedule", taste.run(cancellation.clone()));
+    let highlight_receiver = highlights.clone();
+    supervisor.spawn(
+        "highlight result consumer",
+        highlight_results.run_raw(cancellation.clone(), move |result: HighlightResult| {
+            let highlights = highlight_receiver.clone();
+            async move { highlights.finish(result).await }
+        }),
+    );
+    supervisor.spawn("highlight sweep", highlights.sweep(cancellation.clone()));
     let lyrics_handlers = handlers.clone();
     supervisor.spawn(
         "lyrics embedding result consumer",

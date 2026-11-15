@@ -328,6 +328,22 @@ impl WorkerLane {
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
             ],
+            Self::Highlight => &[
+                WorkerReason::SilentAudio,
+                WorkerReason::AudioNotFound,
+                WorkerReason::AudioForbidden,
+                WorkerReason::InvalidRequest,
+                WorkerReason::UndecodableAudio,
+                WorkerReason::AudioTooLong,
+                WorkerReason::AudioTooLarge,
+                WorkerReason::DeadlineExceeded,
+                WorkerReason::EngineCrashed,
+                WorkerReason::OutOfMemory,
+                WorkerReason::DownloadFailed,
+                WorkerReason::InternalError,
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+            ],
             Self::Ai | Self::Speak => &[],
         }
     }
@@ -346,7 +362,7 @@ impl WorkerLane {
                 WorkerReason::WorkerLost,
                 WorkerReason::PublicNodeTimeout,
             ],
-            Self::Lyrics | Self::Collab | Self::Taste => {
+            Self::Lyrics | Self::Collab | Self::Taste | Self::Highlight => {
                 &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost]
             }
             Self::Encode | Self::Ai | Self::Speak => &[],
@@ -426,6 +442,7 @@ mod tests {
         assert_eq!(names(WorkerLane::Lyrics), two);
         assert_eq!(names(WorkerLane::Collab), two);
         assert_eq!(names(WorkerLane::Taste), two);
+        assert_eq!(names(WorkerLane::Highlight), two);
         assert!(names(WorkerLane::Encode).is_empty());
         assert!(names(WorkerLane::Ai).is_empty());
         assert!(names(WorkerLane::Speak).is_empty());

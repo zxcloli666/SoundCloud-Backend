@@ -26,6 +26,7 @@ DESIGN_CORRELATION = {
     "encode": f"encode:lyrics:{samples.REQUESTS['encode']['hash']}",
     "collab": "train_collab:collab-input-7c1d",
     "taste": "train_taste:taste-input-9f2e",
+    "highlight": "highlight:98765:2",
 }
 LRC_LINE = "[59:59.99]а\n"
 REFERENCE_TEXT_BYTES = 16000

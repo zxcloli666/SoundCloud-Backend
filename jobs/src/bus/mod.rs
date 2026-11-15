@@ -31,8 +31,8 @@ use backend_contracts::{
     IMPRESSION_CONSUMER, IMPRESSION_STREAM, IMPRESSION_SUBJECT, JOB_INGRESS_CONSUMER,
     JOB_INGRESS_STREAM, JOB_INGRESS_SUBJECT,
     pipeline::{
-        DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_INDEX_AUDIO, DONE_STREAM,
-        DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
+        DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT, DONE_INDEX_AUDIO,
+        DONE_STREAM, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
         MAX_MESSAGE_BYTES as CONTRACT_MAX_MESSAGE_BYTES, MSG_ID_HEADER, ObjectStoreSpec,
         PIPELINE_STREAMS, PipelineStreamSpec, REPLY_TO_HEADER, STORAGE_EVENTS_STREAM,
         STORAGE_TRACK_REJECTED, STORAGE_TRACK_UPLOADED, StreamDiscard, StreamStorage,
@@ -66,6 +66,8 @@ const COLLAB_RESULT_CONSUMER: &str = "jobs-done-train-collab";
 const COLLAB_RESULT_DEAD_LETTER_SUBJECT: &str = "jobs.dead.collab_results";
 const TASTE_RESULT_CONSUMER: &str = "jobs-done-train-taste";
 const TASTE_RESULT_DEAD_LETTER_SUBJECT: &str = "jobs.dead.taste_results";
+const HIGHLIGHT_RESULT_CONSUMER: &str = "jobs-done-highlight";
+const HIGHLIGHT_RESULT_DEAD_LETTER_SUBJECT: &str = "jobs.dead.highlight_results";
 const AUDIO_INDEX_RESULT_CONSUMER: &str = "backend-done-index-audio";
 const AUDIO_INDEX_RESULT_DEAD_LETTER_SUBJECT: &str = "jobs.dead.audio_index_results";
 const LYRICS_EMBEDDING_CONSUMER: &str = "backend-done-embed-lyrics";
@@ -357,6 +359,23 @@ impl Bus {
             DONE_TRAIN_TASTE,
             TASTE_RESULT_DEAD_LETTER_SUBJECT,
             1,
+            config.retry_delay,
+        )
+        .await
+    }
+
+    pub async fn highlight_results(&self, config: &NatsConfig) -> anyhow::Result<WorkConsumer> {
+        let done_stream = self
+            .jetstream
+            .get_stream(DONE_STREAM.name)
+            .await
+            .context("NATS pipeline result stream could not be loaded")?;
+        self.consumer(
+            done_stream,
+            HIGHLIGHT_RESULT_CONSUMER,
+            DONE_HIGHLIGHT,
+            HIGHLIGHT_RESULT_DEAD_LETTER_SUBJECT,
+            8,
             config.retry_delay,
         )
         .await

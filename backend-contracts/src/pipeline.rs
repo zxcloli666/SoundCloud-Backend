@@ -217,6 +217,46 @@ pub struct TranscriptionResult {
     pub words: Option<Vec<TranscriptionWord>>,
 }
 
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct HighlightRequest {
+    #[schemars(pattern(SC_TRACK_ID_PATTERN))]
+    pub sc_track_id: String,
+    #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
+    pub s3_url: String,
+    #[schemars(range(min = 1))]
+    pub attempt: i64,
+    #[schemars(range(min = 1))]
+    pub version: i16,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct HighlightResult {
+    #[schemars(pattern(SC_TRACK_ID_PATTERN))]
+    pub sc_track_id: String,
+    #[schemars(range(min = 1))]
+    pub attempt: i64,
+    pub status: WorkerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "WorkerReason")]
+    pub reason: Option<WorkerReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_DETAIL_CHARS))]
+    pub detail: Option<String>,
+    pub producer: Producer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i16", range(min = 1))]
+    pub version: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 0))]
+    pub start_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 1))]
+    pub length_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "f32", range(min = 0.0, max = 1.0))]
+    pub score: Option<f32>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EncodeModel {
@@ -698,6 +738,7 @@ pub const TRANSCRIBE_AUDIO: &str = "transcribe.audio.new";
 pub const ENCODE_TEXT_NEW: &str = "encode.text.new";
 pub const TRAIN_COLLAB: &str = "train.collab.new";
 pub const TRAIN_TASTE: &str = "train.taste.new";
+pub const HIGHLIGHT_TRACK: &str = "highlight.track.new";
 
 pub const DONE_INDEX_AUDIO: &str = "done.index_audio";
 pub const DONE_EMBED_LYRICS: &str = "done.embed_lyrics";
@@ -705,6 +746,8 @@ pub const DONE_TRANSCRIBE: &str = "done.transcribe";
 pub const DONE_TRAIN_COLLAB: &str = "done.train_collab";
 pub const DONE_TRAIN_TASTE: &str = "done.train_taste";
 pub const DONE_ENCODE: &str = "done.encode";
+pub const DONE_HIGHLIGHT: &str = "done.highlight";
+pub const HIGHLIGHT_VERSION: i16 = 1;
 
 pub const WORKER_INVALID_SUBJECT: &str = "worker.invalid.<lane>";
 pub const WORKER_STATUS_SUBJECT: &str = "worker.status.<worker_id>";
@@ -768,6 +811,8 @@ pub const TRAIN_COLLAB_STREAM: PipelineStreamSpec =
     work_stream("TRAIN_COLLAB", &["train.collab.>"], 6 * HOUR, HOUR);
 pub const TRAIN_TASTE_STREAM: PipelineStreamSpec =
     work_stream("TRAIN_TASTE", &["train.taste.>"], DAY, HOUR);
+pub const HIGHLIGHT_STREAM: PipelineStreamSpec =
+    work_stream("HIGHLIGHT", &["highlight.>"], DAY, DAY);
 pub const WORKER_INVALID_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     name: "WORKER_INVALID",
     subjects: &["worker.invalid.>"],
@@ -803,13 +848,14 @@ pub const STORAGE_EVENTS_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     allow_direct: false,
 };
 
-pub const WORKER_STREAMS: [PipelineStreamSpec; 11] = [
+pub const WORKER_STREAMS: [PipelineStreamSpec; 12] = [
     INDEX_AUDIO_STREAM,
     EMBED_LYRICS_STREAM,
     TRANSCRIBE_STREAM,
     ENCODE_STREAM,
     TRAIN_COLLAB_STREAM,
     TRAIN_TASTE_STREAM,
+    HIGHLIGHT_STREAM,
     AI_RPC_STREAM,
     SPEAK_RPC_STREAM,
     SPEAK_REPLY_STREAM,
@@ -827,6 +873,7 @@ pub const PIPELINE_STREAMS: &[PipelineStreamSpec] = &[
     ENCODE_STREAM,
     TRAIN_COLLAB_STREAM,
     TRAIN_TASTE_STREAM,
+    HIGHLIGHT_STREAM,
     WORKER_INVALID_STREAM,
     DONE_STREAM,
     STORAGE_EVENTS_STREAM,

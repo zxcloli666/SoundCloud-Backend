@@ -48,8 +48,8 @@ pub(crate) async fn replicate_track_search(pool: &PgPool) -> anyhow::Result<()> 
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 353,
-    description: "track sync stamps synced at idx",
+    version: 379,
+    description: "scd install",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,

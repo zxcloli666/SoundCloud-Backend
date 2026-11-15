@@ -88,7 +88,8 @@ fn receiver_of(lane: WorkerLane) -> Option<WorkerLostLane> {
         | WorkerLane::Collab
         | WorkerLane::Taste
         | WorkerLane::Ai
-        | WorkerLane::Speak => None,
+        | WorkerLane::Speak
+        | WorkerLane::Highlight => None,
     }
 }
 

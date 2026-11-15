@@ -31,6 +31,7 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 | `taste` | `TRAIN_TASTE` | `train.taste.new` | `done.train_taste` | нет |
 | `ai` | `AI_RPC` | `ai.rpc.>` | ответ на `X-Reply-To` | нет |
 | `speak` | `SPEAK_RPC` | `speak.rpc.>` | ответ на `X-Reply-To` | да |
+| `highlight` | `HIGHLIGHT` | `highlight.track.new` | `done.highlight` | нет |
 
 Лейн держит на сервере один pull-запрос на свои свободные места со сроком 5 с, без `no_wait` и
 heartbeat, и отдаёт задачу обработчику сразу, как она пришла. Пустой запрос, закрытый раньше срока,
@@ -38,6 +39,14 @@ heartbeat, и отдаёт задачу обработчику сразу, ка�
 `fetch_failures_total`, строка `fetch_failed` и пауза в секунду. Запрос, на который за 6 с не пришло
 ни задачи, ни статуса, считается потерянным (`pull_unanswered_total`): лейн забирает уже пришедшее,
 бросает старый inbox и подписывается на новый, чтобы опоздавший ответ не закрыл следующий запрос.
+
+`highlight` ищет момент трека: самое цепляющее окно 30 с (`start_ms`, `length_ms`, `score` от 0 до 1).
+Только numpy на CPU, моделей нет; включён в профиле `cpu` (worker1). Кадры по 0,5 с: громкость и
+12-полосная хрома. Окна через 2,5 с, оценка: громкость окна, повтор (лучшее среднее сходство хромы
+с отрезком той же длины со сдвигом от 20 с, так находится припев) и бонус за начало на границе части.
+Окно в первых 8% трека или в последних 5% штрафуется. Трек короче 30 с — целиком с нуля. В ответе
+`version` — версия алгоритма (`moment.VERSION`); новая версия алгоритма = новый `HIGHLIGHT_VERSION`
+в `backend-contracts`, тогда jobs пересчитывает все треки.
 
 ## Статус
 
@@ -90,7 +99,7 @@ heartbeat, и отдаёт задачу обработчику сразу, ка�
 | `gpu-24` | `slot` | audio 16, lyrics 32, transcribe 4, encode 32, collab 1, taste 1, ai 64 | 2/2/2/1 | доверенный хост, 24 ГБ |
 | `gpu-24-lane` | `lane` | как `gpu-24` | 2/2/2/1 | резерв `gpu-24`, если исполнитель в режиме `slot` не помещается в RAM |
 | `gpu-48` | `slot` | audio 32, lyrics 64, transcribe 8, encode 64, collab 1, taste 1, ai 64 | 4/4/4/4 | 48 ГБ |
-| `cpu` | `lane` | audio 2, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
+| `cpu` | `lane` | audio 2, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16, highlight 2 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
 | `cpu-tts` | `lane` | speak 1 | - | доверенный хост под озвучку, без GPU |
 | `gpu-tts` | `lane` | speak 1 | - | публичная нода под озвучку, движок на CUDA, образ `:gpu` |
 

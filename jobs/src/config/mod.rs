@@ -29,6 +29,7 @@ pub struct JobsConfig {
     pub qdrant: QdrantConfig,
     pub collab: CollabConfig,
     pub taste: TasteConfig,
+    pub highlights: HighlightConfig,
     pub durations: DurationConfig,
     pub indexing: IndexingConfig,
     pub sync_queue: SyncQueueConfig,
@@ -338,6 +339,28 @@ pub struct CollabConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct HighlightConfig {
+    pub in_flight: i64,
+    pub walk_batch: i64,
+    pub timeout: Duration,
+    pub max_failures: u32,
+}
+
+impl HighlightConfig {
+    fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            in_flight: env::parse("HIGHLIGHT_IN_FLIGHT", "32")?,
+            walk_batch: env::positive_u64("HIGHLIGHT_WALK_BATCH", 2_000)? as i64,
+            timeout: Duration::from_secs(env::positive_u64("HIGHLIGHT_TIMEOUT_SECONDS", 1_800)?),
+            max_failures: positive(
+                "HIGHLIGHT_MAX_FAILURES",
+                env::parse("HIGHLIGHT_MAX_FAILURES", "5")?,
+            )?,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct TasteConfig {
     pub export_interval: Duration,
     pub refresh_interval: Duration,
@@ -490,6 +513,7 @@ impl JobsConfig {
             qdrant: QdrantConfig::from_env()?,
             collab: CollabConfig::from_env()?,
             taste: TasteConfig::from_env()?,
+            highlights: HighlightConfig::from_env()?,
             durations: DurationConfig::from_env()?,
             indexing: IndexingConfig::from_env()?,
             sync_queue: SyncQueueConfig::from_env()?,

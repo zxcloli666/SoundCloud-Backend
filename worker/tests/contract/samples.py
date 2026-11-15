@@ -61,6 +61,12 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "seed": 7,
             "previous_version": None,
         },
+        "highlight": {
+            "sc_track_id": "98765",
+            "s3_url": "https://storage.example/audio/98765.opus",
+            "attempt": 2,
+            "version": 1,
+        },
     }
 )
 
@@ -250,6 +256,23 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.ENGINE_RESTARTED,
             }
         ),
+        "highlight": frozenset(
+            {
+                Reason.AUDIO_NOT_FOUND,
+                Reason.AUDIO_FORBIDDEN,
+                Reason.SILENT_AUDIO,
+                Reason.INVALID_REQUEST,
+                Reason.UNDECODABLE_AUDIO,
+                Reason.AUDIO_TOO_LONG,
+                Reason.AUDIO_TOO_LARGE,
+                Reason.DOWNLOAD_FAILED,
+                Reason.DEADLINE_EXCEEDED,
+                Reason.ENGINE_CRASHED,
+                Reason.OUT_OF_MEMORY,
+                Reason.INTERNAL_ERROR,
+                Reason.ENGINE_RESTARTED,
+            }
+        ),
     }
 )
 
@@ -305,6 +328,10 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
             return {"trained": False, "dim": 128, "points_count": 0}
         case "taste":
             return taste_fields() if ok else {"dim": 128}
+        case "highlight":
+            if ok:
+                return {"version": 1, "start_ms": 52500, "length_ms": 30000, "score": 0.83}
+            return {}
     raise AssertionError(f"no fields for lane {lane}")
 
 

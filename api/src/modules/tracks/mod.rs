@@ -1,6 +1,7 @@
 pub mod comments;
 pub mod counters;
 pub mod handlers;
+pub mod highlight;
 pub mod normalize;
 pub mod repository;
 pub mod service;

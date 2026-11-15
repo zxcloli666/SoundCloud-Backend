@@ -1018,6 +1018,30 @@ AS $f$
 SELECT md5(ROW(t.body, t.created_at, t.id, t.sc_comment_id, t.sc_created_at, t.sc_track_id, t.synced_at, t.track_position_ms, t.user_urn)::text) FROM public.track_comments t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_highlight_dispatch(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempt, t.dispatched_at, t.failures, t.next_run_at, t.popularity, t.reason, t.state, t.track_id, t.updated_at, t.version)::text) FROM public.track_highlight_dispatch t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_highlights(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.computed_at, t.length_ms, t.score, t.start_ms, t.track_id, t.version)::text) FROM public.track_highlights t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_search(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1542,6 +1566,10 @@ BEGIN
             RETURN public.scd_row_hash_track_artists(k);
         WHEN 'track_comments' THEN
             RETURN public.scd_row_hash_track_comments(k);
+        WHEN 'track_highlight_dispatch' THEN
+            RETURN public.scd_row_hash_track_highlight_dispatch(k);
+        WHEN 'track_highlights' THEN
+            RETURN public.scd_row_hash_track_highlights(k);
         WHEN 'track_search' THEN
             RETURN public.scd_row_hash_track_search(k);
         WHEN 'track_storage_failures' THEN
