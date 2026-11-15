@@ -114,7 +114,9 @@ impl StorageUploadHandler {
             return Ok(());
         };
 
-        let mut hints = self.moment_hints(&[payload.sc_track_id.clone()]).await;
+        let mut hints = self
+            .moment_hints(std::slice::from_ref(&payload.sc_track_id))
+            .await;
         let hints = hints.remove(&payload.sc_track_id);
         self.publish_audio_index(
             &AudioDispatch {
