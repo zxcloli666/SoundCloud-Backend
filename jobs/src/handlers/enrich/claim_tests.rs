@@ -7,14 +7,22 @@ async fn seed_unlinked_tracks(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "INSERT INTO tracks (
              sc_track_id, urn, title, title_normalized, duration_ms,
-             index_priority, enrich_next_run_at
+             index_priority
          ) VALUES
-             ('1', 'soundcloud:tracks:1', 'Oldest', 'oldest', 1000, 5, now() - interval '5 days'),
-             ('2', 'soundcloud:tracks:2', 'Liked', 'liked', 1000, 1, now() - interval '4 days'),
-             ('3', 'soundcloud:tracks:3', 'Star other', 'star other', 1000, 5, now() - interval '3 days'),
-             ('4', 'soundcloud:tracks:4', 'Star liked', 'star liked', 1000, 1, now() - interval '2 days'),
-             ('5', 'soundcloud:tracks:5', 'Discovery', 'discovery', 1000, 5, now() - interval '1 day'),
-             ('6', 'soundcloud:tracks:6', 'Later', 'later', 1000, 1, now() + interval '1 day');
+             ('1', 'soundcloud:tracks:1', 'Oldest', 'oldest', 1000, 5),
+             ('2', 'soundcloud:tracks:2', 'Liked', 'liked', 1000, 1),
+             ('3', 'soundcloud:tracks:3', 'Star other', 'star other', 1000, 5),
+             ('4', 'soundcloud:tracks:4', 'Star liked', 'star liked', 1000, 1),
+             ('5', 'soundcloud:tracks:5', 'Discovery', 'discovery', 1000, 5),
+             ('6', 'soundcloud:tracks:6', 'Later', 'later', 1000, 1);
+         UPDATE track_enrich_queue AS queue
+         SET next_run_at = now() + lease.shift
+         FROM tracks AS track,
+              (VALUES ('1', interval '-5 days'), ('2', interval '-4 days'), ('3', interval '-3 days'),
+                      ('4', interval '-2 days'), ('5', interval '-1 day'), ('6', interval '1 day'))
+                  AS lease(sc_track_id, shift)
+         WHERE track.id = queue.track_id
+           AND track.sc_track_id = lease.sc_track_id;
          INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('3', 3), ('4', 1), ('6', 1);",
     )
     .execute(pool)
@@ -99,14 +107,19 @@ async fn seed_exhausted_track(
     attempts: i16,
     locked_ago: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(&format!(
+    sqlx::raw_sql(&format!(
         "INSERT INTO tracks (
-             sc_track_id, urn, title, title_normalized, duration_ms,
-             index_priority, enrich_attempts, enrich_locked_at, enrich_next_run_at
+             sc_track_id, urn, title, title_normalized, duration_ms, index_priority
          ) VALUES (
-             '{sc_track_id}', 'soundcloud:tracks:{sc_track_id}', 'Lost', 'lost', 1000,
-             1, {attempts}, now() - interval '{locked_ago}', now() - interval '10 days'
-         )"
+             '{sc_track_id}', 'soundcloud:tracks:{sc_track_id}', 'Lost', 'lost', 1000, 1
+         );
+         UPDATE track_enrich_queue AS queue
+         SET attempts = {attempts},
+             locked_at = now() - interval '{locked_ago}',
+             next_run_at = now() - interval '10 days'
+         FROM tracks AS track
+         WHERE track.id = queue.track_id
+           AND track.sc_track_id = '{sc_track_id}'"
     ))
     .execute(pool)
     .await?;
@@ -190,50 +203,6 @@ async fn a_track_below_the_cap_is_claimed_and_one_inside_its_lease_is_left_alone
 
     assert_eq!(claimed(&pool, 10, Turn::led_by(Tier::Rest)).await?, ["7"]);
     assert_eq!(state_of(&pool, "8").await?.0, "pending");
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn the_repair_migration_resets_lost_attempts_and_leaves_live_work(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    sqlx::raw_sql(
-        "INSERT INTO tracks (
-             sc_track_id, urn, title, title_normalized, duration_ms,
-             enrich_state, enrich_attempts, enrich_locked_at, enrich_error
-         ) VALUES
-             ('1', 'soundcloud:tracks:1', 'A', 'a', 1000, 'pending', 5, now() - interval '3 months', NULL),
-             ('2', 'soundcloud:tracks:2', 'B', 'b', 1000, 'failed', 5, now() - interval '3 months', 'pool timed out'),
-             ('3', 'soundcloud:tracks:3', 'C', 'c', 1000, 'pending', 3, now() - interval '3 months', NULL),
-             ('4', 'soundcloud:tracks:4', 'D', 'd', 1000, 'pending', 5, now(), NULL)",
-    )
-    .execute(&pool)
-    .await?;
-    let migration = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../api/migrations/0310_tracks_enrich_exhausted_reset.sql"
-    ))?;
-    sqlx::raw_sql(migration.trim_start_matches("-- no-transaction\n"))
-        .execute(&pool)
-        .await?;
-
-    let rows: Vec<(String, String, i16, bool, Option<String>)> = sqlx::query_as(
-        "SELECT track.sc_track_id, track.enrich_state, queue.attempts, queue.locked_at IS NULL, queue.error
-         FROM tracks AS track
-         JOIN track_enrich_queue AS queue ON queue.track_id = track.id
-         ORDER BY track.sc_track_id",
-    )
-    .fetch_all(&pool)
-    .await?;
-    assert_eq!(
-        rows,
-        [
-            ("1".into(), "pending".into(), 0, true, None),
-            ("2".into(), "pending".into(), 0, true, None),
-            ("3".into(), "pending".into(), 3, false, None),
-            ("4".into(), "pending".into(), 5, false, None),
-        ]
-    );
     Ok(())
 }
 

@@ -102,16 +102,22 @@ WHERE namesake.name_only
   AND track.id = namesake.track_id
   AND track.primary_artist_id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc';
 
-UPDATE tracks AS track
-SET enrich_state       = 'pending',
-    enrich_source      = NULL,
-    enrich_confidence  = NULL,
-    enrich_error       = NULL,
-    enrich_attempts    = 0,
-    enrich_next_run_at = now() + random() * interval '15 minutes'
-FROM uploader_credits AS namesake
-WHERE namesake.name_only
-  AND track.id = namesake.track_id;
+WITH reset AS (
+    UPDATE tracks AS track
+    SET enrich_state      = 'pending',
+        enrich_source     = NULL,
+        enrich_confidence = NULL
+    FROM uploader_credits AS namesake
+    WHERE namesake.name_only
+      AND track.id = namesake.track_id
+    RETURNING track.id
+)
+UPDATE track_enrich_queue AS queue
+SET error       = NULL,
+    attempts    = 0,
+    next_run_at = now() + random() * interval '15 minutes'
+FROM reset
+WHERE queue.track_id = reset.id;
 
 SELECT account.sc_user_id, account.role, account.source, account.verified
 FROM artist_sc_accounts AS account

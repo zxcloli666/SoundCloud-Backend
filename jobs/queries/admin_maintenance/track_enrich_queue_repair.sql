@@ -1,11 +1,7 @@
 WITH locked AS MATERIALIZED (
     SELECT track.id,
            track.enrich_state,
-           track.index_priority,
-           track.enrich_next_run_at,
-           track.enrich_locked_at,
-           track.enrich_attempts,
-           track.enrich_error
+           track.index_priority
     FROM tracks AS track
     WHERE track.id = ANY ($1)
     ORDER BY track.id
@@ -17,15 +13,12 @@ WITH locked AS MATERIALIZED (
     RETURNING queue.track_id
 ), written AS (
     INSERT INTO track_enrich_queue AS stored (
-        track_id, enrich_state, index_priority, next_run_at, locked_at, attempts, error
+        track_id, enrich_state, index_priority, next_run_at
     )
     SELECT locked.id,
            locked.enrich_state,
            locked.index_priority,
-           locked.enrich_next_run_at,
-           locked.enrich_locked_at,
-           locked.enrich_attempts,
-           locked.enrich_error
+           now()
     FROM locked
     ORDER BY locked.id
     ON CONFLICT (track_id) DO UPDATE
