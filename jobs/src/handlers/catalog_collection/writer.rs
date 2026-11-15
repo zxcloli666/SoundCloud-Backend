@@ -136,7 +136,7 @@ impl CollectionWriter {
             .map_err(JobError::retryable)?;
         }
         let owner_api = payload.owner && !page.apiv2;
-        state::advance(
+        more = state::advance(
             &mut tx,
             payload,
             snapshot,
