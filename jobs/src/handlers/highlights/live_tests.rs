@@ -1,11 +1,18 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use backend_contracts::pipeline::{HIGHLIGHT_VERSION, HighlightResult, Producer};
 use backend_contracts::reasons::{WorkerReason, WorkerStatus};
 use sqlx::PgPool;
+use tokio_util::sync::CancellationToken;
+use url::Url;
 use uuid::Uuid;
 
+use crate::bus::Bus;
+use crate::config::{HighlightConfig, NatsConfig};
+
+use super::HighlightHandler;
 use super::queue::{self, Claimed};
 use super::result;
 
@@ -257,5 +264,46 @@ async fn the_walk_moves_in_batches_and_starts_over_at_the_end(pool: PgPool) -> a
         .await?;
 
     assert_eq!((steps, queued), (2, 3));
+    Ok(())
+}
+
+fn nats_config() -> NatsConfig {
+    NatsConfig {
+        url: std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned()),
+        job_ingress_concurrency: 1,
+        impression_concurrency: 1,
+        retry_delay: Duration::from_millis(100),
+        max_age: Duration::from_secs(60 * 60),
+        job_stream_max_bytes: 16 * 1024 * 1024,
+        impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
+    }
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_switched_off_sweep_waits_for_shutdown_instead_of_exiting(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let bus = Bus::connect(&nats_config(), "highlight-off-test").await?;
+    let config = HighlightConfig {
+        in_flight: 0,
+        walk_batch: 100,
+        timeout: TIMEOUT,
+        max_failures: MAX_FAILURES,
+    };
+    let handler = Arc::new(HighlightHandler::new(
+        pool,
+        bus,
+        Url::parse("http://127.0.0.1:9")?,
+        config,
+    ));
+    let cancellation = CancellationToken::new();
+    let sweep = tokio::spawn(handler.sweep(cancellation.clone()));
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!sweep.is_finished());
+
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_secs(5), sweep).await???;
     Ok(())
 }
