@@ -18,8 +18,8 @@ const SILENT: &str = "{\"actions\":[],\"say\":\" \"}";
 const NOTHING: &str = "{\"actions\":[],\"say\":\"\"}";
 const NOTHING_SO_FAR: &str = "{\"actions\":[],\"say\":\"\"";
 const NO_WORD: &str = "{\"say\":\"\"}";
-const NAMED: &str = "{\"actions\":[],\"say\":\"Включаю [[Psychosis|Психоз]].\"}";
-const ONLY_A_NAME: &str = "{\"actions\":[],\"say\":\"[[Psychosis|Психоз]]\"}";
+const NAMED: &str = "{\"actions\":[],\"say\":\"Включаю [[Psychosis|Психосис]].\"}";
+const ONLY_A_NAME: &str = "{\"actions\":[],\"say\":\"[[Psychosis|Психосис]]\"}";
 const A_NAME_SO_FAR: &str = "{\"actions\":[],\"say\":\"[[Psychosis|Пси";
 
 fn offered() -> Arc<Offered> {
@@ -128,7 +128,7 @@ async fn the_say_data_of_a_marked_name_holds_the_text_and_how_to_speak_it() {
         heard.named(),
         [
             ("say", &json!({"text": "Включаю "})),
-            ("say", &json!({"text": "Psychosis", "spoken": "Психоз"})),
+            ("say", &json!({"text": "Psychosis", "spoken": "Психосис"})),
             ("say", &json!({"text": "."})),
             ("done", &json!({})),
         ]
@@ -142,7 +142,7 @@ async fn an_overheard_phrase_answered_with_only_a_name_is_not_a_silence() {
     assert_eq!(
         heard.named(),
         [
-            ("say", &json!({"text": "Psychosis", "spoken": "Психоз"})),
+            ("say", &json!({"text": "Psychosis", "spoken": "Психосис"})),
             ("done", &json!({})),
         ]
     );
