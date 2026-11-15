@@ -53,6 +53,30 @@ async fn queued(pool: &PgPool, kind: &str, dedup_key: &str) -> Option<(i16, Opti
     .unwrap()
 }
 
+async fn hold(pool: &PgPool, dedup_key: &str) {
+    sqlx::query(
+        "UPDATE public.background_jobs SET available_at = now() + interval '7 hours'
+         WHERE dedup_key = $1",
+    )
+    .bind(dedup_key)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn waits(pool: &PgPool, dedup_key: &str) -> (bool, bool) {
+    sqlx::query_as(
+        "SELECT j.available_at > now(), COALESCE(s.available_at = j.available_at, false)
+         FROM public.background_jobs j
+         JOIN public.job_status s ON s.kind = j.kind AND s.dedup_key = j.dedup_key
+         WHERE j.dedup_key = $1",
+    )
+    .bind(dedup_key)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 async fn count(pool: &PgPool, table: &str) -> i64 {
     sqlx::query_scalar(&format!("SELECT count(*) FROM public.{table}"))
         .fetch_one(pool)
@@ -131,6 +155,51 @@ async fn a_raising_enqueue_lifts_the_priority_and_a_plain_one_keeps_it() {
         Some(9)
     );
     assert_eq!(count(&pair.core, "job_status").await, 1);
+    pair.finish().await;
+}
+
+#[tokio::test]
+async fn a_raised_job_runs_now_and_one_asked_again_at_its_priority_keeps_waiting() {
+    let pair = Pair::new("").await;
+    pair.run(
+        &enqueue(vec![
+            job("catalog.collection", "likers:1:public", 5, true),
+            job("catalog.collection", "likers:2:public", 15, true),
+            job("catalog.collection", "likers:3:public", 5, true),
+        ]),
+        &CORE_CLOCK,
+    )
+    .await
+    .assert_same();
+    for key in ["likers:1:public", "likers:2:public", "likers:3:public"] {
+        hold(&pair.core, key).await;
+        assert_eq!(waits(&pair.core, key).await, (true, true));
+    }
+    pair.run(
+        &enqueue(vec![
+            job("catalog.collection", "likers:1:public", 15, true),
+            job("catalog.collection", "likers:2:public", 15, true),
+            job("catalog.collection", "likers:3:public", 20, false),
+        ]),
+        &CORE_CLOCK,
+    )
+    .await
+    .assert_same();
+    assert_eq!(waits(&pair.core, "likers:1:public").await, (false, true));
+    assert_eq!(waits(&pair.core, "likers:2:public").await, (true, true));
+    assert_eq!(waits(&pair.core, "likers:3:public").await, (true, true));
+    assert_eq!(
+        queued(&pair.core, "catalog.collection", "likers:1:public")
+            .await
+            .map(|row| row.0),
+        Some(15)
+    );
+    assert_eq!(
+        queued(&pair.core, "catalog.collection", "likers:3:public")
+            .await
+            .map(|row| row.0),
+        Some(5)
+    );
     pair.finish().await;
 }
 
