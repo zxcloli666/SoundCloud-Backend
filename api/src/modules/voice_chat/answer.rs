@@ -110,6 +110,20 @@ enum Took {
     Broken(Option<char>),
 }
 
+pub fn names(said: &str) -> Vec<(String, String)> {
+    let mut marks = Marks::default();
+    let mut pieces = Pieces::default();
+    for symbol in said.chars() {
+        marks.read(symbol, &mut pieces);
+    }
+    marks.end(&mut pieces);
+    let named = |piece| match piece {
+        Piece::Name { written, spoken } => Some((written, spoken)),
+        _ => None,
+    };
+    pieces.into_vec().into_iter().filter_map(named).collect()
+}
+
 impl Answer {
     pub fn push(&mut self, delta: &str) -> Vec<Piece> {
         let mut pieces = Pieces::default();

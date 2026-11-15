@@ -106,7 +106,7 @@ Header `x-session-id`. The user needs Star. The Star check and the per-user limi
 ```
 
 - `persona`: a `[voice_chat.personas.<id>]` id, an unknown one gets `default`. `language`: the language the app listens and speaks in, the reply is written in it; without it the reply follows the language of `text`.
-- `listener`: who the user is, every field optional: `gender` (`male` or `female`), `name` (at most 40 characters, no control characters), `address` (`informal` or `formal`). `relation`: who the assistant is to the user, either `{"preset": "friend" | "assistant" | "butler" | "mentor"}` or `{"own": "<text>"}` (at most 300 characters, no control characters). Both are trimmed, an empty `name` or `own` counts as not set, and without them the system text is the same as before. An unknown `gender`, `address` or `preset` is refused. `own` and `name` reach the model as quoted data and only shape the manner of speech, never the actions, the reply format or the rules.
+- `listener`: who the user is, every field optional: `gender` (`male` or `female`), `name` (at most 40 characters, no control characters), `address` (`informal` or `formal`). `relation`: who the assistant is to the user, either `{"preset": "friend" | "assistant" | "butler" | "mentor"}` or `{"own": "<text>"}` (at most 300 characters, no control characters). Both are trimmed, an empty `name` or `own` counts as not set, and without them the system text is the same as before. An unknown `gender`, `address` or `preset` is refused. `own` and `name` reach the model as quoted data and only shape the manner of speech, never the actions, the reply format or the rules. A preset brings its usual address (`friend` and `mentor` informal, `assistant` and `butler` formal) unless `address` is set.
 - Tool and argument names: `^[a-z][a-z0-9_]{0,31}$`, unique. Arguments are flat: `string`, `integer`, `number`, `boolean` or `enum` of strings; `description`, `minimum` and `maximum` are read, other keywords are ignored. At most 16 arguments per tool.
 - `context` and `results`: at most 8 KiB each as JSON, at most 16 results. A description: at most 600 characters.
 - `history` and `notes`: only the newest `max_history` items and `max_notes` notes are kept; a longer history item is cut to 2000 characters, a note to 300. A wrong shape is still refused.
@@ -131,7 +131,7 @@ cargo test --bin api -- --ignored --nocapture modules::voice_chat::live_tests
 | Event | Data | When |
 | --- | --- | --- |
 | `action` | `{"name": "volume_set", "args": {"level": 60}}` | once per action, as soon as it is complete. `args` is always an object with the declared types; an optional argument the model did not give is absent. Actions that fit no offered tool are left out |
-| `say` | `{"text": "piece"}` or `{"text": "Psychosis", "spoken": "Психосис"}` | pieces of the spoken text, in order. Show `text` and keep it in `history`; `spoken`, when present, is what the voice reads instead of `text` |
+| `say` | `{"text": "piece"}` or `{"text": "Psychosis", "spoken": "Психосис"}` | pieces of the spoken text, in order. Show `text`; `spoken`, when present, is what the voice reads instead of `text`. In `history` such a piece is kept as `[[text|spoken]]` |
 | `quiet` | `{}` | only for a request with `quiet`, right before `done`: the model took the phrase for words to someone else and answers nothing. No `action` and no `say` came before it. Close the turn without speaking |
 | `done` | `{}` | the turn is complete |
 | `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or no step gave an action that fits a tool or any speech |
@@ -144,6 +144,8 @@ A name the voice cannot read is marked by the model inside `say` as `[[name|read
 - an empty reading or one equal to the name: the name; an empty name: the reading.
 
 A mark counts as speech: an answer that is only a mark is accepted, and it is never the silence of a `quiet` request.
+
+A name keeps its reading for the rest of the conversation. When a later piece of `say` holds a marked name bare, in any letter case and not inside a longer word, the api sends it as a `say` with `text` as it is written there and the `spoken` of the newest mark of that name. The marks come from the examples in the rules, from the assistant replies in `history` and from this reply, the newest 64 names, so `history` has to keep them. A reading is used only when the user's `text` has letters of the same script as the reading: a Cyrillic reading is not put into a reply to an English phrase. The start of a known name at the end of a piece is held until the next piece shows whether it is the name.
 
 A step's answer reaches the client from its first action that fits a tool or its first spoken word. An answer with neither falls through to the next step; the step gets up to 1 s to send its usage first. On a request with `quiet` a whole answer with no action at all and no word is the silence and is accepted as it is.
 

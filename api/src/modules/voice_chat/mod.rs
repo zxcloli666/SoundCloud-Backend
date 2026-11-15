@@ -3,6 +3,7 @@ mod handlers;
 #[cfg(test)]
 mod live_tests;
 mod prompt;
+mod readings;
 mod reply;
 mod request;
 mod service;

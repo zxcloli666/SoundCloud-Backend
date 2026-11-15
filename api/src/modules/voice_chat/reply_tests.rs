@@ -21,6 +21,9 @@ const NO_WORD: &str = "{\"say\":\"\"}";
 const NAMED: &str = "{\"actions\":[],\"say\":\"Включаю [[Psychosis|Психосис]].\"}";
 const ONLY_A_NAME: &str = "{\"actions\":[],\"say\":\"[[Psychosis|Психосис]]\"}";
 const A_NAME_SO_FAR: &str = "{\"actions\":[],\"say\":\"[[Psychosis|Пси";
+const A_BARE_NAME: &str =
+    "{\"actions\":[],\"say\":\"Nightmare и Gummo, [[hatttes|хаттс]] тоже. А hatttes это кто?\"}";
+const AN_EXAMPLE_BARE: &str = "{\"actions\":[],\"say\":\"Psychosis rocks.\"}";
 
 fn offered() -> Arc<Offered> {
     Offered::new(tool_set(), false)
@@ -40,6 +43,10 @@ fn louder() -> Value {
 }
 
 async fn streamed(answer: &'static str, quiet: bool) -> Heard {
+    asked(json!({"text": "включи психозис", "quiet": quiet}), answer).await
+}
+
+async fn asked(mut body: Value, answer: &'static str) -> Heard {
     let asked = Arc::new(Asked {
         answer,
         payloads: Mutex::default(),
@@ -51,7 +58,7 @@ async fn streamed(answer: &'static str, quiet: bool) -> Heard {
     };
     let chat = VoiceChat::hosted(&local_only(""), hosting).expect("the chat ladder");
     let live = chat.live().expect("a live chat");
-    let body = json!({"text": "включи психозис", "tools": tools(), "quiet": quiet});
+    body["tools"] = tools();
     let body: ChatBody = serde_json::from_value(body).expect("a chat body");
     let turn = body.into_turn(live.limits()).expect("a valid turn");
     let request = live
@@ -143,6 +150,54 @@ async fn an_overheard_phrase_answered_with_only_a_name_is_not_a_silence() {
         heard.named(),
         [
             ("say", &json!({"text": "Psychosis", "spoken": "Психосис"})),
+            ("done", &json!({})),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_bare_name_is_spoken_the_way_it_was_marked_before() {
+    let body = json!({
+        "text": "а это кто?",
+        "history": [
+            {"role": "user", "text": "кто это? читай [[Gummo|Гуммо]]"},
+            {"role": "assistant", "text": "Это [[Nightmare|Найтмэр]]."},
+        ],
+    });
+
+    let heard = asked(body, A_BARE_NAME).await;
+
+    assert_eq!(
+        heard.named(),
+        [
+            ("say", &json!({"text": "Nightmare", "spoken": "Найтмэр"})),
+            ("say", &json!({"text": " и Gummo, "})),
+            ("say", &json!({"text": "hatttes", "spoken": "хаттс"})),
+            ("say", &json!({"text": " тоже. А "})),
+            ("say", &json!({"text": "hatttes", "spoken": "хаттс"})),
+            ("say", &json!({"text": " это кто?"})),
+            ("done", &json!({})),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_name_from_the_examples_of_the_rules_is_spoken_their_way() {
+    let in_russian = asked(json!({"text": "как тебе Psychosis?"}), AN_EXAMPLE_BARE).await;
+    let in_english = asked(json!({"text": "how is Psychosis?"}), AN_EXAMPLE_BARE).await;
+
+    assert_eq!(
+        in_russian.named(),
+        [
+            ("say", &json!({"text": "Psychosis", "spoken": "Психосис"})),
+            ("say", &json!({"text": " rocks."})),
+            ("done", &json!({})),
+        ]
+    );
+    assert_eq!(
+        in_english.named(),
+        [
+            ("say", &json!({"text": "Psychosis rocks."})),
             ("done", &json!({})),
         ]
     );
