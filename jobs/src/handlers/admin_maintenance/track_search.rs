@@ -13,7 +13,7 @@ const BACKFILL: &str = "backfill";
 const CHECK: &str = "check";
 const RECHECK: &str = "recheck";
 const CHECK_ROWS: i64 = 5_000;
-const MAX_LAG_SECONDS: f64 = 10.0;
+pub(super) const MAX_LAG_SECONDS: f64 = 10.0;
 const MAX_BACKLOG_BYTES: i64 = 1 << 30;
 const LOCK_NOT_AVAILABLE: &str = "55P03";
 const DEADLOCK_DETECTED: &str = "40P01";
@@ -30,7 +30,7 @@ pub async fn execute(
     state: &RunState,
 ) -> JobResult<PhaseOutcome> {
     let cursor = state.cursor_uuid.unwrap_or(Uuid::nil());
-    if state.phase != RECHECK && lagging(handler).await? {
+    if state.phase != RECHECK && lagging(handler, MAX_LAG_SECONDS).await? {
         return Ok(PhaseOutcome::Advanced);
     }
     match state.phase.as_str() {
@@ -168,12 +168,15 @@ async fn finish(handler: &AdminMaintenanceHandler, state: &RunState) -> JobResul
     Ok(PhaseOutcome::Finished)
 }
 
-pub(super) async fn lagging(handler: &AdminMaintenanceHandler) -> JobResult<bool> {
+pub(super) async fn lagging(
+    handler: &AdminMaintenanceHandler,
+    max_lag_seconds: f64,
+) -> JobResult<bool> {
     let lag: Lag = sqlx::query_as(LAG)
         .fetch_one(&handler.pool)
         .await
         .map_err(JobError::retryable)?;
-    let lagging = lag.lag_seconds > MAX_LAG_SECONDS || lag.backlog_bytes > MAX_BACKLOG_BYTES;
+    let lagging = lag.lag_seconds > max_lag_seconds || lag.backlog_bytes > MAX_BACKLOG_BYTES;
     if lagging {
         tracing::info!(
             lag_seconds = lag.lag_seconds,
