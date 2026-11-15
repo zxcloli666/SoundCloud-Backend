@@ -272,10 +272,10 @@ fn an_answer_is_closed_by_the_brace_that_ends_its_object() {
 #[test]
 fn a_marked_name_comes_out_as_the_name_and_its_reading() {
     assert_eq!(
-        whole(r#"{"say":"Включаю [[Psychosis|Психоз]], слушай."}"#),
+        whole(r#"{"say":"Включаю [[Psychosis|Психосис]], слушай."}"#),
         [
             say("Включаю "),
-            name("Psychosis", "Психоз"),
+            name("Psychosis", "Психосис"),
             say(", слушай.")
         ]
     );
@@ -283,11 +283,11 @@ fn a_marked_name_comes_out_as_the_name_and_its_reading() {
 
 #[test]
 fn an_answer_with_marks_reads_the_same_wherever_it_is_cut() {
-    let document = r#"{"actions":[{"name":"play","args":[{"name":"query","value":"[[a|b]]"}]}],"say":"Включаю [[Psychosis|Психоз]] и [[ $uicideboy$ | Суисайдбойз ]], потом [x]."}"#;
+    let document = r#"{"actions":[{"name":"play","args":[{"name":"query","value":"[[a|b]]"}]}],"say":"Включаю [[Psychosis|Психосис]] и [[ $uicideboy$ | Суисайдбойз ]], потом [x]."}"#;
     let expected = [
         Piece::Action(json!({"name": "play", "args": [{"name": "query", "value": "[[a|b]]"}]})),
         say("Включаю "),
-        name("Psychosis", "Психоз"),
+        name("Psychosis", "Психосис"),
         say(" и "),
         name("$uicideboy$", "Суисайдбойз"),
         say(", потом [x]."),
@@ -315,10 +315,10 @@ fn plain_text_is_not_held_back_by_a_mark_that_follows_it() {
     let mut answer = Answer::default();
     assert_eq!(answer.push(r#"{"say":"Включаю [[Psy"#), [say("Включаю ")]);
     assert_eq!(answer.push("chosis|Пси"), []);
-    assert_eq!(answer.push("хоз]"), []);
+    assert_eq!(answer.push("хосис]"), []);
     assert_eq!(
         answer.push("], слу"),
-        [name("Psychosis", "Психоз"), say(", слу")]
+        [name("Psychosis", "Психосис"), say(", слу")]
     );
     assert_eq!(answer.push("шай ["), [say("шай ")]);
     assert_eq!(answer.push("1]"), [say("[1]")]);
@@ -360,20 +360,20 @@ fn text_that_is_not_a_whole_mark_is_read_as_plain_text_and_loses_no_words() {
             "Psychosis]] дальше".to_owned(),
         ),
         (
-            "[[Psy\nchosis|Психоз]] дальше".to_owned(),
-            "Psy\nchosis|Психоз]] дальше".to_owned(),
+            "[[Psy\nchosis|Психосис]] дальше".to_owned(),
+            "Psy\nchosis|Психосис]] дальше".to_owned(),
         ),
         (
-            "[[Psychosis|Пси\nхоз]] дальше".to_owned(),
-            "Psychosis\nхоз]] дальше".to_owned(),
+            "[[Psychosis|Пси\nхосис]] дальше".to_owned(),
+            "Psychosis\nхосис]] дальше".to_owned(),
         ),
         ("Включаю [[Psycho".to_owned(), "Включаю Psycho".to_owned()),
         (
-            "Включаю [[Psychosis|Психоз".to_owned(),
+            "Включаю [[Psychosis|Психосис".to_owned(),
             "Включаю Psychosis".to_owned(),
         ),
         (
-            "Включаю [[Psychosis|Психоз]".to_owned(),
+            "Включаю [[Psychosis|Психосис]".to_owned(),
             "Включаю Psychosis".to_owned(),
         ),
         ("Включаю [".to_owned(), "Включаю [".to_owned()),
@@ -386,8 +386,8 @@ fn text_that_is_not_a_whole_mark_is_read_as_plain_text_and_loses_no_words() {
             "Psychosis".to_owned(),
         ),
         (
-            "[[|Психоз]] и [[ | Психоз ]]".to_owned(),
-            "Психоз и Психоз".to_owned(),
+            "[[|Психосис]] и [[ | Психосис ]]".to_owned(),
+            "Психосис и Психосис".to_owned(),
         ),
     ];
     for (spoken, expected) in cases {
@@ -399,8 +399,8 @@ fn text_that_is_not_a_whole_mark_is_read_as_plain_text_and_loses_no_words() {
 
 #[test]
 fn escapes_inside_a_mark_are_decoded_before_the_mark_is_read() {
-    let document = r#"{"say":"\u005b[\"Psychosis\" \\ 2|\u0421\u0430\u0439\u043a\u043e\u0437\u0438\u0441 \u0434\u0432\u0430]\u005d!"}"#;
-    let expected = [name("\"Psychosis\" \\ 2", "Психоз два"), say("!")];
+    let document = r#"{"say":"\u005b[\"Psychosis\" \\ 2|\u041f\u0441\u0438\u0445\u043e\u0441\u0438\u0441 \u0434\u0432\u0430]\u005d!"}"#;
+    let expected = [name("\"Psychosis\" \\ 2", "Психосис два"), say("!")];
     assert_eq!(whole(document), expected);
     assert_eq!(heard_by_symbol(document), expected);
     for at in 0..=document.chars().count() {
@@ -410,15 +410,15 @@ fn escapes_inside_a_mark_are_decoded_before_the_mark_is_read() {
 
 #[test]
 fn a_mark_that_ends_the_speech_comes_out_whole() {
-    let document = r#"{"actions":[],"say":"Включаю [[Psychosis|Психоз]]"}"#;
-    let expected = [say("Включаю "), name("Psychosis", "Психоз")];
+    let document = r#"{"actions":[],"say":"Включаю [[Psychosis|Психосис]]"}"#;
+    let expected = [say("Включаю "), name("Psychosis", "Психосис")];
     assert_eq!(whole(document), expected);
     assert_eq!(heard_by_symbol(document), expected);
     let mut answer = Answer::default();
     assert_eq!(
-        answer.push(r#"{"say":"Включаю [[Psychosis|Психоз]"#),
+        answer.push(r#"{"say":"Включаю [[Psychosis|Психосис]"#),
         [say("Включаю ")]
     );
-    assert_eq!(answer.push(r#"]"}"#), [name("Psychosis", "Психоз")]);
+    assert_eq!(answer.push(r#"]"}"#), [name("Psychosis", "Психосис")]);
     assert!(answer.is_closed());
 }
