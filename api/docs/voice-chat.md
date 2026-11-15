@@ -128,12 +128,12 @@ cargo test --bin api -- --ignored --nocapture modules::voice_chat::live_tests
 | Event | Data | When |
 | --- | --- | --- |
 | `action` | `{"name": "volume_set", "args": {"level": 60}}` | once per action, as soon as it is complete. `args` is always an object with the declared types; an optional argument the model did not give is absent. Actions that fit no offered tool are left out |
-| `say` | `{"text": "piece"}` or `{"text": "Psychosis", "spoken": "Сайкозис"}` | pieces of the spoken text, in order. Show `text` and keep it in `history`; `spoken`, when present, is what the voice reads instead of `text` |
+| `say` | `{"text": "piece"}` or `{"text": "Psychosis", "spoken": "Психосис"}` | pieces of the spoken text, in order. Show `text` and keep it in `history`; `spoken`, when present, is what the voice reads instead of `text` |
 | `quiet` | `{}` | only for a request with `quiet`, right before `done`: the model took the phrase for words to someone else and answers nothing. No `action` and no `say` came before it. Close the turn without speaking |
 | `done` | `{}` | the turn is complete |
 | `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or no step gave an action that fits a tool or any speech |
 
-A name the voice cannot read is marked by the model inside `say` as `[[name|reading]]`: `Включаю [[Psychosis|Сайкозис]], слушай.` The api splits the mark out of the stream. The text before it goes at once as its own `say`, the mark is held until `]]` and goes as one `say` with `text` (the name, trimmed) and `spoken` (the reading, trimmed). A name is at most 80 characters, a reading at most 120, neither has a line break. A mark that is not whole reaches the app as plain text and loses no words:
+A name the voice cannot read is marked by the model inside `say` as `[[name|reading]]`: `Включаю [[Psychosis|Психосис]], слушай.` The api splits the mark out of the stream. The text before it goes at once as its own `say`, the mark is held until `]]` and goes as one `say` with `text` (the name, trimmed) and `spoken` (the reading, trimmed). A name is at most 80 characters, a reading at most 120, neither has a line break. A mark that is not whole reaches the app as plain text and loses no words:
 
 - `[` not followed by `[`: as it is;
 - `[[name]]`: the name;
