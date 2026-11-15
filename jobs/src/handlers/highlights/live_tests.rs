@@ -288,6 +288,7 @@ async fn a_switched_off_sweep_waits_for_shutdown_instead_of_exiting(
     let config = HighlightConfig {
         in_flight: 0,
         walk_batch: 100,
+        rewalk: Duration::from_secs(3_600),
         timeout: TIMEOUT,
         max_failures: MAX_FAILURES,
     };

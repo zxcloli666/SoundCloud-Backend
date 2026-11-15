@@ -342,6 +342,7 @@ pub struct CollabConfig {
 pub struct HighlightConfig {
     pub in_flight: i64,
     pub walk_batch: i64,
+    pub rewalk: Duration,
     pub timeout: Duration,
     pub max_failures: u32,
 }
@@ -351,6 +352,7 @@ impl HighlightConfig {
         Ok(Self {
             in_flight: env::parse("HIGHLIGHT_IN_FLIGHT", "32")?,
             walk_batch: env::positive_u64("HIGHLIGHT_WALK_BATCH", 2_000)? as i64,
+            rewalk: Duration::from_secs(env::positive_u64("HIGHLIGHT_REWALK_SECONDS", 3_600)?),
             timeout: Duration::from_secs(env::positive_u64("HIGHLIGHT_TIMEOUT_SECONDS", 1_800)?),
             max_failures: positive(
                 "HIGHLIGHT_MAX_FAILURES",

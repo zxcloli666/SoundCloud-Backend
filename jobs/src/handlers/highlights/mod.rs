@@ -1,10 +1,11 @@
 #[cfg(test)]
 mod live_tests;
+mod pass;
 mod queue;
 mod result;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use backend_contracts::pipeline::{
     HIGHLIGHT_TRACK, HIGHLIGHT_VERSION, HighlightRequest, HighlightResult,
@@ -14,13 +15,13 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use url::Url;
-use uuid::Uuid;
 
 use crate::bus::Bus;
 use crate::config::HighlightConfig;
 use crate::handlers::indexing::canonical_storage_url;
 use crate::queue::{JobError, JobResult};
 
+use self::pass::Pass;
 use self::queue::Claimed;
 
 const TICK: Duration = Duration::from_secs(15);
@@ -51,10 +52,11 @@ impl HighlightHandler {
         info!(
             in_flight = self.config.in_flight,
             walk_batch = self.config.walk_batch,
+            rewalk_s = self.config.rewalk.as_secs(),
             version = HIGHLIGHT_VERSION,
             "highlight sweep started"
         );
-        let mut after = Uuid::nil();
+        let mut pass = Pass::new(self.config.rewalk);
         let mut ticker = tokio::time::interval(TICK);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -62,9 +64,13 @@ impl HighlightHandler {
                 () = cancellation.cancelled() => return Ok(()),
                 _ = ticker.tick() => {}
             }
-            match queue::walk(&self.pool, after, self.config.walk_batch).await {
-                Ok(next) => after = next,
-                Err(error) => warn!(%error, "highlight walk failed; it resumes on the next tick"),
+            if pass.due(Instant::now()) {
+                match queue::walk(&self.pool, pass.after(), self.config.walk_batch).await {
+                    Ok(next) => pass.advance(next, Instant::now()),
+                    Err(error) => {
+                        warn!(%error, "highlight walk failed; it resumes on the next tick")
+                    }
+                }
             }
             if let Err(error) = self.dispatch().await {
                 warn!(%error, "highlight dispatch failed; it resumes on the next tick");
