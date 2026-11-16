@@ -35,15 +35,12 @@ from worker.domain.encode_text import EncodeTextLane
 from worker.domain.highlight import HighlightLane
 from worker.domain.index_audio import IndexAudioLane
 from worker.domain.lyrics.transcribe import TranscribeLane
-from worker.domain.metadata.match import TrackMatcher
-from worker.domain.metadata.resolve import ArtistResolver
 from worker.domain.outcome import Producer
 from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
 from worker.domain.workspace import WorkRoot, Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
 from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
-from worker.llm.chain import build_refiner
 from worker.observability import logging as json_logging
 from worker.observability.counters import Counters
 from worker.observability.health_file import HEALTH_PATH, LANES, SINCE, STATE, HealthFile
@@ -69,7 +66,7 @@ from worker.runtime.supervisor import (
     pid_limit,
     plan_engines,
 )
-from worker.settings import CPU_ONLY_SLOTS, Settings, SettingsError, TtsSection
+from worker.settings import AI_LANE, CPU_ONLY_SLOTS, Settings, SettingsError, TtsSection
 
 CPU_TOOLS = "cpu-tools"
 CPU_TOOL_LOADERS: Mapping[str, str] = {
@@ -112,7 +109,6 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
-AI_LANE = "ai"
 SPEAK_LANE = "speak"
 LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
 TTS_THREADS_ENV = "SCD_QWEN_THREADS"
@@ -121,7 +117,6 @@ MULAN = "mulan"
 TEXT_SLOT = "text"
 MULAN_TOWERS = "towers"
 AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight"})
-LLM_CALLS_PER_REQUEST = 2
 POOL_SPARE = 8
 EXIT_CRASHED = 1
 GATE_INTERVAL_S = 5.0
@@ -152,8 +147,8 @@ async def run(
 ) -> int:
     json_log = JsonLog(worker_id=settings.worker.id)
     json_logging.install(json_log, logging.INFO)
-    settings = local_llm_on_this_cpu(settings, json_log)
     try:
+        check_local_llm_cpu(settings)
         blueprint = Blueprint.of(settings, contract, environ)
     except (SettingsError, StartupError) as error:
         json_log.error("startup_config_error", error=str(error))
@@ -324,11 +319,12 @@ class Node:
             home, removed = self.work_root.claim()
             self.workspace = Workspace(home, self.counters)
             self.log.info("workspace_claimed", home=str(home), removed=removed)
-            pools = HttpPools.of(self.blueprint.lanes, self.settings.lanes.capacity)
-            async with pools.llm_session() as llm_session, pools.audio_session() as audio_session:
+            limit = audio_pool(self.blueprint.lanes, self.settings.lanes.capacity)
+            connector = aiohttp.TCPConnector(limit=limit)
+            async with aiohttp.ClientSession(connector=connector) as audio_session:
                 await self.supervisor.start()
                 try:
-                    self.assemble(llm_session, audio_session, watches)
+                    self.assemble(audio_session, watches)
                     self.start_background()
                     await self.serve_health()
                     code = await self.until_stopped()
@@ -385,10 +381,7 @@ class Node:
         return None
 
     def assemble(
-        self,
-        llm_session: aiohttp.ClientSession,
-        audio_session: aiohttp.ClientSession,
-        watches: Mapping[str, ConsumerWatch],
+        self, audio_session: aiohttp.ClientSession, watches: Mapping[str, ConsumerWatch]
     ) -> None:
         settings = self.settings
         js = self.connection.js
@@ -448,7 +441,7 @@ class Node:
             ),
         }
         rpc_methods: dict[str, Callable[[], Mapping[str, RpcMethod]]] = {
-            AI_LANE: lambda: self.ai_methods(llm_session, engines),
+            AI_LANE: lambda: self.ai_methods(engines),
             SPEAK_LANE: lambda: self.speak_methods(engines),
         }
         for lane in self.blueprint.lanes:
@@ -512,23 +505,15 @@ class Node:
             self.gpu.snapshot,
         )
 
-    def ai_methods(
-        self, llm_session: aiohttp.ClientSession, engines: RuntimeEngines
-    ) -> Mapping[str, RpcMethod]:
-        settings = self.settings
-        refiner = build_refiner(settings.llm, llm_session, self.clock, self.counters)
+    def ai_methods(self, engines: RuntimeEngines) -> Mapping[str, RpcMethod]:
         completer = Completer(
             engines,
             self.contract.complete_limits,
-            settings.llm.local,
-            settings_module.local_llm_ref(settings),
+            self.settings.llm.local,
+            settings_module.local_llm_ref(self.settings),
             self.counters,
         )
-        return {
-            "resolve_artist": ArtistResolver(refiner, self.counters).resolve,
-            "match_track": TrackMatcher(refiner, self.counters).match,
-            "complete": completer.complete,
-        }
+        return {settings_module.LOCAL_LLM_METHOD: completer.complete}
 
     def speak_methods(self, engines: RuntimeEngines) -> Mapping[str, RpcMethod]:
         voices = frozenset(self.settings.tts.voices)
@@ -729,28 +714,6 @@ class Node:
 
 
 @dataclass(frozen=True)
-class HttpPools:
-    llm: int
-    audio: int
-
-    @classmethod
-    def of(cls, lanes: Iterable[LaneSpec], capacity: Mapping[str, int]) -> HttpPools:
-        served = tuple(lanes)
-        rpc = sum(capacity[lane.name] for lane in served if lane.name == AI_LANE)
-        fetching = sum(capacity[lane.name] for lane in served if lane.name in AUDIO_FETCH_LANES)
-        return cls(
-            llm=POOL_SPARE + LLM_CALLS_PER_REQUEST * rpc,
-            audio=POOL_SPARE + fetching,
-        )
-
-    def llm_session(self) -> aiohttp.ClientSession:
-        return aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=self.llm))
-
-    def audio_session(self) -> aiohttp.ClientSession:
-        return aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=self.audio))
-
-
-@dataclass(frozen=True)
 class ServedLane:
     spec: LaneSpec
     watch: ConsumerWatch
@@ -825,6 +788,10 @@ def split_slots(plans: Iterable[EnginePlan]) -> list[SlotSpec]:
     return [spec for plan in planned if plan.reserved for spec in plan.slots if spec.name in shared]
 
 
+def audio_pool(lanes: Iterable[LaneSpec], capacity: Mapping[str, int]) -> int:
+    return POOL_SPARE + sum(capacity[lane.name] for lane in lanes if lane.name in AUDIO_FETCH_LANES)
+
+
 def check_slow_lanes(settings: Settings) -> None:
     runtime = settings.runtime
     slow = sorted(SLOW_LANES & set(settings.lanes.enabled))
@@ -832,18 +799,12 @@ def check_slow_lanes(settings: Settings) -> None:
         raise StartupError(f"lanes {slow} on device=cpu need runtime.allow_slow_lanes=true")
 
 
-def local_llm_on_this_cpu(settings: Settings, json_log: JsonLog) -> Settings:
-    local = settings.llm.local
+def check_local_llm_cpu(settings: Settings) -> None:
     if AI_LANE not in settings.lanes.enabled:
-        return settings
-    if not local.enabled:
-        json_log.warning("local_llm_off", why="config")
-        return settings
+        return
     missing = cpu_flags.missing_on_this_host()
-    if not missing:
-        return settings
-    json_log.error("local_llm_off", why="cpu", missing=missing)
-    return replace(settings, llm=replace(settings.llm, local=replace(local, enabled=False)))
+    if missing:
+        raise StartupError(f"lane ai needs the local model, and this CPU lacks {missing}")
 
 
 def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:

@@ -8,7 +8,7 @@ RPC — ответом на `X-Reply-To`. Устройство, профили �
 ## Границы
 
 - Никакой бизнес-логики: ранжирование, бюджеты LLM, запись в БД и векторные хранилища — у backend.
-- HTTP-сервера нет. Исходящий HTTP — только GET аудио по ссылке из задачи и LLM-провайдеры.
+- HTTP-сервера нет. Исходящий HTTP — только GET аудио по ссылке из задачи.
   Веса качает отдельная команда `fetch-models`; в образе `HF_HUB_OFFLINE=1`.
 - Нет PostgreSQL, Qdrant, S3.
 - Стримы и консьюмеры создаёт jobs. Воркер подписывается только `pull_subscribe_bind`;
@@ -32,7 +32,7 @@ RPC — ответом на `X-Reply-To`. Устройство, профили �
 
 - `bus` импортирует только `contract`, `settings`, `domain.outcome`, `domain.deadline`,
   `observability.counters`;
-- `domain` не импортирует `nats`, `bus`, `runtime`, `llm`; движки и хранилище получает через
+- `domain` не импортирует `nats`, `bus`, `runtime`; движки и хранилище получает через
   `domain/ports.py`;
 - `runtime` не импортирует `domain`, `bus`, `nats`;
 - torch и прочий нативный ML-код (fastText, chromaprint, gensim, silero, transformers, llama.cpp) —

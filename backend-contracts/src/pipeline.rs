@@ -21,8 +21,6 @@ pub const MAX_ENCODE_TEXT_BYTES: u32 = 512;
 pub const MAX_REQUEST_ID_CHARS: u32 = 128;
 pub const MAX_DETAIL_CHARS: u32 = 256;
 pub const MAX_FINGERPRINT_CHARS: u32 = 64;
-pub const MAX_RESOLVE_DESCRIPTION_CHARS: u32 = 4000;
-pub const MAX_MATCH_CANDIDATES: u32 = 50;
 pub const MAX_COMPLETE_SYSTEM_BYTES: u32 = 48_000;
 pub const MAX_COMPLETE_SYSTEM_MARKS: u32 = 4;
 pub const MAX_COMPLETE_MESSAGES: u32 = 64;
@@ -454,89 +452,12 @@ pub struct TasteTrainResult {
     pub metrics: Option<TasteMetrics>,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct ResolveArtistRequest {
-    #[schemars(length(min = 1))]
-    pub title: String,
-    pub uploader: Option<String>,
-    pub metadata_artist: Option<String>,
-    pub isrc: Option<String>,
-    #[schemars(length(max = MAX_RESOLVE_DESCRIPTION_CHARS))]
-    pub description: Option<String>,
-    #[schemars(range(min = 0))]
-    pub duration_ms: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RpcSource {
-    Deterministic,
-    Llm,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RpcError {
     Expired,
     InvalidRequest,
     Internal,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct ResolvedAlbum {
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "i32")]
-    pub year: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String")]
-    pub primary_artist: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct ResolveArtistData {
-    #[schemars(schema_with = "nullable::<String>")]
-    pub primary_artist: Option<String>,
-    pub featured: Vec<String>,
-    pub producers: Vec<String>,
-    pub remixers: Vec<String>,
-    #[schemars(schema_with = "nullable::<ResolvedAlbum>")]
-    pub album: Option<ResolvedAlbum>,
-    #[schemars(range(min = 0.0, max = 1.0))]
-    pub confidence: f64,
-    pub source: RpcSource,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct MatchTarget {
-    pub artist: String,
-    pub title: String,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct MatchCandidate {
-    #[schemars(range(max = u32::MAX))]
-    pub id: u32,
-    pub artist: String,
-    pub title: String,
-    #[schemars(range(min = 0.0))]
-    pub duration_sec: Option<f64>,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct MatchTrackRequest {
-    pub target: MatchTarget,
-    #[schemars(length(min = 1, max = MAX_MATCH_CANDIDATES))]
-    pub candidates: Vec<MatchCandidate>,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct MatchTrackData {
-    #[schemars(schema_with = "nullable::<u32>", range(max = u32::MAX))]
-    pub match_id: Option<u32>,
-    #[schemars(range(min = 0.0, max = 1.0))]
-    pub confidence: f64,
-    pub source: RpcSource,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -755,11 +676,7 @@ pub const HEADERS: [(&str, &str); 7] = [
     ("public_node", PUBLIC_NODE_HEADER),
 ];
 
-pub const AI_RESOLVE_ARTIST: &str = "ai.rpc.resolve_artist";
-pub const AI_MATCH_TRACK: &str = "ai.rpc.match_track";
 pub const AI_COMPLETE: &str = "ai.rpc.complete";
-pub const RESOLVE_ARTIST_WINDOW_SECONDS: u64 = 20;
-pub const MATCH_TRACK_WINDOW_SECONDS: u64 = 10;
 pub const COMPLETE_WINDOW_SECONDS: u64 = 30;
 
 pub const SPEAK_SAY: &str = "speak.rpc.say";

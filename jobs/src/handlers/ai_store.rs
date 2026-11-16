@@ -1,9 +1,16 @@
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tracing::debug;
 
 const MODEL_ANSWER_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcSource {
+    Deterministic,
+    Llm,
+}
 
 pub struct AiStore {
     pool: PgPool,

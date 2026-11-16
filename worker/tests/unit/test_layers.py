@@ -38,8 +38,8 @@ BUS_ALLOWED = (
     "worker.domain.deadline",
     "worker.observability.counters",
 )
-DOMAIN_FORBIDDEN = ("nats", "worker.bus", "worker.runtime", "worker.app", "worker.llm")
-RUNTIME_FORBIDDEN = ("nats", "worker.domain", "worker.bus", "worker.app", "worker.llm")
+DOMAIN_FORBIDDEN = ("nats", "worker.bus", "worker.runtime", "worker.app")
+RUNTIME_FORBIDDEN = ("nats", "worker.domain", "worker.bus", "worker.app")
 CONSUMER_CREATING_CALLS = frozenset({"pull_subscribe", "add_consumer"})
 
 

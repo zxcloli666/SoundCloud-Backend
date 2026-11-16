@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use backend_contracts::pipeline::{MatchCandidate, MatchTarget, RpcSource};
-
 use super::prompt::{self, Pick};
 use super::rank::{Track, decide, duration_closeness, is_borderline, rank, score};
+use super::request::{MatchCandidate, MatchTarget};
 use super::similarity::{ratio, token_set};
+use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::Normalizer;
 
 fn target(title: &str) -> MatchTarget {

@@ -1,5 +1,6 @@
 mod prompt;
 mod rank;
+mod request;
 mod similarity;
 
 #[cfg(test)]
@@ -16,12 +17,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::pipeline::{
-    self as contract, MATCH_TRACK_WINDOW_SECONDS, MAX_MATCH_CANDIDATES, MatchTrackData,
-    MatchTrackRequest,
-};
 use base64::Engine;
 use llm_ladder::Ladder;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -29,13 +27,16 @@ use tracing::debug;
 
 use self::prompt::Pick;
 use self::rank::{Scored, decide, is_borderline, rank};
+use self::request::MatchTrackRequest;
 use crate::config::AiConfig;
-use crate::handlers::ai_store::AiStore;
+use crate::handlers::ai_store::{AiStore, RpcSource};
 use crate::handlers::metadata::Normalizer;
 use crate::llm::{AiMethod, AiOutcome, record_answer};
 
 const LLM_CANDIDATES: usize = 10;
 const MIN_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_MATCH_CANDIDATES: u32 = 50;
+const MATCH_TRACK_WINDOW_SECONDS: u64 = 10;
 
 #[derive(Debug, Clone)]
 pub struct MatchTarget<'a> {
@@ -67,6 +68,13 @@ impl<'a> MatchCandidate<'a> {
                 .map(|milliseconds| (milliseconds / 1000) as i32),
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct MatchTrackData {
+    pub match_id: Option<u32>,
+    pub confidence: f64,
+    pub source: RpcSource,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -142,7 +150,7 @@ impl AiMatcherClient {
 
     async fn ask(
         &self,
-        target: &contract::MatchTarget,
+        target: &request::MatchTarget,
         shortlist: &[Scored<'_>],
     ) -> Option<MatchTrackData> {
         let allowed: HashSet<u32> = shortlist.iter().map(|scored| scored.candidate.id).collect();
@@ -171,14 +179,14 @@ fn match_timeout(timeout_ms: u64) -> Duration {
 
 fn match_request(target: &MatchTarget, candidates: &[MatchCandidate]) -> MatchTrackRequest {
     MatchTrackRequest {
-        target: contract::MatchTarget {
+        target: request::MatchTarget {
             artist: target.artist.to_owned(),
             title: target.title.to_owned(),
         },
         candidates: candidates
             .iter()
             .take(MAX_MATCH_CANDIDATES as usize)
-            .map(|candidate| contract::MatchCandidate {
+            .map(|candidate| request::MatchCandidate {
                 id: candidate.id,
                 artist: candidate.artist.to_owned(),
                 title: candidate.title.to_owned(),

@@ -6,8 +6,8 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 from worker.contract import Contract
+from worker.domain import fields
 from worker.domain.deadline import Deadline
-from worker.domain.metadata import fields
 from worker.domain.outcome import Failure, PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import ClipEncoder, Engines, EngineUnavailable, Float32Array, Speech
 from worker.observability.counters import Counters

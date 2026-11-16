@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -16,7 +16,6 @@ Int16Array = NDArray[np.int16]
 
 TextKind = Literal["document", "query"]
 ChatRole = Literal["user", "assistant"]
-Grounding = Callable[[Mapping[str, object]], bool]
 
 
 class EngineUnavailable(Exception):
@@ -211,16 +210,6 @@ class Engines(Protocol):
 
 class ClipEncoder(Protocol):
     async def encode(self, samples: Float32Array, deadline: Deadline) -> bytes: ...
-
-
-class Refiner(Protocol):
-    async def refine(
-        self,
-        prompt: str,
-        schema: Mapping[str, object],
-        grounded: Grounding,
-        deadline: Deadline,
-    ) -> Mapping[str, object] | None: ...
 
 
 class BlobStore(Protocol):

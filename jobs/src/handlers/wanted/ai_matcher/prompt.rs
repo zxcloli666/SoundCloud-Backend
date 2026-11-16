@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use backend_contracts::pipeline::{MatchCandidate, MatchTarget, MatchTrackData, RpcSource};
 use llm_ladder::{Message, Request, Schema, System};
 use serde::Deserialize;
 
+use super::MatchTrackData;
 use super::rank::Scored;
+use super::request::{MatchCandidate, MatchTarget};
+use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::{quoted, share};
 
 const INSTRUCTIONS: [&str; 3] = [

@@ -27,12 +27,6 @@ BASE_ENV = {
     "NATS_USER": "worker-trusted",
     "NATS_PASSWORD": "secret",
 }
-LLM_KEYS = {
-    "ANTHROPIC_API_KEY": "sk-test",
-    "LLM_FALLBACK_KEY": "sk-test",
-    "LLM_FALLBACK_URL": "https://llm.test/v1/chat/completions",
-    "LLM_FALLBACK_MODEL": "test-model",
-}
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

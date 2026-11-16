@@ -1,5 +1,4 @@
-use backend_contracts::pipeline::ResolveArtistRequest;
-
+use super::ResolveArtistRequest;
 use crate::handlers::metadata::{Normalizer, casefold, is_reupload_channel, unique};
 
 pub const REFINE_BELOW_CONFIDENCE: f64 = 0.8;

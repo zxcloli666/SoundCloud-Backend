@@ -1,15 +1,34 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use backend_contracts::pipeline::{
-    ResolveArtistData, ResolveArtistRequest, ResolvedAlbum, RpcSource,
-};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use super::ResolveArtistRequest;
+use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::{find_name, share, unique};
 
 const EARLIEST_YEAR: i64 = 1900;
 const LATEST_YEAR: i64 = 2100;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResolveArtistData {
+    pub primary_artist: Option<String>,
+    pub featured: Vec<String>,
+    pub producers: Vec<String>,
+    pub remixers: Vec<String>,
+    pub album: Option<ResolvedAlbum>,
+    pub confidence: f64,
+    pub source: RpcSource,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResolvedAlbum {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_artist: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ModelAnswer {

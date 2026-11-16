@@ -856,7 +856,7 @@ mod tests {
                 "align_engine": { "mms": 0 },
                 "complete_answers": answers,
                 "complete_rejected": { "busy": busy },
-                "complete_unavailable": { "off": 1 },
+                "complete_unavailable": { "unknown": 1 },
                 "rpc_handed_on": { "complete": 2 },
                 "rpc_expired_by_method": { "complete": 3 },
             },
@@ -887,11 +887,9 @@ mod tests {
             second
                 .contains("jobs_worker_complete_rejected_total{node=\"gpu-main\",why=\"busy\"} 4")
         );
-        assert!(
-            second.contains(
-                "jobs_worker_complete_unavailable_total{node=\"gpu-main\",state=\"off\"} 1"
-            )
-        );
+        assert!(second.contains(
+            "jobs_worker_complete_unavailable_total{node=\"gpu-main\",state=\"unknown\"} 1"
+        ));
         assert!(
             second.contains(
                 "jobs_worker_rpc_handed_on_total{node=\"gpu-main\",method=\"complete\"} 2"
@@ -920,7 +918,7 @@ mod tests {
             "trust": "trusted",
             "uptime_s": 600.0,
             "lanes": serving("ai"),
-            "counters": { "lease_lost": 1, "rpc_expired": 2, "llm_calls": {} },
+            "counters": { "lease_lost": 1, "rpc_expired": 2 },
         })
         .to_string()
         .into_bytes();

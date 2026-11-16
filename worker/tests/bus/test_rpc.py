@@ -14,7 +14,6 @@ from tests.contract import samples
 from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
-from tests.fakes.llm import FakeRefiner
 from worker import settings as settings_module
 from worker.bus.lane_runner import THROUGHPUT_WINDOW_S, LaneRunner
 from worker.bus.lease import ACK_ATTEMPTS, ACK_RETRY_PAUSE_S, Leases
@@ -22,25 +21,12 @@ from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler, RpcMeth
 from worker.contract import Contract
 from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline
-from worker.domain.metadata.match import TrackMatcher
-from worker.domain.metadata.resolve import ArtistResolver
 from worker.domain.outcome import NotServedHere, PermanentFailure, Reason, TransientFailure
-from worker.domain.ports import ChatMessage, Completion
+from worker.domain.ports import ChatMessage, Completion, EngineUnavailable
 from worker.settings import Settings
 
-RESOLVE = {"title": "Artist - Song", "uploader": "chan", "metadata_artist": None}
+METHOD = settings_module.LOCAL_LLM_METHOD
 COMPLETE = samples.RPC_REQUESTS["ai.rpc.complete"]
-REFINED: Mapping[str, Mapping[str, object]] = {
-    "resolve_artist": {"title": "Kendrick Lamar & SZA - luther", "uploader": "TDE"},
-    "match_track": {
-        "target": {"artist": "Billie Eilish", "title": "Ocean Eyes"},
-        "candidates": [
-            {"id": 1, "artist": "Billie Eilish", "title": "Ocean Eyes", "duration_sec": 200.0},
-            {"id": 2, "artist": "billie", "title": "Ocean Eyes", "duration_sec": 201.0},
-        ],
-    },
-    "complete": COMPLETE,
-}
 LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
 ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
 LOCAL = settings_module.load(CONFIG_DIR, BASE_ENV).llm.local
@@ -59,19 +45,14 @@ class Rpc:
         self.release = asyncio.Event()
         self.release.set()
         self.answer: Mapping[str, object] = {
-            "primary_artist": "Artist",
-            "featured": [],
-            "producers": [],
-            "remixers": [],
-            "album": None,
-            "confidence": 0.7,
-            "source": "deterministic",
+            "text": ANSWER,
+            "model": LOCAL_MODEL,
+            "input_tokens": 7,
+            "output_tokens": 2,
         }
         self.failure: Exception | None = None
 
-    async def resolve(
-        self, request: Mapping[str, object], deadline: Deadline
-    ) -> Mapping[str, object]:
+    async def call(self, request: Mapping[str, object], deadline: Deadline) -> Mapping[str, object]:
         self.calls.append((request, deadline.remaining()))
         await self.release.wait()
         if self.failure is not None:
@@ -80,8 +61,8 @@ class Rpc:
 
     def enqueue(
         self,
-        payload: object = RESOLVE,
-        method: str = "resolve_artist",
+        payload: object = COMPLETE,
+        method: str = METHOD,
         reply_to: str | None = REPLY_TO,
         deadline_ms: int | None = None,
     ) -> int:
@@ -110,7 +91,7 @@ def epoch_ms(clock: FakeClock, offset_s: float) -> int:
 async def rpc(fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock) -> Rpc:
     harness = await build_harness(fake_nats, contract, settings, clock, "ai", capacity=64)
     stub = Rpc(harness, None)
-    stub.handler = rpc_handler(harness, contract, {"resolve_artist": stub.resolve})
+    stub.handler = rpc_handler(harness, contract, {METHOD: stub.call})
     return stub
 
 
@@ -144,7 +125,7 @@ async def test_reply_ok_then_ack_with_diagnostic_headers(rpc: Rpc, contract: Con
     seq = rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     reply = await rpc.run_one()
     assert reply == {"ok": True, "data": dict(rpc.answer)}
-    assert contract.validate("ai.rpc.resolve_artist.reply", reply) == []
+    assert contract.validate("ai.rpc.complete.reply", reply) == []
     assert rpc.reply_headers() == {
         "X-Worker-Id": WORKER_ID,
         "X-Worker-Build": BUILD,
@@ -153,7 +134,7 @@ async def test_reply_ok_then_ack_with_diagnostic_headers(rpc: Rpc, contract: Con
     [ack] = rpc.harness.bus.acks()
     assert ack.kind == "ack_sync" and ack.seq == seq
     [(request, remaining)] = rpc.calls
-    assert request == RESOLVE
+    assert request == COMPLETE
     assert remaining == pytest.approx(20 - PROCESS_MARGIN_S)
 
 
@@ -161,85 +142,24 @@ async def test_expired_deadline_replies_expired_and_acks(rpc: Rpc) -> None:
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, REPLY_MARGIN_S))
     assert await rpc.run_one() == {"ok": False, "error": "expired"}
     assert rpc.calls == []
-    assert rpc.harness.counters.value("rpc_expired_total", method="resolve_artist") == 1
+    assert rpc.harness.counters.value("rpc_expired_total", method=METHOD) == 1
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
 
-@pytest.mark.parametrize("method", ["resolve_artist", "match_track", "complete"])
 async def test_domain_deadline_inside_the_process_margin_replies_expired(
-    rpc: Rpc, contract: Contract, method: str
+    rpc: Rpc, contract: Contract
 ) -> None:
-    resolver = ArtistResolver(None, rpc.harness.counters)
-    matcher = TrackMatcher(None, rpc.harness.counters)
     engines = FakeEngines()
     completer = Completer(
         engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
     )
-    methods = {
-        "resolve_artist": resolver.resolve,
-        "match_track": matcher.match,
-        "complete": completer.complete,
-    }
-    rpc.handler = rpc_handler(rpc.harness, contract, methods)
-    rpc.enqueue(
-        samples.RPC_REQUESTS[f"ai.rpc.{method}"],
-        method=method,
-        deadline_ms=epoch_ms(rpc.harness.clock, PROCESS_MARGIN_S),
-    )
+    rpc.handler = rpc_handler(rpc.harness, contract, {METHOD: completer.complete})
+    rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, PROCESS_MARGIN_S))
     assert await rpc.run_one() == {"ok": False, "error": "expired"}
     assert engines.calls == []
-    assert rpc.harness.counters.value("rpc_expired_total", method=method) == 1
+    assert rpc.harness.counters.value("rpc_expired_total", method=METHOD) == 1
     assert rpc.harness.counters.total("rpc_internal_total") == 0
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
-
-
-class GatedEngines(FakeEngines):
-    def __init__(self) -> None:
-        super().__init__()
-        self.gate = asyncio.Event()
-        self.completion = replace(self.completion, text=ANSWER)
-
-    async def complete(
-        self,
-        system: str,
-        system_marks: Sequence[int],
-        messages: Sequence[ChatMessage],
-        schema: Mapping[str, object],
-        max_tokens: int,
-        deadline: Deadline,
-    ) -> Completion:
-        await self.gate.wait()
-        return await super().complete(system, system_marks, messages, schema, max_tokens, deadline)
-
-
-async def test_resolve_and_match_answer_while_complete_holds_the_local_model(
-    rpc: Rpc, contract: Contract
-) -> None:
-    engines, chain = GatedEngines(), FakeRefiner()
-    completer = Completer(
-        engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
-    )
-    methods = {
-        "resolve_artist": ArtistResolver(chain, rpc.harness.counters).resolve,
-        "match_track": TrackMatcher(chain, rpc.harness.counters).match,
-        "complete": completer.complete,
-    }
-    rpc.handler = rpc_handler(rpc.harness, contract, methods)
-    handled = []
-    for offset_s, method in enumerate(("complete", "resolve_artist", "match_track")):
-        due = epoch_ms(rpc.harness.clock, 20 + offset_s)
-        rpc.enqueue(REFINED[method], method=method, deadline_ms=due)
-        [msg] = await rpc.harness.fetch()
-        handled.append(asyncio.ensure_future(rpc.handler.handle(msg, asyncio.Event())))
-    await asyncio.wait(handled[1:])
-    early = len(rpc.harness.bus.acks("ack_sync"))
-    engines.gate.set()
-    await asyncio.gather(*handled)
-
-    assert early == 2
-    assert len(chain.calls) == 2
-    assert [method for method, _ in engines.calls] == ["complete"]
-    assert rpc.harness.counters.value("rpc_replies_total", method="complete", ok="True") == 1
 
 
 async def test_missing_reply_to_acks_and_counts(rpc: Rpc) -> None:
@@ -254,7 +174,7 @@ async def test_deadline_defaults_to_delivery_time_plus_window(rpc: Rpc, contract
     rpc.enqueue()
     await rpc.run_one()
     [(_, remaining)] = rpc.calls
-    assert remaining == pytest.approx(contract.rpc.windows_s["resolve_artist"] - PROCESS_MARGIN_S)
+    assert remaining == pytest.approx(contract.rpc.windows_s[METHOD] - PROCESS_MARGIN_S)
     rpc.enqueue(deadline_ms=None)
     rpc.harness.bus.streams["AI_RPC"].msg_ids.clear()
     [msg] = await rpc.harness.fetch()
@@ -296,14 +216,14 @@ async def test_failures_map_to_the_error_envelope(
     if counter is not None:
         assert rpc.harness.counters.total(counter) == 1
     if error == "expired":
-        assert rpc.harness.counters.value("rpc_expired_total", method="resolve_artist") == 1
+        assert rpc.harness.counters.value("rpc_expired_total", method=METHOD) == 1
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
 
 
 @pytest.mark.parametrize(
     ("reason", "error"),
     [(Reason.INTERNAL_ERROR, "internal"), (Reason.DEADLINE_EXCEEDED, "expired")],
-    ids=["off", "busy"],
+    ids=["unavailable", "busy"],
 )
 async def test_a_call_this_worker_cannot_serve_is_handed_on_and_answered_on_its_last_delivery(
     rpc: Rpc, reason: Reason, error: str
@@ -320,12 +240,12 @@ async def test_a_call_this_worker_cannot_serve_is_handed_on_and_answered_on_its_
         *[("nak", None)] * (MAX_DELIVER - 1),
         ("ack_sync", None),
     ]
-    assert rpc.harness.counters.value("rpc_handed_on_total", method="resolve_artist") == 4
+    assert rpc.harness.counters.value("rpc_handed_on_total", method=METHOD) == 4
     assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
 
 
 async def test_a_call_with_no_time_left_for_another_worker_is_answered_at_once(rpc: Rpc) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, PROCESS_MARGIN_S + REPLY_MARGIN_S))
 
     assert await rpc.run_one() == {"ok": False, "error": "internal"}
@@ -336,7 +256,7 @@ async def test_a_call_with_no_time_left_for_another_worker_is_answered_at_once(r
 async def test_a_call_is_answered_when_the_connection_cannot_be_trusted_with_a_hand_over(
     rpc: Rpc,
 ) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.harness.connection.suspect("test")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
 
@@ -348,7 +268,7 @@ async def test_a_call_is_answered_when_the_connection_cannot_be_trusted_with_a_h
 async def test_a_redelivery_that_overtakes_the_hand_over_is_handled_as_a_new_delivery(
     rpc: Rpc,
 ) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     [msg] = await rpc.harness.fetch()
     send_nak = msg.nak
@@ -366,7 +286,7 @@ async def test_a_redelivery_that_overtakes_the_hand_over_is_handled_as_a_new_del
 
 
 async def test_a_hand_over_that_cannot_be_sent_leaves_the_call_to_the_ack_wait(rpc: Rpc) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     [msg] = await rpc.harness.fetch()
     rpc.harness.bus.closed = True
@@ -430,8 +350,8 @@ async def test_reply_failure_is_counted_but_still_acks(rpc: Rpc) -> None:
 @pytest.mark.parametrize(
     "answer",
     [
-        {"primary_artist": "Artist", "confidence": math.nan},
-        {"primary_artist": "Artist", "confidence": object()},
+        {"text": ANSWER, "input_tokens": math.nan},
+        {"text": ANSWER, "input_tokens": object()},
         ["not", "a", "mapping"],
     ],
 )
@@ -441,7 +361,7 @@ async def test_unencodable_or_malformed_answer_replies_internal_and_acks(
     rpc.answer = answer
     rpc.enqueue()
     assert await rpc.run_one() == {"ok": False, "error": "internal"}
-    assert rpc.harness.counters.value("rpc_internal_total", method="resolve_artist") == 1
+    assert rpc.harness.counters.value("rpc_internal_total", method=METHOD) == 1
     assert len(rpc.harness.bus.acks("ack_sync")) == 1
     assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
 
@@ -472,19 +392,13 @@ def serve_complete(rpc: Rpc, contract: Contract) -> TimedEngines:
     completer = Completer(
         engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
     )
-    rpc.handler = rpc_handler(rpc.harness, contract, {"complete": completer.complete})
+    rpc.handler = rpc_handler(rpc.harness, contract, {METHOD: completer.complete})
     return engines
 
 
-def local_worker(harness: Harness, contract: Contract, enabled: bool) -> LaneRunner:
-    completer = Completer(
-        TimedEngines(),
-        contract.complete_limits,
-        replace(LOCAL, enabled=enabled),
-        LOCAL_MODEL,
-        harness.counters,
-    )
-    handler = rpc_handler(harness, contract, {"complete": completer.complete})
+def local_worker(harness: Harness, contract: Contract, engines: FakeEngines) -> LaneRunner:
+    completer = Completer(engines, contract.complete_limits, LOCAL, LOCAL_MODEL, harness.counters)
+    handler = rpc_handler(harness, contract, {METHOD: completer.complete})
     return LaneRunner(
         harness.lane,
         harness.watch,
@@ -498,11 +412,16 @@ def local_worker(harness: Harness, contract: Contract, enabled: bool) -> LaneRun
     )
 
 
-async def test_a_call_taken_by_a_worker_with_the_model_off_is_answered_by_one_that_has_it(
+async def test_a_call_taken_by_a_worker_whose_model_is_unavailable_is_answered_by_another(
     rpc: Rpc, fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
 ) -> None:
     without, having = rpc.harness, await build_harness(fake_nats, contract, settings, clock, "ai")
-    runners = [local_worker(without, contract, False), local_worker(having, contract, True)]
+    broken = TimedEngines()
+    broken.fail(METHOD, EngineUnavailable(settings_module.LOCAL_LLM_SLOT, "broken"))
+    runners = [
+        local_worker(without, contract, broken),
+        local_worker(having, contract, TimedEngines()),
+    ]
     for harness, runner in zip((without, having), runners, strict=True):
         await harness.watch.check()
         harness.tasks.append(asyncio.create_task(runner.run()))
@@ -663,11 +582,11 @@ async def test_answered_calls_count_in_the_lane_throughput_and_handed_on_ones_do
 ) -> None:
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     await rpc.run_one()
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     await rpc.run_one()
 
-    assert rpc.harness.counters.value("rpc_handed_on_total", method="resolve_artist") == 1
+    assert rpc.harness.counters.value("rpc_handed_on_total", method=METHOD) == 1
     throughput = rpc.harness.runner.throughput()
     assert throughput["per_hour"] == 3600 / THROUGHPUT_WINDOW_S
     assert rpc.harness.counters.latency("task_ms", lane="ai")["n"] == 1

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import BASE_ENV, CONFIG_DIR, LLM_KEYS
+from tests.conftest import BASE_ENV, CONFIG_DIR
 from worker import settings as s
 from worker.app import Blueprint
 from worker.bus.consumers import served_lanes
@@ -13,7 +13,7 @@ TASTE_PROFILES = {"gpu-24", "gpu-24-lane", "gpu-48", "cpu"}
 
 
 def load(profile: str, **overrides: str) -> s.Settings:
-    return s.load(CONFIG_DIR, {**BASE_ENV, **LLM_KEYS, s.PROFILE_ENV: profile, **overrides})
+    return s.load(CONFIG_DIR, {**BASE_ENV, s.PROFILE_ENV: profile, **overrides})
 
 
 @pytest.mark.parametrize("profile", PROFILES)

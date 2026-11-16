@@ -175,28 +175,6 @@ max_object_mib = 1024
 min_users = 500
 train_budget_s = 4320
 
-[llm]
-primary = "anthropic"
-fallback = "openai_compatible"
-hedge_after_share = 0.35
-breaker = { failures = 5, window_s = 60, open_s = 120 }
-
-[llm.providers.anthropic]
-kind = "anthropic"
-endpoint = "https://api.anthropic.com/v1/messages"
-model = "claude-haiku-4-5-20251001"
-api_key = "env:ANTHROPIC_API_KEY"
-soft_timeout_s = 4
-hard_timeout_s = 6
-
-[llm.providers.openai_compatible]
-kind = "openai_compatible"
-endpoint = "env:LLM_FALLBACK_URL"
-model = "env:LLM_FALLBACK_MODEL"
-api_key = "env:LLM_FALLBACK_KEY"
-soft_timeout_s = 4
-hard_timeout_s = 8
-
 [llm.local]
 enabled = true
 file = "Qwen3.5-2B-Q4_K_M.gguf"

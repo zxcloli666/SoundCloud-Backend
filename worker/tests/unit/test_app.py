@@ -2,29 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import os
 import time
 from pathlib import Path
 
-import aiohttp
 import numpy as np
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import TestServer
 
 from tests.conftest import BASE_ENV, CONFIG_DIR
 from tests.fakes.clock import FakeClock
 from worker import app, health
 from worker import settings as settings_module
-from worker.app import (
-    EXIT_CRASHED,
-    LLM_CALLS_PER_REQUEST,
-    Blueprint,
-    GpuProbe,
-    HttpPools,
-    Node,
-)
+from worker.app import EXIT_CRASHED, Blueprint, GpuProbe, Node, StartupError
 from worker.bus.consumers import ConsumerWatch, LaneState
 from worker.contract import Contract
 from worker.fetch_models import FASTTEXT_HOME_ENV
@@ -180,52 +169,6 @@ async def test_gpu_probe_without_exec_permission_turns_itself_off(
     assert counters.value("gpu_probe_failures_total") == 1
 
 
-class HangingOrigin:
-    def __init__(self) -> None:
-        self.waiting = 0
-        self.release = asyncio.Event()
-
-    async def hang(self, request: web.Request) -> web.Response:
-        self.waiting += 1
-        await self.release.wait()
-        return web.Response(body=b"late")
-
-    async def answer(self, request: web.Request) -> web.Response:
-        return web.Response(body=b"{}")
-
-    async def reached(self, count: int) -> None:
-        while self.waiting < count:
-            await asyncio.sleep(0.01)
-
-
-async def test_llm_calls_do_not_queue_behind_downloads_or_peak_hedging(node: Node) -> None:
-    capacity = node.settings.lanes.capacity
-    pools = HttpPools.of(node.blueprint.lanes, capacity)
-    origin = HangingOrigin()
-    server_app = web.Application()
-    server_app.router.add_get("/audio", origin.hang)
-    server_app.router.add_post("/llm/hang", origin.hang)
-    server_app.router.add_post("/llm/answer", origin.answer)
-    server = TestServer(server_app)
-    await server.start_server()
-    downloads = capacity["audio"] + capacity["transcribe"]
-    hedged = LLM_CALLS_PER_REQUEST * capacity["ai"]
-    try:
-        async with pools.llm_session() as llm, pools.audio_session() as audio:
-            downloading = [audio.get(server.make_url("/audio")) for _ in range(downloads)]
-            calling = [llm.post(server.make_url("/llm/hang")) for _ in range(hedged)]
-            stuck = [asyncio.create_task(request) for request in [*downloading, *calling]]
-            await asyncio.wait_for(origin.reached(downloads + hedged), STOP_LIMIT_S)
-            timeout = aiohttp.ClientTimeout(total=STOP_LIMIT_S)
-            async with llm.post(server.make_url("/llm/answer"), timeout=timeout) as response:
-                assert response.status == 200
-            origin.release.set()
-            for response in await asyncio.gather(*stuck):
-                response.release()
-    finally:
-        await server.close()
-
-
 def cpu_blueprint(
     base_env: dict[str, str], contract: Contract, tmp_path: Path, **overrides: str
 ) -> Blueprint:
@@ -295,35 +238,31 @@ def test_runtime_threads_from_the_environment_fix_the_bulk_engines(
     assert blueprint.policy.threads == 6
 
 
-def test_a_host_without_the_cpu_flags_runs_the_ai_lane_without_the_local_model(
-    base_env: dict[str, str], contract: Contract, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_a_host_without_the_cpu_flags_refuses_to_serve_the_ai_lane(
+    base_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cpu_flags, "missing_on_this_host", lambda: ["avx2", "fma"])
-    out = io.StringIO()
-    settings = app.local_llm_on_this_cpu(
-        settings_module.load(CONFIG_DIR, base_env), JsonLog(stream=out)
-    )
+    settings = settings_module.load(CONFIG_DIR, base_env)
 
-    assert settings.llm.local.enabled is False
-    assert "ai" in settings.lanes.enabled
-    environ = {**base_env, FASTTEXT_HOME_ENV: str(tmp_path)}
-    plans = Blueprint.of(settings, contract, environ, cpus=8).plans
-    assert all(settings_module.LOCAL_LLM_SLOT not in plan.slot_names for plan in plans)
-    record = json.loads(out.getvalue())
-    assert (record["event"], record["why"], record["missing"]) == (
-        "local_llm_off",
-        "cpu",
-        ["avx2", "fma"],
-    )
+    with pytest.raises(StartupError, match=r"lane ai needs the local model, .* \['avx2', 'fma'\]"):
+        app.check_local_llm_cpu(settings)
 
 
-def test_a_supported_host_keeps_the_local_model(
+def test_a_host_without_the_cpu_flags_serves_the_other_lanes(
+    base_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cpu_flags, "missing_on_this_host", lambda: ["avx2", "fma"])
+    env = {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'}
+
+    app.check_local_llm_cpu(settings_module.load(CONFIG_DIR, env))
+
+
+def test_a_supported_host_serves_the_ai_lane(
     base_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cpu_flags, "missing_on_this_host", list)
-    settings = settings_module.load(CONFIG_DIR, base_env)
 
-    assert app.local_llm_on_this_cpu(settings, JsonLog(stream=io.StringIO())) is settings
+    app.check_local_llm_cpu(settings_module.load(CONFIG_DIR, base_env))
 
 
 def test_gpu_profiles_keep_encode_on_the_shared_slots(contract: Contract, tmp_path: Path) -> None:

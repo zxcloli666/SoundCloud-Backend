@@ -34,8 +34,9 @@ from worker.contract import Contract, LaneSpec
 from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline, MonotonicClock
 from worker.domain.outcome import Outcome, Producer
+from worker.domain.ports import EngineUnavailable
 from worker.observability.counters import Counters
-from worker.settings import NatsSection, Settings
+from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT, NatsSection, Settings
 
 pytestmark = pytest.mark.integration
 
@@ -276,10 +277,12 @@ async def build_worker(
     return Worker(connection, counters, watch, runner, outbox, processor)
 
 
-def completer(live: Live, enabled: bool, counters: Counters) -> Completer:
+def completer(live: Live, available: bool, counters: Counters) -> Completer:
     engines = FakeEngines()
     engines.completion = dataclasses.replace(engines.completion, text=LOCAL_ANSWER)
-    local = dataclasses.replace(live.settings.llm.local, enabled=enabled)
+    if not available:
+        engines.fail(LOCAL_LLM_METHOD, EngineUnavailable(LOCAL_LLM_SLOT, "broken"))
+    local = live.settings.llm.local
     return Completer(engines, live.contract.complete_limits, local, LOCAL_MODEL, counters)
 
 
@@ -392,7 +395,7 @@ async def test_a_worker_whose_pull_the_server_refuses_asks_again_after_a_pause(l
     assert sum(failures) >= 1
 
 
-async def test_a_call_taken_by_a_worker_with_the_local_model_off_is_answered_by_the_other(
+async def test_a_call_taken_by_a_worker_whose_local_model_is_down_is_answered_by_the_other(
     live: Live,
 ) -> None:
     without = await build_worker(live, "ai", capacity=16, local_model=False)
@@ -436,7 +439,7 @@ async def test_a_call_no_worker_can_serve_is_answered_once_after_four_hand_overs
     assert unserved.body == {"ok": False, "error": "internal"}
     assert (unserved.deliveries, sum(handed_on)) == (HAND_OVERS + 1, HAND_OVERS)
     assert unserved.seconds < PICKUP_LIMIT_S
-    assert hurried.body == {"ok": False, "error": "internal"}
+    assert hurried.body == {"ok": False, "error": "expired"}
     assert hurried.deliveries == 1
     assert hurried.seconds < PICKUP_LIMIT_S
 

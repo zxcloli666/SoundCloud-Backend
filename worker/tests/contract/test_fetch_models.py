@@ -101,8 +101,13 @@ def test_local_llm_weights_come_as_one_pinned_file_with_the_ai_lane(env: dict[st
         ], profile
 
 
-def test_a_switched_off_local_model_needs_no_weights(env: dict[str, str]) -> None:
-    environ = {**env, s.PROFILE_ENV: "cpu", "WORKER__LLM__LOCAL__ENABLED": "false"}
+def test_a_worker_without_the_ai_lane_needs_no_local_model_weights(env: dict[str, str]) -> None:
+    environ = {
+        **env,
+        s.PROFILE_ENV: "cpu",
+        "WORKER__LANES__ENABLED": '["lyrics", "encode"]',
+        "WORKER__LLM__LOCAL__ENABLED": "false",
+    }
     slots = {item.slot for item in fm.plan(s.load(CONFIG_DIR, environ), environ)}
     assert s.LOCAL_LLM_SLOT not in slots
     assert "text" in slots
