@@ -69,7 +69,9 @@ async fn retention_deletes_the_rows_past_seven_days_and_keeps_the_rest(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn retention_deletes_the_seeks_past_the_replay_hint_window(pool: PgPool) -> anyhow::Result<()> {
+async fn retention_deletes_the_seeks_past_the_replay_hint_window(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "INSERT INTO track_seeks (id, sc_user_id, sc_track_id, position_ms, from_ms, source, created_at)
          SELECT (lpad(to_hex(floor(extract(epoch FROM now() - age) * 1000)::bigint), 12, '0')
