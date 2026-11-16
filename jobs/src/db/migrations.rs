@@ -23,10 +23,20 @@ static OPS: sqlx::migrate::Migrator = {
 #[cfg(test)]
 pub(crate) static TEST_CORE: sqlx::migrate::Migrator = sqlx::migrate!("../api/migrations");
 
+#[cfg(test)]
 pub(crate) async fn run_core(
     pool: &PgPool,
     bootstrap_app: Option<&OAuthAppBootstrap>,
 ) -> Result<(), MigrationError> {
+    run_core_up_to(pool, bootstrap_app, None).await
+}
+
+pub(crate) async fn run_core_up_to(
+    pool: &PgPool,
+    bootstrap_app: Option<&OAuthAppBootstrap>,
+    target: Option<i64>,
+) -> Result<(), MigrationError> {
+    let bounded = target.map(core_target).transpose()?;
     let mut connection = pool.acquire().await?;
     prepare(&mut connection, CORE_LOCK).await?;
 
@@ -37,12 +47,28 @@ pub(crate) async fn run_core(
             .map_err(MigrationError::Migration)?;
         preflight_oauth_app_identities(&mut connection).await?;
         migrate_environment_connections(&mut connection, bootstrap_app).await?;
-        CORE.run(&mut *connection)
+        bounded
+            .as_ref()
+            .unwrap_or(&CORE)
+            .run(&mut *connection)
             .await
             .map_err(MigrationError::Migration)
     }
     .await;
     finish(&mut connection, CORE_LOCK, migration).await
+}
+
+fn core_target(version: i64) -> Result<sqlx::migrate::Migrator, MigrationError> {
+    if version < CONNECTION_MIGRATION {
+        return Err(MigrationError::TargetBelowPrefix {
+            version,
+            prefix: CONNECTION_MIGRATION,
+        });
+    }
+    if !CORE.iter().any(|migration| migration.version == version) {
+        return Err(MigrationError::UnknownTarget { version });
+    }
+    Ok(core_through(version))
 }
 
 pub(crate) async fn configure_node(
@@ -225,6 +251,12 @@ pub enum MigrationError {
     #[error("migration advisory lock was not held by this connection")]
     AdvisoryLockNotHeld,
 
+    #[error("core migration target {version} is not a core migration")]
+    UnknownTarget { version: i64 },
+
+    #[error("core migration target {version} is below migration {prefix}, which always runs")]
+    TargetBelowPrefix { version: i64, prefix: i64 },
+
     #[error(
         "{connections} legacy SoundCloud connections require SOUNDCLOUD_CLIENT_ID and SOUNDCLOUD_CLIENT_SECRET"
     )]
@@ -239,5 +271,7 @@ pub enum MigrationError {
     SplitNotReady { problems: String },
 }
 
+#[cfg(test)]
+mod target_tests;
 #[cfg(test)]
 mod tests;

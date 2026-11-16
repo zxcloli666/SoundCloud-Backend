@@ -25,19 +25,22 @@ impl FromStr for MigrationScope {
     }
 }
 
-pub async fn run(scope: MigrationScope) -> anyhow::Result<()> {
+pub async fn run(scope: MigrationScope, core_target: Option<i64>) -> anyhow::Result<()> {
+    if core_target.is_some() && scope != MigrationScope::Core {
+        anyhow::bail!("a migration target applies to the core scope only");
+    }
     match scope {
-        MigrationScope::Core => migrate_core().await?,
+        MigrationScope::Core => migrate_core(core_target).await?,
         MigrationScope::Ops => migrate_ops().await?,
         MigrationScope::All => {
-            migrate_core().await?;
+            migrate_core(None).await?;
             migrate_ops().await?;
         }
     }
     Ok(())
 }
 
-async fn migrate_core() -> anyhow::Result<()> {
+async fn migrate_core(target: Option<i64>) -> anyhow::Result<()> {
     let database = DatabaseConfig::from_env("", true, "36")
         .context("core migration database configuration is invalid")?;
     let bootstrap_app =
@@ -46,7 +49,7 @@ async fn migrate_core() -> anyhow::Result<()> {
     let pool = crate::db::connect_migration(&database, "scd-jobs-migrate:core")
         .await
         .context("core migration database connection failed")?;
-    let result = migrate_core_on(&pool, bootstrap_app.as_ref(), scd_node.as_ref()).await;
+    let result = migrate_core_on(&pool, bootstrap_app.as_ref(), scd_node.as_ref(), target).await;
     pool.close().await;
     result
 }
@@ -55,11 +58,12 @@ async fn migrate_core_on(
     pool: &sqlx::PgPool,
     bootstrap_app: Option<&OAuthAppBootstrap>,
     scd_node: Option<&ScdNode>,
+    target: Option<i64>,
 ) -> anyhow::Result<()> {
-    crate::db::migrations::run_core(pool, bootstrap_app)
+    crate::db::migrations::run_core_up_to(pool, bootstrap_app, target)
         .await
         .context("core migrations failed")?;
-    info!("core migrations applied");
+    info!(target = ?target, "core migrations applied");
     let Some(node) = scd_node else {
         return Ok(());
     };
