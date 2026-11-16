@@ -141,8 +141,9 @@ async fn feed_pages_merge_uploaders_in_one_order(pool: PgPool) -> anyhow::Result
         .execute(&pool)
         .await?;
     let expected: Vec<i64> = sqlx::query_scalar(
-        "SELECT sc_track_id::bigint FROM tracks
-         ORDER BY release_date DESC NULLS LAST, sc_created_at DESC NULLS LAST, sc_track_id DESC",
+        "SELECT track.sc_track_id::bigint FROM tracks AS track
+         ORDER BY track.release_date DESC NULLS LAST, track.sc_created_at DESC NULLS LAST,
+                  track.sc_track_id DESC",
     )
     .fetch_all(&pool)
     .await?;
