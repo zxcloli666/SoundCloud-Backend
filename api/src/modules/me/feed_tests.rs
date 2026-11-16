@@ -127,3 +127,40 @@ async fn follow_and_upload_refresh_enqueue_commit_together(pool: PgPool) -> anyh
     assert!(me.follow_user("42", "soundcloud:tracks:17").await.is_err());
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn feed_pages_merge_uploaders_in_one_order(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql("INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, uploader_sc_user_id, release_date)
+        SELECT id::text, 'soundcloud:tracks:' || id, 'Track ' || id, 'track ' || id, 120000,
+               CASE WHEN id % 3 = 0 THEN '18' ELSE '17' END,
+               CASE WHEN id % 11 = 0 THEN NULL ELSE '2026-09-01'::date - (id * 7 % 40) END
+        FROM generate_series(1, 45) id;
+        INSERT INTO user_followings (user_id, target_user_urn, wanted_state, progress) VALUES
+            ('42', 'soundcloud:users:17', true, false),
+            ('42', 'soundcloud:users:18', true, false);")
+        .execute(&pool)
+        .await?;
+    let expected: Vec<i64> = sqlx::query_scalar(
+        "SELECT sc_track_id::bigint FROM tracks
+         ORDER BY release_date DESC NULLS LAST, sc_created_at DESC NULLS LAST, sc_track_id DESC",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let ids = |page: &ListPageResult<Value>| -> Vec<i64> {
+        page.collection
+            .iter()
+            .filter_map(|t| t["id"].as_i64())
+            .collect()
+    };
+    let whole = read(&pool, "42", 0, 50).await?;
+    assert_eq!(ids(&whole), expected);
+    assert!(!whole.has_more);
+    let mut paged = Vec::new();
+    for page in 0..7 {
+        let part = read(&pool, "42", page, 7).await?;
+        assert_eq!(part.has_more, page < 6);
+        paged.extend(ids(&part));
+    }
+    assert_eq!(paged, expected);
+    Ok(())
+}
