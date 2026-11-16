@@ -1,5 +1,4 @@
-use backend_contracts::pipeline::ResolveArtistRequest;
-
+use super::ResolveArtistRequest;
 use super::guess::{Guess, deterministic};
 use crate::handlers::metadata::Normalizer;
 

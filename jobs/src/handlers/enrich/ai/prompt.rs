@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use backend_contracts::pipeline::ResolveArtistRequest;
 use llm_ladder::{Message, Request, Schema, System};
 
+use super::ResolveArtistRequest;
 use super::guess::Guess;
 use crate::handlers::metadata::{quoted, quoted_list};
 

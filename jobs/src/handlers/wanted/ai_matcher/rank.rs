@@ -1,6 +1,7 @@
-use backend_contracts::pipeline::{MatchCandidate, MatchTarget, MatchTrackData, RpcSource};
-
+use super::MatchTrackData;
+use super::request::{MatchCandidate, MatchTarget};
 use super::similarity::token_set;
+use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::Normalizer;
 
 const ARTIST_WEIGHT: f64 = 0.45;

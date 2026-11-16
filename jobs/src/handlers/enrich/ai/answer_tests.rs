@@ -1,11 +1,12 @@
 use std::time::Duration;
 
-use backend_contracts::pipeline::{ResolveArtistData, ResolveArtistRequest, RpcSource};
 use serde_json::{Value, json};
 
-use super::answer::{Grounding, ModelAnswer};
+use super::ResolveArtistRequest;
+use super::answer::{Grounding, ModelAnswer, ResolveArtistData};
 use super::guess::deterministic;
 use super::prompt;
+use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::Normalizer;
 
 fn track(title: &str, uploader: Option<&str>, description: Option<&str>) -> ResolveArtistRequest {

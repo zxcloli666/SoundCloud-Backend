@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use backend_contracts::pipeline::RpcSource;
 use serde_json::json;
 
 use super::*;

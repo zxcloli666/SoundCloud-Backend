@@ -18,27 +18,36 @@ mod tests;
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::pipeline::{
-    MAX_RESOLVE_DESCRIPTION_CHARS, RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData,
-    ResolveArtistRequest, RpcSource,
-};
 use base64::Engine;
 use llm_ladder::Ladder;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tracing::debug;
 
-use self::answer::{Grounding, ModelAnswer};
+use self::answer::{Grounding, ModelAnswer, ResolveArtistData};
 use self::guess::{Guess, deterministic};
 use super::resolver::{
     AlbumCandidate, ArtistCandidate, CreditEvidence, ResolveResult, ResolveSource, TrackContext,
 };
 use crate::config::AiConfig;
-use crate::handlers::ai_store::AiStore;
+use crate::handlers::ai_store::{AiStore, RpcSource};
 use crate::handlers::metadata::Normalizer;
 use crate::llm::{AiMethod, AiOutcome, record_answer};
 
 const MIN_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_RESOLVE_DESCRIPTION_CHARS: u32 = 4000;
+const RESOLVE_ARTIST_WINDOW_SECONDS: u64 = 20;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResolveArtistRequest {
+    pub title: String,
+    pub uploader: Option<String>,
+    pub metadata_artist: Option<String>,
+    pub isrc: Option<String>,
+    pub description: Option<String>,
+    pub duration_ms: Option<i64>,
+}
 
 pub struct AiResolverClient {
     ladder: Arc<Ladder>,
