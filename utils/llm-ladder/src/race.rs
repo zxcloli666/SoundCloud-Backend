@@ -110,15 +110,15 @@ impl Race {
                 self.drop_out(index, failure);
                 None
             }
-            Signal::Step(index, None) => {
-                self.drop_out(index, Failure::Invalid);
-                None
-            }
+            Signal::Step(index, None) => self.end(index),
             Signal::Timer => self.on_time(),
         }
     }
 
     async fn follow(&mut self) -> Option<Item> {
+        if self.winner.as_ref()?.ended {
+            return self.conclude().await;
+        }
         let winner = self.winner.as_mut()?;
         let answered = winner.document.is_complete();
         let wake = winner.wake_at(self.deadline);
@@ -145,17 +145,33 @@ impl Race {
     }
 
     fn hear(&mut self, index: usize, event: StepEvent) -> Option<Item> {
-        let (form, _) = self.asked(self.running[index].step);
         let run = &mut self.running[index];
         let held = run.held.len();
         run.take(event);
         if run.held.len() == held {
             return None;
         }
+        self.judge(index)
+    }
+
+    fn end(&mut self, index: usize) -> Option<Item> {
+        let field = self.asked(self.running[index].step).1.text_field;
+        if field.is_some_and(|field| self.running[index].end_as(field)) {
+            return self.judge(index);
+        }
+        self.drop_out(index, Failure::Invalid);
+        None
+    }
+
+    fn judge(&mut self, index: usize) -> Option<Item> {
         self.hedge_at = None;
-        if (self.rule.commit)(form, &run.held) {
+        let (form, _) = self.asked(self.running[index].step);
+        if (self.rule.commit)(form, &self.running[index].held) {
             let held = self.crown(index);
             return self.deliver(held);
+        }
+        if self.running[index].ended {
+            self.drop_out(index, Failure::Invalid);
         }
         None
     }

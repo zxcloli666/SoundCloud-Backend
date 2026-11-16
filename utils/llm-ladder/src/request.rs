@@ -15,6 +15,7 @@ pub struct Request {
     pub budget_user: Option<String>,
     pub deadline: Option<Duration>,
     pub plain: Option<Plain>,
+    pub text_field: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +141,7 @@ impl Request {
             budget_user: self.budget_user.clone(),
             deadline: self.deadline,
             plain: None,
+            text_field: self.text_field,
         })
     }
 
@@ -251,6 +253,7 @@ mod tests {
             budget_user: None,
             deadline: None,
             plain: None,
+            text_field: None,
         };
         assert_eq!(request.size(), 5 + 5 + 2 + "{\"type\":\"string\"}".len());
         assert_eq!(

@@ -93,6 +93,7 @@ pub fn request(user: &str) -> Request {
         budget_user: Some(user.to_owned()),
         deadline: None,
         plain: None,
+        text_field: None,
     }
 }
 

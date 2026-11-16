@@ -14,6 +14,8 @@ use crate::provider::{Backend, Price, StepEvent, StepStream};
 use crate::request::{Message, System};
 use crate::schema::Schema;
 
+#[path = "ladder_tests/bare.rs"]
+mod bare;
 #[path = "ladder_tests/breaker.rs"]
 mod breaker;
 #[path = "ladder_tests/commit.rs"]
@@ -285,6 +287,7 @@ fn request() -> Request {
         budget_user: Some("42".to_owned()),
         deadline: None,
         plain: None,
+        text_field: None,
     }
 }
 
@@ -300,7 +303,15 @@ async fn answer_once(
     ladder: &Arc<Ladder>,
     commit: Commit,
 ) -> (String, Result<Outcome, LadderError>) {
-    let mut events = match ladder.stream(request(), commit).await {
+    answer_to(ladder, request(), commit).await
+}
+
+async fn answer_to(
+    ladder: &Arc<Ladder>,
+    request: Request,
+    commit: Commit,
+) -> (String, Result<Outcome, LadderError>) {
+    let mut events = match ladder.stream(request, commit).await {
         Ok(events) => events,
         Err(error) => return (String::new(), Err(error)),
     };

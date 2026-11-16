@@ -7,6 +7,7 @@ use llm_ladder::{
     WorkerTransport,
 };
 
+use super::answer::SAY;
 use super::prompt;
 use super::readings::Readings;
 use super::reply::{self, Offered};
@@ -80,6 +81,7 @@ impl Live {
             budget_user: Some(user.to_owned()),
             deadline: None,
             plain: self.plain(turn),
+            text_field: (!turn.quiet).then_some(SAY),
         })
     }
 

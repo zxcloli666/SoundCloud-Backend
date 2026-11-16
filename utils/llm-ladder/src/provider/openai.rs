@@ -340,6 +340,7 @@ mod tests {
             budget_user: None,
             deadline: None,
             plain: None,
+            text_field: None,
         };
         assert_eq!(
             ChatCompletions::body(&call, &request),

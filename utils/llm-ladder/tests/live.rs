@@ -109,6 +109,7 @@ fn request(user: Option<&str>) -> Request {
         budget_user: user.map(str::to_owned),
         deadline: None,
         plain: None,
+        text_field: None,
     }
 }
 
