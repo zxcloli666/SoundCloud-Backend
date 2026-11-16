@@ -4,6 +4,7 @@ const THINK_CLOSE: &str = "</think>";
 #[derive(Debug, Default)]
 pub struct Document {
     state: State,
+    bare: String,
 }
 
 #[derive(Debug)]
@@ -37,6 +38,7 @@ impl Document {
                     seen.push_str(&input);
                     match opening(&seen) {
                         Opening::Think(at) => {
+                            self.bare.push_str(&seen[..at]);
                             self.state = State::Thinking(String::new());
                             input = seen[at + THINK_OPEN.len()..].to_owned();
                         }
@@ -45,7 +47,9 @@ impl Document {
                             input = seen[at..].to_owned();
                         }
                         Opening::Neither => {
-                            self.state = State::Seeking(unfinished_tag(&seen, THINK_OPEN));
+                            let tail = unfinished_tag(&seen, THINK_OPEN);
+                            self.bare.push_str(&seen[..seen.len() - tail.len()]);
+                            self.state = State::Seeking(tail);
                             return document;
                         }
                     }
@@ -86,6 +90,12 @@ impl Document {
 
     pub fn is_complete(&self) -> bool {
         matches!(self.state, State::Complete)
+    }
+
+    pub fn bare_text(&self) -> Option<&str> {
+        let text = self.bare.trim();
+        let seeking = matches!(self.state, State::Seeking(_));
+        (seeking && !text.is_empty()).then_some(text)
     }
 }
 
@@ -153,6 +163,18 @@ mod tests {
         let pieces: Vec<String> = text.chars().map(String::from).collect();
         let pieces: Vec<&str> = pieces.iter().map(String::as_str).collect();
         streamed(&pieces)
+    }
+
+    #[test]
+    fn text_outside_think_blocks_is_kept_until_an_object_starts() {
+        let mut document = Document::default();
+        for piece in ["<thi", "nk>{x}</think> Это не ", "ко мне. <th"] {
+            assert_eq!(document.push(piece), "");
+        }
+        assert_eq!(document.bare_text(), Some("Это не ко мне."));
+        document.push("{\"say\":\"hi\"}");
+        assert_eq!(document.bare_text(), None);
+        assert!(Document::default().bare_text().is_none());
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::Map;
 use wreq::header::{HeaderName, HeaderValue};
 
-use super::{Kind, LadderSettings, ProviderSettings, Settings};
+use super::{Kind, LadderSettings, ProviderSettings, Rung, Settings};
 use crate::error::ConfigError;
 use crate::provider::worker::MAX_TOKENS as WORKER_MAX_TOKENS;
 
@@ -117,16 +117,32 @@ impl LadderSettings {
                 "needs hedge_after_ms and deadline_ms from 1 to {MAX_WAIT_MS}"
             ));
         }
-        for (position, step) in self.steps.iter().enumerate() {
-            let Some(provider) = providers.get(step) else {
+        if self.steps.iter().any(|rung| rung.providers().is_empty()) {
+            return Err("has an empty group of steps".to_owned());
+        }
+        let named: Vec<&String> = self.steps.iter().flat_map(Rung::providers).collect();
+        for (position, step) in named.iter().enumerate() {
+            let Some(provider) = providers.get(*step) else {
                 return Err(format!("names the unknown provider {step}"));
             };
-            if self.steps[..position].contains(step) {
+            if named[..position].contains(step) {
                 return Err(format!("names the provider {step} twice"));
             }
             if provider.total_timeout_ms >= self.deadline_ms {
                 return Err(format!(
                     "needs total_timeout_ms of {step} below its deadline_ms"
+                ));
+            }
+        }
+        let grouped = self
+            .steps
+            .iter()
+            .filter(|rung| matches!(rung, Rung::Together(_)))
+            .flat_map(Rung::providers);
+        for step in grouped {
+            if providers.get(step).and_then(|provider| provider.hedge) == Some(false) {
+                return Err(format!(
+                    "puts {step} into a group, but a step with hedge = false never starts together with others"
                 ));
             }
         }

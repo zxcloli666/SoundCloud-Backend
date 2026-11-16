@@ -34,6 +34,7 @@ pub struct Hosting {
 pub struct Ladder {
     pub(crate) id: String,
     pub(crate) steps: Vec<Step>,
+    pub(crate) rungs: Vec<Vec<usize>>,
     pub(crate) hedge_after: Duration,
     pub(crate) deadline: Duration,
     pub(crate) budget: Option<Arc<Budget>>,
@@ -163,18 +164,28 @@ impl Ladder {
         observer: Arc<dyn Observer>,
     ) -> Self {
         let caps = Caps::from(settings.budget);
-        let steps = settings
-            .steps
-            .iter()
-            .filter_map(|step| providers.get(step.as_str()))
-            .map(|provider| Step {
-                provider: provider.clone(),
-                breaker: Breaker::new(settings.breaker),
-            })
-            .collect();
+        let mut steps = Vec::new();
+        let mut rungs = Vec::new();
+        for rung in &settings.steps {
+            let mut members = Vec::new();
+            for id in rung.providers() {
+                let Some(provider) = providers.get(id.as_str()) else {
+                    continue;
+                };
+                members.push(steps.len());
+                steps.push(Step {
+                    provider: provider.clone(),
+                    breaker: Breaker::new(settings.breaker),
+                });
+            }
+            if !members.is_empty() {
+                rungs.push(members);
+            }
+        }
         Self {
             id: id.to_owned(),
             steps,
+            rungs,
             hedge_after: Duration::from_millis(settings.hedge_after_ms),
             deadline: Duration::from_millis(settings.deadline_ms),
             budget: spend
@@ -203,7 +214,18 @@ impl Ladder {
         if steps.is_empty() {
             return Err(LadderError::Unavailable);
         }
-        Ok(Race::new(self.clone(), request, steps, rule, started))
+        let rungs = self
+            .rungs
+            .iter()
+            .map(|rung| {
+                rung.iter()
+                    .copied()
+                    .filter(|step| steps.contains(step))
+                    .collect()
+            })
+            .filter(|rung: &Vec<usize>| !rung.is_empty())
+            .collect();
+        Ok(Race::new(self.clone(), request, rungs, rule, started))
     }
 
     async fn open_steps(&self, request: &Request) -> Vec<usize> {

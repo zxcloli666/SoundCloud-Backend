@@ -14,12 +14,16 @@ use crate::provider::{Backend, Price, StepEvent, StepStream};
 use crate::request::{Message, System};
 use crate::schema::Schema;
 
+#[path = "ladder_tests/bare.rs"]
+mod bare;
 #[path = "ladder_tests/breaker.rs"]
 mod breaker;
 #[path = "ladder_tests/commit.rs"]
 mod commit;
 #[path = "ladder_tests/complete.rs"]
 mod complete;
+#[path = "ladder_tests/group.rs"]
+mod group;
 #[path = "ladder_tests/hedge.rs"]
 mod hedge;
 #[path = "ladder_tests/race.rs"]
@@ -223,11 +227,26 @@ fn bench(providers: Vec<Provider>, caps: CapSettings) -> Bench {
 }
 
 fn assembled(providers: Vec<Provider>, caps: CapSettings, breaker: BreakerSettings) -> Bench {
+    let rungs = (0..providers.len()).map(|step| vec![step]).collect();
+    rungs_of(providers, rungs, caps, breaker)
+}
+
+fn grouped(providers: Vec<Provider>, rungs: Vec<Vec<usize>>) -> Bench {
+    rungs_of(providers, rungs, CapSettings::default(), BREAKER)
+}
+
+fn rungs_of(
+    providers: Vec<Provider>,
+    rungs: Vec<Vec<usize>>,
+    caps: CapSettings,
+    breaker: BreakerSettings,
+) -> Bench {
     let seen = Arc::new(Watched::default());
     let spend = Arc::new(MemorySpend::default());
     let caps = Caps::from(caps);
     let ladder = Ladder {
         id: "chat".to_owned(),
+        rungs,
         steps: providers
             .into_iter()
             .map(|provider| Step {
@@ -268,6 +287,7 @@ fn request() -> Request {
         budget_user: Some("42".to_owned()),
         deadline: None,
         plain: None,
+        text_field: None,
     }
 }
 
@@ -283,7 +303,15 @@ async fn answer_once(
     ladder: &Arc<Ladder>,
     commit: Commit,
 ) -> (String, Result<Outcome, LadderError>) {
-    let mut events = match ladder.stream(request(), commit).await {
+    answer_to(ladder, request(), commit).await
+}
+
+async fn answer_to(
+    ladder: &Arc<Ladder>,
+    request: Request,
+    commit: Commit,
+) -> (String, Result<Outcome, LadderError>) {
+    let mut events = match ladder.stream(request, commit).await {
         Ok(events) => events,
         Err(error) => return (String::new(), Err(error)),
     };

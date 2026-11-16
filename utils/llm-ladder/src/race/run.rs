@@ -11,6 +11,7 @@ const USAGE_WAIT: Duration = Duration::from_secs(1);
 
 pub(super) struct Run {
     pub step: usize,
+    pub rung: usize,
     pub stream: StepStream,
     pub pass: Pass,
     pub document: Document,
@@ -19,6 +20,7 @@ pub(super) struct Run {
     pub usage_is_final: bool,
     pub received: usize,
     pub accepted: bool,
+    pub ended: bool,
     pub started: Instant,
     pub expires: Instant,
     pub first_output: Option<Duration>,
@@ -27,7 +29,7 @@ pub(super) struct Run {
 
 impl Run {
     pub fn new(
-        step: usize,
+        (step, rung): (usize, usize),
         stream: StepStream,
         pass: Pass,
         started: Instant,
@@ -35,6 +37,7 @@ impl Run {
     ) -> Self {
         Self {
             step,
+            rung,
             stream,
             pass,
             document: Document::default(),
@@ -43,6 +46,7 @@ impl Run {
             usage_is_final: false,
             received: 0,
             accepted: false,
+            ended: false,
             started,
             expires,
             first_output: None,
@@ -61,6 +65,16 @@ impl Run {
                 self.usage_is_final = true;
             }
         }
+    }
+
+    pub fn end_as(&mut self, field: &str) -> bool {
+        self.ended = true;
+        let Some(text) = self.document.bare_text() else {
+            return false;
+        };
+        let document = serde_json::json!({ field: text }).to_string();
+        self.read(&document);
+        self.document.is_complete()
     }
 
     fn read(&mut self, text: &str) {

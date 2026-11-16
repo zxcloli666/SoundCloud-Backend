@@ -6,7 +6,7 @@ use async_nats::jetstream;
 use futures::StreamExt;
 use llm_ladder::{
     BudgetSettings, CapSettings, Event, Hosting, Kind, Ladder, LadderSettings, Ladders, Message,
-    Observer, Outcome, Request, Schema, Settings, StepReport, System,
+    Observer, Outcome, Request, Rung, Schema, Settings, StepReport, System,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -109,6 +109,7 @@ fn request(user: Option<&str>) -> Request {
         budget_user: user.map(str::to_owned),
         deadline: None,
         plain: None,
+        text_field: None,
     }
 }
 
@@ -206,7 +207,7 @@ async fn every_http_provider_of_the_config_answers_as_a_stream_and_in_one_shot()
             provider.stream = Some(stream);
             solo.providers.insert(name.clone(), provider);
             let ladder = LadderSettings {
-                steps: vec![name.clone()],
+                steps: vec![Rung::One(name.clone())],
                 budget: CapSettings::default(),
                 ..template.clone()
             };

@@ -122,6 +122,7 @@ pub fn request() -> Request {
         budget_user: None,
         deadline: None,
         plain: None,
+        text_field: None,
     }
 }
 
