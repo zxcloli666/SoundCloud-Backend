@@ -36,7 +36,7 @@ jobs reads the title, uploader and metadata artist first:
 | uploader that is not a re-upload channel | 0.5 |
 | nothing | 0.3 |
 
-At 0.8 and above no model is asked. Below it the model gets the metadata and the parser guess. The answer counts only when every name in it is written word for word in the title, uploader, metadata artist or description; the name is then spelled as there. An answer that drops the artist the parser found, has an album year outside 1900 to 2100 or a confidence outside 0 to 1 is refused, and the next step of the ladder is asked.
+At 0.8 and above no model is asked. Below it the model gets the metadata and the parser guess. It is told that when the title names no artist the uploader usually is one, unless the name says it is a channel, label, mix series or fan page; without that a careful model often answered no artist and was refused. The answer counts only when every name in it is written word for word in the title, uploader, metadata artist or description; the name is then spelled as there. An answer that drops the artist the parser found, has an album year outside 1900 to 2100 or a confidence outside 0 to 1 is refused, and the next step of the ladder is asked.
 
 ## Wanted tracks
 
