@@ -37,6 +37,7 @@ pub struct ProviderSettings {
     pub total_timeout_ms: u64,
     pub hedge: Option<bool>,
     pub plain: Option<bool>,
+    pub requests_per_minute: Option<u32>,
     #[serde(default)]
     pub input_usd_per_mtok: f64,
     #[serde(default)]

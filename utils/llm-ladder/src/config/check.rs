@@ -53,6 +53,9 @@ impl ProviderSettings {
                 "needs max_output_tokens above zero and total_timeout_ms from 1 to {MAX_WAIT_MS}"
             ));
         }
+        if self.requests_per_minute == Some(0) {
+            return Err("has requests_per_minute of zero; leave it out for no limit".to_owned());
+        }
         if !self.prices().into_iter().all(price) {
             return Err("has a price that is not a positive number".to_owned());
         }

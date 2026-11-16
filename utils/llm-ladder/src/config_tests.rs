@@ -289,6 +289,24 @@ fn a_step_can_be_kept_out_of_the_hedge() {
 }
 
 #[test]
+fn a_provider_can_be_limited_to_a_rate_above_zero() {
+    let limited = |rate: &str| {
+        EXAMPLE.replace(
+            "total_timeout_ms = 12000",
+            &format!("total_timeout_ms = 12000\nrequests_per_minute = {rate}"),
+        )
+    };
+    let (settings, _) = parsed(&limited("15")).unwrap();
+    assert_eq!(settings.providers["paid"].requests_per_minute, Some(15));
+    assert_eq!(settings.providers["free"].requests_per_minute, None);
+    let zero = broken(&limited("0"));
+    assert!(
+        zero.contains("provider paid has requests_per_minute of zero"),
+        "{zero}"
+    );
+}
+
+#[test]
 fn every_wait_has_an_upper_bound_and_a_step_ends_before_its_ladder() {
     let long_step =
         broken(&EXAMPLE.replace("total_timeout_ms = 12000", "total_timeout_ms = 600001"));

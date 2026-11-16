@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::stream::BoxStream;
+use tokio::time::Instant;
 
 pub(crate) use http::client;
 
@@ -19,6 +20,7 @@ use openai::ChatCompletions;
 
 use crate::config::{Kind, ProviderSettings, micro_usd};
 use crate::observer::Failure;
+use crate::pace::Pace;
 use crate::request::{Request, Usage};
 use worker::WorkerTransport;
 
@@ -45,6 +47,7 @@ pub(crate) struct Provider {
     pub hedged: bool,
     pub plain: bool,
     pub streams: bool,
+    rate: Option<Pace>,
     backend: Box<dyn Backend>,
 }
 
@@ -75,6 +78,7 @@ impl Provider {
             hedged: settings.hedge.unwrap_or(true),
             plain: settings.plain.unwrap_or(false),
             streams: settings.kind != Kind::Worker && settings.stream.unwrap_or(true),
+            rate: settings.requests_per_minute.map(Pace::per_minute),
             backend,
         })
     }
@@ -93,8 +97,19 @@ impl Provider {
             hedged: true,
             plain: false,
             streams: true,
+            rate: None,
             backend,
         }
+    }
+
+    #[cfg(test)]
+    pub fn limited_to(mut self, requests_per_minute: u32) -> Self {
+        self.rate = Some(Pace::per_minute(requests_per_minute));
+        self
+    }
+
+    pub fn admits(&self, now: Instant) -> bool {
+        self.rate.as_ref().is_none_or(|rate| rate.take(now))
     }
 
     pub fn start(&self, request: Arc<Request>, time_left: Duration) -> StepStream {

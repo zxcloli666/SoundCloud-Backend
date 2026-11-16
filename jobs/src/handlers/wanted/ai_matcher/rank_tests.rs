@@ -7,6 +7,7 @@ use super::request::{MatchCandidate, MatchTarget};
 use super::similarity::{ratio, token_set};
 use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::Normalizer;
+use crate::llm::test_support::answer_fields;
 
 fn target(title: &str) -> MatchTarget {
     MatchTarget {
@@ -137,7 +138,9 @@ fn a_borderline_pick_is_asked_with_the_shortlist_in_the_worker_words() -> anyhow
         asked.system.joined(),
         "Pick the candidate that is the same recording as the target, or null if none is.\n\
          A remix, live, acoustic, instrumental, sped up or slowed version is a different\n\
-         recording. Candidate artists are often uploader names, not the performer."
+         recording. Candidate artists are often uploader names, not the performer.\n\
+         Answer with exactly one JSON object and nothing else, no markdown and no text around it:\n\
+         {\"match_id\": <id of the chosen candidate or null>, \"confidence\": <number from 0 to 1>}"
     );
     assert_eq!(
         asked
@@ -153,6 +156,19 @@ fn a_borderline_pick_is_asked_with_the_shortlist_in_the_worker_words() -> anyhow
     );
     assert_eq!(asked.deadline, Some(Duration::from_secs(10)));
     assert_eq!(asked.budget_user, None);
+    Ok(())
+}
+
+#[test]
+fn every_answer_field_is_named_in_the_prompt() -> anyhow::Result<()> {
+    let system = prompt::request(&target("Ocean Eyes"), &[], Duration::from_secs(10))
+        .system
+        .joined();
+    let fields = answer_fields(&serde_json::to_value(prompt::schema())?);
+    assert_eq!(fields.len(), 2);
+    for field in fields {
+        assert!(system.contains(&format!("\"{field}\"")), "{field}");
+    }
     Ok(())
 }
 

@@ -6,6 +6,7 @@ api_key = "env:EXAMPLE_ALPHA_KEY"
 stream = false
 max_output_tokens = 400
 total_timeout_ms = 6000
+requests_per_minute = 20
 
 [providers.onsite]
 kind = "worker"

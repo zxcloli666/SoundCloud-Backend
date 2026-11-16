@@ -23,6 +23,8 @@ Both go through a ladder from `utils/llm-ladder`, the crate the api uses for voi
 
 The file has the api format: `[providers]`, `[ladders]`, `[budget]`, see `api/docs/voice-chat.md`. A `worker` step asks the local model on the worker over NATS (`ai.rpc.complete`). Spend caps need `[budget] bucket`; jobs opens it with its own JetStream connection. A question has no user, so only the ladder caps count.
 
+A burst of wanted tracks asks many questions at once. When a provider's rate limit is shared with the api, set `requests_per_minute` on it here: the questions over the limit go to the next step, and voice chat keeps its share.
+
 ## Enrich
 
 jobs reads the title, uploader and metadata artist first:
@@ -39,6 +41,8 @@ At 0.8 and above no model is asked. Below it the model gets the metadata and the
 ## Wanted tracks
 
 Only the search hits jobs could not link or drop itself reach this step. Hits of another version (remix, live, acoustic, instrumental, sped up, slowed) are dropped, the rest get a score from artist, title and duration. A clear winner (0.85 or more and 0.15 ahead) or no hit at 0.5 is decided without a model. Otherwise the model gets the best 10 and may pick one of them or none; any other id is refused and the next step is asked.
+
+Both prompts spell out the JSON answer in words, so a provider that ignores the answer schema still answers in the right shape.
 
 ## No answer
 

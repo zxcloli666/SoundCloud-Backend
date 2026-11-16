@@ -8,6 +8,7 @@ use super::guess::deterministic;
 use super::prompt;
 use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::Normalizer;
+use crate::llm::test_support::answer_fields;
 
 fn track(title: &str, uploader: Option<&str>, description: Option<&str>) -> ResolveArtistRequest {
     ResolveArtistRequest {
@@ -46,6 +47,25 @@ fn grounded(
 
 fn names(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_owned()).collect()
+}
+
+#[test]
+fn every_answer_field_is_named_in_the_prompt() -> anyhow::Result<()> {
+    let normalizer = Normalizer::new()?;
+    let upload = track("Kendrick Lamar - luther", None, None);
+    let system = prompt::request(
+        &upload,
+        &deterministic(&normalizer, &upload),
+        Duration::from_secs(20),
+    )
+    .system
+    .joined();
+    let fields = answer_fields(&serde_json::to_value(prompt::schema())?);
+    assert_eq!(fields.len(), 9);
+    for field in fields {
+        assert!(system.contains(&format!("\"{field}\"")), "{field}");
+    }
+    Ok(())
 }
 
 #[test]
@@ -288,7 +308,11 @@ fn the_prompt_carries_the_worker_words() -> anyhow::Result<()> {
         "Identify the credited artists of a SoundCloud upload using only the metadata below.\n\
          Uploaders are often re-upload channels; the real artist is then usually written in\n\
          the title as 'Artist - Title'. Every name you return must appear verbatim in the\n\
-         metadata. Return null or empty lists when the metadata does not say."
+         metadata. Return null or empty lists when the metadata does not say.\n\
+         Answer with exactly one JSON object and nothing else, no markdown and no text around it:\n\
+         {\"primary_artist\": <name or null>, \"featured\": [<names>], \"producers\": [<names>],\n\
+         \"remixers\": [<names>], \"album\": {\"title\": <name>, \"year\": <year or null>,\n\
+         \"primary_artist\": <name or null>} or null, \"confidence\": <number from 0 to 1>}"
     );
     assert_eq!(
         asked

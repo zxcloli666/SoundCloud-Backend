@@ -6,11 +6,15 @@ use super::ResolveArtistRequest;
 use super::guess::Guess;
 use crate::handlers::metadata::{quoted, quoted_list};
 
-const INSTRUCTIONS: [&str; 4] = [
+const INSTRUCTIONS: [&str; 8] = [
     "Identify the credited artists of a SoundCloud upload using only the metadata below.",
     "Uploaders are often re-upload channels; the real artist is then usually written in",
     "the title as 'Artist - Title'. Every name you return must appear verbatim in the",
     "metadata. Return null or empty lists when the metadata does not say.",
+    "Answer with exactly one JSON object and nothing else, no markdown and no text around it:",
+    r#"{"primary_artist": <name or null>, "featured": [<names>], "producers": [<names>],"#,
+    r#""remixers": [<names>], "album": {"title": <name>, "year": <year or null>,"#,
+    r#""primary_artist": <name or null>} or null, "confidence": <number from 0 to 1>}"#,
 ];
 
 pub fn request(track: &ResolveArtistRequest, guess: &Guess, deadline: Duration) -> Request {

@@ -30,6 +30,7 @@ Spend caps need NATS JetStream: the api opens the KV bucket named in `[budget]` 
 | `hedge` | default `true`. `false`: the step starts only when every earlier step has failed, never because they are silent. Set it on a model that must not get parallel calls, such as a local CPU model. Such a step cannot be in a group |
 | `plain` | default `false`. `true`: the provider is asked the plain form of a request when the caller gives one, and its answer is judged by the rule of that form. Set it on a model that must not be trusted with the full request, such as a small local model. For the voice chat the plain form is the turn without tools. Its answer waits while a step asked the full request still runs and wins only when none is left or at the deadline; a full answer that comes in the meantime takes the turn |
 | `subject` | `worker` only: NATS subject of the local model |
+| `requests_per_minute` | optional limit of calls this process starts to the provider in any 60 seconds, over all its ladders. Over it the step is skipped for this request and the ladder goes on; the breaker does not count it. Set it on a provider whose rate limit other services share |
 
 A `worker` step gets the request cut to the limits of the worker method: the newest 64 messages, the first of them a user message, and the newest 12 000 bytes of a longer message. It fails without a publish only when the system text is over 48 000 bytes or the schema over 64 000 bytes. The call carries `X-Deadline`: the time the ladder has left, at most `total_timeout_ms`. A started worker call runs until it answers or reaches that deadline, even when another step has already won.
 
@@ -166,7 +167,7 @@ Errors before the stream are JSON, `{"statusCode": 403, "code": "star_required",
 
 `api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`; steps and durations add `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`. The turns have the label `outcome`: `done`, `quiet`, `cancelled` or the error code.
 
-`result`: `won`, `lost`, `cancelled`, `failed_status`, `failed_transport`, `failed_timeout` (these three feed the breaker), `failed_request`, `failed_refused`, `failed_length`, `failed_invalid`, `skipped_breaker`, `skipped_budget`.
+`result`: `won`, `lost`, `cancelled`, `failed_status`, `failed_transport`, `failed_timeout` (these three feed the breaker), `failed_request`, `failed_refused`, `failed_length`, `failed_invalid`, `skipped_breaker`, `skipped_budget`, `skipped_rate`.
 
 A steady `failed_request` rate on one provider means it refuses every request with HTTP 400, 413 or 422, for example an account out of credit: the breaker does not count it, so every turn loses one call to that step until the account or the config is fixed.
 
