@@ -1,29 +1,20 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{DiscoverHandler, Group};
+use super::Group;
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "CREATE TABLE artists (
              id uuid PRIMARY KEY,
-             interest_score real NOT NULL DEFAULT 0,
              monthly_listeners bigint NOT NULL DEFAULT 0,
              trending_score real NOT NULL DEFAULT 0,
-             merged_into uuid,
-             crawl_dead boolean NOT NULL DEFAULT false,
-             genius_artist_id text,
-             genius_crawled_at timestamptz,
-             genius_next_run_at timestamptz NOT NULL DEFAULT now()
+             merged_into uuid
          );
          CREATE TABLE tracks (
              id uuid PRIMARY KEY,
              sc_track_id text NOT NULL UNIQUE,
              primary_artist_id uuid
-         );
-         CREATE TABLE track_artists (
-             track_id uuid NOT NULL,
-             artist_id uuid NOT NULL
          );
          CREATE TABLE user_events (
              id uuid PRIMARY KEY,
@@ -35,122 +26,6 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
-    Ok(())
-}
-
-async fn insert_artist_track(pool: &PgPool, interest_score: f32) -> anyhow::Result<Uuid> {
-    let artist_id = Uuid::from_u128(1);
-    let track_id = Uuid::from_u128(2);
-    sqlx::query(
-        "INSERT INTO artists (
-             id, interest_score, genius_artist_id, genius_next_run_at
-         ) VALUES ($1, $2, 'genius-1', now() + interval '1 day')",
-    )
-    .bind(artist_id)
-    .bind(interest_score)
-    .execute(pool)
-    .await?;
-    sqlx::query("INSERT INTO tracks (id, sc_track_id) VALUES ($1, 'track-1')")
-        .bind(track_id)
-        .execute(pool)
-        .await?;
-    sqlx::query("INSERT INTO track_artists (track_id, artist_id) VALUES ($1, $2)")
-        .bind(track_id)
-        .bind(artist_id)
-        .execute(pool)
-        .await?;
-    Ok(artist_id)
-}
-
-#[sqlx::test(migrations = false)]
-async fn recent_activity_scores_and_surfaces_artist(pool: PgPool) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist_id = insert_artist_track(&pool, 0.0).await?;
-    sqlx::query(
-        "INSERT INTO user_events (id, sc_track_id)
-         VALUES ($1, 'track-1'), ($2, 'track-1')",
-    )
-    .bind(Uuid::from_u128(3))
-    .bind(Uuid::from_u128(4))
-    .execute(&pool)
-    .await?;
-
-    DiscoverHandler::new(pool.clone(), false, true, 1, 1)
-        .recompute_interest()
-        .await?;
-
-    let artist: (f32, bool) = sqlx::query_as(
-        "SELECT interest_score, genius_next_run_at <= now()
-         FROM artists WHERE id = $1",
-    )
-    .bind(artist_id)
-    .fetch_one(&pool)
-    .await?;
-    assert_eq!(artist, (2.0, true));
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn activity_outside_the_window_clears_stale_score(pool: PgPool) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist_id = insert_artist_track(&pool, 7.0).await?;
-    sqlx::query(
-        "INSERT INTO user_events (id, sc_track_id, created_at)
-         VALUES ($1, 'track-1', now() - interval '31 days')",
-    )
-    .bind(Uuid::from_u128(3))
-    .execute(&pool)
-    .await?;
-
-    DiscoverHandler::new(pool.clone(), false, true, 1, 1)
-        .recompute_interest()
-        .await?;
-
-    let artist: (f32, bool) = sqlx::query_as(
-        "SELECT interest_score, genius_next_run_at > now()
-         FROM artists WHERE id = $1",
-    )
-    .bind(artist_id)
-    .fetch_one(&pool)
-    .await?;
-    assert_eq!(artist, (0.0, true));
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn interest_waits_while_another_artist_update_owns_the_lock(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let mut transaction = pool.begin().await?;
-    let acquired = sqlx::query_file_scalar!("queries/discover/try_artist_write_lock.sql")
-        .fetch_one(&mut *transaction)
-        .await?;
-    assert!(acquired);
-
-    let result = DiscoverHandler::new(pool, false, true, 1, 1)
-        .recompute_interest()
-        .await;
-
-    assert!(result.is_err());
-    transaction.rollback().await?;
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn disabled_interest_leaves_existing_scores_untouched(pool: PgPool) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist_id = insert_artist_track(&pool, 7.0).await?;
-
-    DiscoverHandler::new(pool.clone(), false, false, 1, 1)
-        .recompute_interest()
-        .await?;
-
-    let score: f32 = sqlx::query_scalar("SELECT interest_score FROM artists WHERE id = $1")
-        .bind(artist_id)
-        .fetch_one(&pool)
-        .await?;
-    assert_eq!(score, 7.0);
     Ok(())
 }
 

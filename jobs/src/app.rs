@@ -675,15 +675,14 @@ async fn validate_core_schema(core: &sqlx::PgPool) -> anyhow::Result<()> {
         recommendation_ready,
         "recommendation jobs schema is incomplete; apply migrations 0013 and 0044"
     );
-    let discover_interest_ready = sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('artists_positive_interest_idx') IS NOT NULL",
-    )
-    .fetch_one(core)
-    .await
-    .context("discover interest schema validation failed")?;
+    let discover_interest_ready =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('artist_interest') IS NOT NULL")
+            .fetch_one(core)
+            .await
+            .context("discover interest schema validation failed")?;
     ensure!(
         discover_interest_ready,
-        "discover interest schema is incomplete; apply migration 0065"
+        "discover interest schema is incomplete; apply migration 0428"
     );
     let indexing_ready = indexing_schema_ready(core)
         .await

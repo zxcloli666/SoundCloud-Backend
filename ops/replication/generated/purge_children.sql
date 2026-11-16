@@ -152,6 +152,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_artist_interest(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.artist_id INTO p FROM public.artist_interest t WHERE t.artist_id = (k ->> 'artist_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.artist_interest t WHERE t.artist_id = (k ->> 'artist_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_artist_sc_accounts(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -199,6 +214,7 @@ BEGIN
     DELETE FROM public.artist_colike c WHERE c.b_id = p.id;
     DELETE FROM public.artist_coplay c WHERE c.a_id = p.id;
     DELETE FROM public.artist_coplay c WHERE c.b_id = p.id;
+    DELETE FROM public.artist_interest c WHERE c.artist_id = p.id;
     DELETE FROM public.artist_sc_accounts c WHERE c.artist_id = p.id;
     DELETE FROM public.artist_socials c WHERE c.artist_id = p.id;
     UPDATE public.artists c SET merged_into = NULL WHERE c.merged_into = p.id;
@@ -1321,6 +1337,8 @@ BEGIN
             PERFORM public.scd_purge_artist_colike(k);
         WHEN 'artist_coplay' THEN
             PERFORM public.scd_purge_artist_coplay(k);
+        WHEN 'artist_interest' THEN
+            PERFORM public.scd_purge_artist_interest(k);
         WHEN 'artist_sc_accounts' THEN
             PERFORM public.scd_purge_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN

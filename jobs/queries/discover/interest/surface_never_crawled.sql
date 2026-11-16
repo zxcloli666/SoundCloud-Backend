@@ -1,8 +1,9 @@
 UPDATE artists
 SET genius_next_run_at = now()
-WHERE interest_score > 0
-  AND merged_into IS NULL
-  AND NOT crawl_dead
-  AND genius_artist_id IS NOT NULL
-  AND genius_crawled_at IS NULL
-  AND genius_next_run_at > now()
+FROM artist_interest AS interest
+WHERE artists.id = interest.artist_id
+  AND artists.merged_into IS NULL
+  AND NOT artists.crawl_dead
+  AND artists.genius_artist_id IS NOT NULL
+  AND artists.genius_crawled_at IS NULL
+  AND artists.genius_next_run_at > now()

@@ -117,6 +117,7 @@ tables:
   admin_catalog_requests: {class: P, note: "admin.catalog.v1 replay ledger, written by jobs on core in the edit transaction (B5c)"}
   ai_resolver_budget: {class: P}
   ai_resolver_cache: {class: P}
+  artist_interest: {class: P, note: "core-private interest score of an artist (track_artists plays of the last 30 days), a row only while the score is positive; jobs recomputes one shard an hour and surfaces never-crawled artists from it, so the replicated artists rows are not rewritten"}
   audio_index_wire_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   background_job_enqueues: {class: P}
   background_jobs: {class: P, note: "api enqueues only through job.enqueue; api status reads go to job_status"}

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 const LEGACY_SCHEMA_VERSION: i64 = CONNECTION_MIGRATION - 1;
-const LATEST_SCHEMA_VERSION: i64 = 427;
+const LATEST_SCHEMA_VERSION: i64 = 435;
 
 #[sqlx::test(migrations = false)]
 async fn legacy_playlist_update_is_archived_before_sharing_becomes_metadata_update(
@@ -604,6 +604,68 @@ async fn existing_interest_index_does_not_block_schema_finalization(
     run_core(&pool, None).await?;
 
     assert_eq!(latest_version(&pool).await?, LATEST_SCHEMA_VERSION);
+    let index: Option<String> =
+        sqlx::query_scalar("SELECT to_regclass('artists_positive_interest_idx')::text")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(index, None);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn positive_interest_moves_to_artist_interest_before_the_column_goes(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    core_through(427).run(&pool).await?;
+    let artists: Vec<(Uuid, f32)> = sqlx::query_as(
+        "INSERT INTO artists (name, normalized_name, source, interest_score)
+         VALUES ('scored', 'scored', 'soundcloud', 3), ('idle', 'idle', 'soundcloud', 0)
+         RETURNING id, interest_score",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let scored: Vec<(Uuid, f32)> = artists
+        .iter()
+        .copied()
+        .filter(|(_, score)| *score > 0.0)
+        .collect();
+
+    run_core(&pool, None).await?;
+
+    let moved: Vec<(Uuid, f32)> =
+        sqlx::query_as("SELECT artist_id, score FROM artist_interest ORDER BY artist_id")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(moved, scored);
+    let leftovers: Vec<String> = sqlx::query_scalar(
+        "SELECT name
+         FROM (VALUES ('artists_positive_interest_idx'),
+                      ('artists_crawl_pickup_idx'),
+                      ('artists_sc_user_id_idx')) AS dropped (name)
+         WHERE to_regclass(name) IS NOT NULL
+         UNION ALL
+         SELECT column_name::text
+         FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = 'artists'
+           AND column_name = 'interest_score'
+         UNION ALL
+         SELECT col
+         FROM scd_unpublished_columns
+         WHERE tbl = 'artists'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+
+    sqlx::query("DELETE FROM artists WHERE id = $1")
+        .bind(scored[0].0)
+        .execute(&pool)
+        .await?;
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM artist_interest")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(remaining, 0);
     Ok(())
 }
 

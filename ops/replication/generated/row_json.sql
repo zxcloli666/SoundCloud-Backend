@@ -118,6 +118,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.artist_coplay t WHERE t.a_id = (k ->> 'a_id')::uuid AND t.b_id = (k ->> 'b_id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_artist_interest(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.artist_interest t WHERE t.artist_id = (k ->> 'artist_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_artist_sc_accounts(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1440,6 +1452,8 @@ BEGIN
             RETURN public.scd_row_json_artist_colike(k);
         WHEN 'artist_coplay' THEN
             RETURN public.scd_row_json_artist_coplay(k);
+        WHEN 'artist_interest' THEN
+            RETURN public.scd_row_json_artist_interest(k);
         WHEN 'artist_sc_accounts' THEN
             RETURN public.scd_row_json_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN

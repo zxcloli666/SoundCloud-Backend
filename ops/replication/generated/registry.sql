@@ -49,6 +49,7 @@ SELECT v.cls FROM (VALUES
     ('artist_attribution_revalidation', 'C'),
     ('artist_colike', 'C'),
     ('artist_coplay', 'C'),
+    ('artist_interest', 'P'),
     ('artist_sc_accounts', 'C'),
     ('artist_socials', 'C'),
     ('artists', 'C'),
