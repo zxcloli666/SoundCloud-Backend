@@ -233,43 +233,6 @@ async fn a_wanted_track_retires_at_the_attempt_cap(pool: PgPool) -> anyhow::Resu
 }
 
 #[sqlx::test(migrations = false)]
-async fn an_unavailable_ai_matcher_never_retires_a_wanted_track(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let id = seed_wanted(&pool, "Холод").await?;
-    sqlx::query("UPDATE wanted_tracks SET resolve_attempts = 7 WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await?;
-
-    for _ in 0..3 {
-        sqlx::query("UPDATE wanted_tracks SET resolve_next_run_at = now() WHERE id = $1")
-            .bind(id)
-            .execute(&pool)
-            .await?;
-        let claimed = claim(&pool, 600.0, 10).await?;
-        assert_eq!(claimed, vec![id]);
-        sqlx::query_file!("queries/wanted/finalize_deferred.sql", &claimed, 1800.0)
-            .execute(&pool)
-            .await?;
-    }
-
-    assert_eq!(state(&pool, id).await?, ("wanted".to_owned(), 7, false));
-    let waits: bool = sqlx::query_scalar(
-        "SELECT resolve_next_run_at > now() + interval '29 minutes' FROM wanted_tracks WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await?;
-    assert!(
-        waits,
-        "a deferred row waits for the ai lane instead of retrying at once"
-    );
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
 async fn a_linked_track_is_left_alone_by_the_backoff(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let id = seed_wanted(&pool, "Холод").await?;

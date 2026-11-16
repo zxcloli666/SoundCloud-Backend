@@ -23,13 +23,12 @@ use crate::queue::{JobError, JobRepository, JobResult};
 use super::catalog_read::PublicCatalogReader;
 use super::lyrics::wake;
 
-use self::ai_matcher::{AiUnavailable, MatchCandidate, MatchTarget};
+use self::ai_matcher::{MatchCandidate, MatchTarget};
 
 pub use self::ai_matcher::AiMatcherClient;
 
 const SEARCH_LIMIT: i64 = 10;
 const WANTED_DEADLINE: Duration = Duration::from_secs(120);
-const AI_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 
 pub const LINK_THRESHOLD: f32 = 0.7;
 pub const BORDERLINE_FLOOR: f32 = 0.45;
@@ -86,11 +85,8 @@ impl WantedHandler {
             .await
             .map_err(JobError::retryable)?;
 
-        let deferred = self.resolve_batch(tracks).await;
-        let (deferred, settled): (Vec<Uuid>, Vec<Uuid>) =
-            claimed.into_iter().partition(|id| deferred.contains(id));
-        self.finalize(&settled).await?;
-        self.defer(&deferred).await
+        self.resolve_batch(tracks).await;
+        self.finalize(&claimed).await
     }
 
     pub async fn resolve_for_artist(&self, artist_id: Uuid, limit: i64) -> JobResult {
@@ -107,10 +103,9 @@ impl WantedHandler {
         Ok(())
     }
 
-    async fn resolve_batch(&self, tracks: Vec<WantedTrack>) -> HashSet<Uuid> {
-        let mut deferred = HashSet::new();
+    async fn resolve_batch(&self, tracks: Vec<WantedTrack>) {
         if tracks.is_empty() {
-            return deferred;
+            return;
         }
         info!(batch = tracks.len(), "wanted resolve batch started");
 
@@ -137,15 +132,10 @@ impl WantedHandler {
             let Some((track_id, outcome)) = running.next().await else {
                 break;
             };
-            match outcome {
-                Ok(Resolution::Deferred) => {
-                    deferred.insert(track_id);
-                }
-                Ok(_) => {}
-                Err(_) => warn!(wanted = %track_id, "wanted resolve exceeded its deadline"),
+            if outcome.is_err() {
+                warn!(wanted = %track_id, "wanted resolve exceeded its deadline");
             }
         }
-        deferred
     }
 
     async fn scan_identity_accounts(&self, tracks: &[WantedTrack]) -> HashSet<Uuid> {
@@ -230,13 +220,8 @@ impl WantedHandler {
                 .await
                 .map(Resolution::from_linked);
         }
-        let chosen = match self.ask_ai(track, &candidates, &triaged.borderline).await {
-            Ok(Some(chosen)) => chosen,
-            Ok(None) => return Ok(Resolution::Unmatched),
-            Err(AiUnavailable) => {
-                info!(wanted = %track.id, "ai matcher is unavailable; the attempt is not counted");
-                return Ok(Resolution::Deferred);
-            }
+        let Some(chosen) = self.ask_ai(track, &candidates, &triaged.borderline).await else {
+            return Ok(Resolution::Unmatched);
         };
         let Some(candidate) = candidates.get(chosen.0) else {
             return Ok(Resolution::Unmatched);
@@ -287,13 +272,11 @@ impl WantedHandler {
         track: &WantedTrack,
         candidates: &[Value],
         borderline: &[usize],
-    ) -> Result<Option<(usize, f32)>, AiUnavailable> {
-        let Some(ai) = self.ai.as_ref() else {
-            return Ok(None);
-        };
+    ) -> Option<(usize, f32)> {
+        let ai = self.ai.as_ref()?;
         let offered = offered_candidates(candidates, borderline);
         if offered.is_empty() {
-            return Ok(None);
+            return None;
         }
         let offers: Vec<MatchCandidate> = offered
             .iter()
@@ -309,10 +292,8 @@ impl WantedHandler {
                 &offers,
             )
             .await?;
-        Ok(picked.and_then(|picked| {
-            let (index, _) = offered.get(picked.candidate_id as usize)?;
-            Some((*index, picked.confidence))
-        }))
+        let (index, _) = offered.get(picked.candidate_id as usize)?;
+        Some((*index, picked.confidence))
     }
 
     async fn ingest_and_link(
@@ -353,25 +334,6 @@ impl WantedHandler {
         Ok(linked)
     }
 
-    async fn defer(&self, deferred: &[Uuid]) -> JobResult {
-        if deferred.is_empty() {
-            return Ok(());
-        }
-        sqlx::query_file!(
-            "queries/wanted/finalize_deferred.sql",
-            deferred,
-            AI_RETRY_DELAY.as_secs_f64()
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
-        sqlx::query_file!("queries/wanted/finalize_clear_locks.sql", deferred)
-            .execute(&self.pool)
-            .await
-            .map_err(JobError::retryable)?;
-        Ok(())
-    }
-
     async fn finalize(&self, claimed: &[Uuid]) -> JobResult {
         if claimed.is_empty() {
             return Ok(());
@@ -406,7 +368,6 @@ fn offered_candidates<'a>(
 enum Resolution {
     Linked,
     Unmatched,
-    Deferred,
 }
 
 impl Resolution {

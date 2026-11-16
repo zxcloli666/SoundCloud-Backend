@@ -83,9 +83,6 @@ pub struct AiMatch {
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AiUnavailable;
-
 pub struct AiMatcherClient {
     ladder: Arc<Ladder>,
     normalizer: Arc<Normalizer>,
@@ -112,38 +109,38 @@ impl AiMatcherClient {
         &self,
         target: MatchTarget<'_>,
         candidates: &[MatchCandidate<'_>],
-    ) -> Result<Option<AiMatch>, AiUnavailable> {
+    ) -> Option<AiMatch> {
         if candidates.is_empty() || target.title.trim().is_empty() {
-            return Ok(None);
+            return None;
         }
         let request = match_request(&target, candidates);
         let ranked = rank(&self.normalizer, &request.target, &request.candidates);
         let verdict = decide(&ranked);
         if !is_borderline(&ranked) {
             record_answer(AiMethod::MatchTrack, AiOutcome::Confident);
-            return Ok(into_match(verdict));
+            return into_match(verdict);
         }
         let cache_key = format!("match:{}", request_hash(&request));
         if let Some(reply) = self.store.cached::<MatchTrackData>(&cache_key).await {
             record_answer(AiMethod::MatchTrack, AiOutcome::Cached);
-            return Ok(into_match(reply));
+            return into_match(reply);
         }
         if !self.store.take_budget().await {
             debug!("ai match daily budget exceeded");
             record_answer(AiMethod::MatchTrack, AiOutcome::OverBudget);
-            return Err(AiUnavailable);
+            return into_match(verdict);
         }
         let shortlist = ranked.get(..LLM_CANDIDATES).unwrap_or(&ranked);
         match self.ask(&request.target, shortlist).await {
             Some(answer) => {
                 self.store.remember(&cache_key, &answer).await;
                 record_answer(AiMethod::MatchTrack, AiOutcome::Llm);
-                Ok(into_match(answer))
+                into_match(answer)
             }
             None => {
                 self.store.refund_budget().await;
                 record_answer(AiMethod::MatchTrack, AiOutcome::Fallback);
-                Ok(into_match(verdict))
+                into_match(verdict)
             }
         }
     }

@@ -77,10 +77,7 @@ impl WantedHandler {
         if let Some(best) = triaged.best {
             return Some(best);
         }
-        self.ask_ai(track, uploads, &triaged.borderline)
-            .await
-            .ok()
-            .flatten()
+        self.ask_ai(track, uploads, &triaged.borderline).await
     }
 
     async fn account_uploads(&self, sc_user_id: &str) -> Vec<Value> {
