@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use crate::metrics;
 use crate::queue::{JobError, JobResult};
 
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "cmd_reassert",
     "cmd_purge",
     "cmd_done",
@@ -14,6 +14,7 @@ const TABLES: [&str; 7] = [
     "repl_purges",
     "repl_tombstones",
     "storage_event_repairs",
+    "track_seeks",
 ];
 const BATCH: i32 = 1_000;
 const PAUSE: Duration = Duration::from_millis(500);
