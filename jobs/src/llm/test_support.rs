@@ -86,3 +86,22 @@ pub fn refine_ladder(worker: Arc<Scripted>) -> anyhow::Result<Arc<Ladder>> {
         .get("refine")
         .ok_or_else(|| anyhow::anyhow!("the test ladder has no refine ladder"))
 }
+
+pub fn answer_fields(schema: &Value) -> Vec<String> {
+    let mut fields = Vec::new();
+    collect_fields(schema, &mut fields);
+    fields
+}
+
+fn collect_fields(schema: &Value, fields: &mut Vec<String>) {
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for (name, inner) in properties {
+            fields.push(name.clone());
+            collect_fields(inner, fields);
+        }
+    }
+    let options = schema.get("anyOf").and_then(Value::as_array);
+    for option in options.into_iter().flatten() {
+        collect_fields(option, fields);
+    }
+}

@@ -10,10 +10,12 @@ use super::request::{MatchCandidate, MatchTarget};
 use crate::handlers::ai_store::RpcSource;
 use crate::handlers::metadata::{quoted, share};
 
-const INSTRUCTIONS: [&str; 3] = [
+const INSTRUCTIONS: [&str; 5] = [
     "Pick the candidate that is the same recording as the target, or null if none is.",
     "A remix, live, acoustic, instrumental, sped up or slowed version is a different",
     "recording. Candidate artists are often uploader names, not the performer.",
+    "Answer with exactly one JSON object and nothing else, no markdown and no text around it:",
+    r#"{"match_id": <id of the chosen candidate or null>, "confidence": <number from 0 to 1>}"#,
 ];
 
 #[derive(Debug, Deserialize)]
