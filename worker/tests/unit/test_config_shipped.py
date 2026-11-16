@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import BASE_ENV, CONFIG_DIR, LLM_KEYS
+from tests.conftest import BASE_ENV, CONFIG_DIR
 from worker import settings as s
 
 WILDCARD = "*"
@@ -104,18 +104,17 @@ def test_shipped_config_has_all_lanes_and_slots(settings: s.Settings) -> None:
 
 
 def test_shipped_config_enables_fallbacks(base_env: dict[str, str]) -> None:
-    settings = s.load(CONFIG_DIR, {**base_env, **LLM_KEYS})
+    settings = s.load(CONFIG_DIR, base_env)
     assert s.fallback_gaps(settings) == []
     assert settings.slots["align"].fallback == "mms"
     assert settings.slots["sep"].fallback == s.MIX_FALLBACK
     assert settings.sync.rescue_strategy == "global_ctc"
     assert settings.runtime.oom_unload is True
-    assert settings.llm.fallback == "openai_compatible"
 
 
 @pytest.mark.parametrize("profile", sorted((CONFIG_DIR / "profiles").glob("*.toml")))
 def test_shipped_profiles_enable_fallbacks(profile: Path, base_env: dict[str, str]) -> None:
-    settings = s.load(CONFIG_DIR, {**base_env, **LLM_KEYS, s.PROFILE_ENV: profile.stem})
+    settings = s.load(CONFIG_DIR, {**base_env, s.PROFILE_ENV: profile.stem})
     assert s.fallback_gaps(settings) == []
     if settings.is_public:
         assert set(settings.lanes.enabled) <= {"audio", "lyrics", "transcribe", "speak"}
@@ -124,33 +123,14 @@ def test_shipped_profiles_enable_fallbacks(profile: Path, base_env: dict[str, st
 def test_fallback_gaps_are_reported(base_env: dict[str, str]) -> None:
     env = {
         **base_env,
-        **LLM_KEYS,
         "WORKER__SYNC__ALIGN__REGION_FALLBACK": "false",
         "WORKER__SYNC__ALIGN__GAP_FILL": "false",
         "WORKER__SYNC__RESCUE_STRATEGY": "none",
         "WORKER__RUNTIME__OOM_UNLOAD": "false",
-        "WORKER__LLM__FALLBACK": "",
     }
     gaps = s.fallback_gaps(s.load(CONFIG_DIR, env))
-    assert len(gaps) == 5
+    assert len(gaps) == 4
     assert any("region_fallback" in gap for gap in gaps)
-    assert any("llm.fallback" in gap for gap in gaps)
-
-
-def test_llm_provider_without_a_key_is_a_gap(base_env: dict[str, str]) -> None:
-    env = {**base_env, "ANTHROPIC_API_KEY": "sk-test"}
-    assert s.fallback_gaps(s.load(CONFIG_DIR, env)) == [
-        "llm.fallback provider openai_compatible disabled"
-    ]
-    no_primary = {**base_env, **LLM_KEYS, "ANTHROPIC_API_KEY": ""}
-    assert s.fallback_gaps(s.load(CONFIG_DIR, no_primary)) == [
-        "llm.primary provider anthropic disabled"
-    ]
-
-
-def test_llm_keys_do_not_matter_without_the_ai_lane(base_env: dict[str, str]) -> None:
-    env = {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'}
-    assert s.fallback_gaps(s.load(CONFIG_DIR, env)) == []
 
 
 @pytest.mark.parametrize(("profile", "card"), [("gpu-12-audio", "gpu-12"), ("gpu-16", "gpu-16")])

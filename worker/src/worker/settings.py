@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 ENV_PREFIX = "WORKER__"
 PROFILE_ENV = "WORKER_PROFILE"
 ENV_REF_PREFIX = "env:"
-SECRET_KEYS = frozenset({"password", "api_key"})
+SECRET_KEYS = frozenset({"password"})
 INTEGER = re.compile(r"[+-]?\d+")
 
 LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak", "highlight")
@@ -28,7 +28,6 @@ DEVICES = ("auto", "cuda", "cpu")
 SYNC_STRATEGIES = ("anchored", "global_ctc")
 RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
-PROVIDER_KINDS = ("anthropic", "openai_compatible")
 LOCAL_LLM_SLOT = "llm-local"
 LOCAL_LLM_METHOD = "complete"
 LOCAL_LLM_DEVICE = "llama-cpu"
@@ -258,27 +257,6 @@ class TasteSection:
 
 
 @dataclass(frozen=True)
-class ProviderSettings:
-    kind: str
-    endpoint: str
-    model: str
-    api_key: str
-    soft_timeout_s: float
-    hard_timeout_s: float
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.api_key)
-
-
-@dataclass(frozen=True)
-class BreakerSettings:
-    failures: int
-    window_s: float
-    open_s: float
-
-
-@dataclass(frozen=True)
 class LocalLlmSettings:
     enabled: bool
     file: str
@@ -294,11 +272,6 @@ class LocalLlmSettings:
 
 @dataclass(frozen=True)
 class LlmSection:
-    primary: str
-    fallback: str
-    hedge_after_share: float
-    breaker: BreakerSettings
-    providers: Mapping[str, ProviderSettings]
     local: LocalLlmSettings
 
 
@@ -572,7 +545,7 @@ def validate(settings: Settings) -> None:
         *validate_slots(settings),
         *validate_sync(settings),
         *validate_taste(settings),
-        *validate_llm(settings),
+        *validate_local_llm(settings),
         *validate_tts(settings),
     ]
     if problems:
@@ -693,28 +666,6 @@ def validate_taste(settings: Settings) -> list[str]:
     return []
 
 
-def validate_llm(settings: Settings) -> list[str]:
-    llm = settings.llm
-    problems = []
-    for role, name in (("primary", llm.primary), ("fallback", llm.fallback)):
-        if name and name not in llm.providers:
-            problems.append(f"llm.{role} refers to unknown provider {name!r}")
-    if llm.primary and llm.primary == llm.fallback:
-        problems.append("llm.primary and llm.fallback must differ")
-    if not 0 < llm.hedge_after_share <= 1:
-        problems.append("llm.hedge_after_share must be in (0, 1]")
-    for name, provider in llm.providers.items():
-        if provider.kind not in PROVIDER_KINDS:
-            problems.append(f"llm.providers.{name}.kind must be one of {PROVIDER_KINDS}")
-        if provider.soft_timeout_s <= 0 or provider.hard_timeout_s < provider.soft_timeout_s:
-            problems.append(f"llm.providers.{name}: 0 < soft_timeout_s <= hard_timeout_s")
-        if provider.enabled and not (provider.endpoint and provider.model):
-            problems.append(f"llm.providers.{name} has an api_key but no endpoint or model")
-    if llm.breaker.failures < 1 or llm.breaker.window_s <= 0 or llm.breaker.open_s <= 0:
-        problems.append("llm.breaker values out of range")
-    return problems + validate_local_llm(settings)
-
-
 def validate_local_llm(settings: Settings) -> list[str]:
     local = settings.llm.local
     problems = []
@@ -822,8 +773,6 @@ def fallback_gaps(settings: Settings) -> list[str]:
         gaps.append("sync.rescue_strategy disabled")
     if not settings.runtime.oom_unload:
         gaps.append("runtime.oom_unload disabled")
-    if "ai" in settings.lanes.enabled:
-        gaps += llm_gaps(settings.llm)
     card = settings.small_card
     if card:
         if settings.runtime.idle_unload_s <= 0:
@@ -833,21 +782,6 @@ def fallback_gaps(settings: Settings) -> list[str]:
             if slot is not None and slot.max_batch != max_batch:
                 gaps.append(f"slots.{slot_name}.max_batch != {max_batch} on {card} profiles")
     return gaps
-
-
-def llm_gaps(llm: LlmSection) -> list[str]:
-    gaps = []
-    for role, name in (("primary", llm.primary), ("fallback", llm.fallback)):
-        if not name:
-            gaps.append(f"llm.{role} empty")
-        elif not provider_enabled(llm, name):
-            gaps.append(f"llm.{role} provider {name} disabled")
-    return gaps
-
-
-def provider_enabled(llm: LlmSection, name: str) -> bool:
-    provider = llm.providers.get(name)
-    return provider is not None and provider.enabled
 
 
 def sync_version(settings: Settings) -> str:

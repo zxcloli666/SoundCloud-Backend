@@ -30,32 +30,6 @@ def test_base_config_loads_with_env_refs_resolved(base_env: dict[str, str]) -> N
     assert settings.nats.url == "nats://127.0.0.1:4222"
     assert settings.nats.password == "secret"
     assert settings.profile == ""
-    assert settings.llm.providers["anthropic"].enabled is False
-
-
-def test_provider_is_enabled_exactly_when_its_key_resolves(base_env: dict[str, str]) -> None:
-    env = {**base_env, "ANTHROPIC_API_KEY": "k"}
-    settings = s.load(CONFIG_DIR, env)
-    assert settings.llm.providers["anthropic"].enabled is True
-    assert settings.llm.providers["openai_compatible"].enabled is False
-    env = {**env, "LLM_FALLBACK_KEY": "k2", "LLM_FALLBACK_URL": "https://x/v1"}
-    env = {**env, "LLM_FALLBACK_MODEL": "m"}
-    assert s.load(CONFIG_DIR, env).llm.providers["openai_compatible"].enabled is True
-
-
-@pytest.mark.parametrize("missing", ["LLM_FALLBACK_URL", "LLM_FALLBACK_MODEL"])
-def test_provider_key_without_endpoint_or_model_is_a_start_error(
-    base_env: dict[str, str], missing: str
-) -> None:
-    env = {
-        **base_env,
-        "LLM_FALLBACK_KEY": "k2",
-        "LLM_FALLBACK_URL": "https://x/v1",
-        "LLM_FALLBACK_MODEL": "m",
-    }
-    del env[missing]
-    with pytest.raises(s.SettingsError, match="openai_compatible has an api_key but no endpoint"):
-        s.load(CONFIG_DIR, env)
 
 
 def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None:
@@ -87,9 +61,12 @@ def test_the_local_model_can_be_switched_off_without_dropping_the_ai_lane(
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(settings)
 
 
-def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str]) -> None:
-    with pytest.raises(s.SettingsError, match=r"llm\.fallback refers to unknown provider 'local'"):
-        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
+@pytest.mark.parametrize("key", ["PRIMARY", "FALLBACK", "HEDGE_AFTER_SHARE", "PROVIDERS"])
+def test_a_config_that_still_names_a_remote_provider_is_a_start_error(
+    base_env: dict[str, str], key: str
+) -> None:
+    with pytest.raises(s.SettingsError, match=rf"llm: unknown keys \['{key.lower()}'\]"):
+        s.load(CONFIG_DIR, {**base_env, f"WORKER__LLM__{key}": "remote"})
 
 
 @pytest.mark.parametrize(
@@ -328,9 +305,6 @@ def test_secret_without_env_ref_is_a_start_error(
     write_profile(config_copy, "leaky", '[nats]\npassword = "hunter2"\n')
     with pytest.raises(s.SettingsError, match=r"nats\.password: secrets"):
         s.load(config_copy, {**base_env, "WORKER_PROFILE": "leaky"})
-    write_profile(config_copy, "leaky", '[llm.providers.anthropic]\napi_key = "sk-live"\n')
-    with pytest.raises(s.SettingsError, match=r"llm\.providers\.anthropic\.api_key: secrets"):
-        s.load(config_copy, {**base_env, "WORKER_PROFILE": "leaky"})
     with pytest.raises(s.SettingsError, match="secrets"):
         s.load(CONFIG_DIR, {**base_env, "WORKER__NATS__PASSWORD": "hunter2"})
 
@@ -358,9 +332,6 @@ def test_small_card_profile_cannot_enable_trusted_lanes(
         ({"WORKER__SYNC__STRATEGY": "whisper"}, "sync.strategy"),
         ({"WORKER__SYNC__RESCUE_STRATEGY": "maybe"}, "sync.rescue_strategy"),
         ({"WORKER__SYNC__QUALITY__CONFIDENCE_MODEL": "calibrated"}, "non-zero confidence_weights"),
-        ({"WORKER__LLM__PRIMARY": "gemini"}, "unknown provider"),
-        ({"WORKER__LLM__FALLBACK": "anthropic"}, "must differ"),
-        ({"WORKER__LLM__HEDGE_AFTER_SHARE": "1.5"}, "hedge_after_share"),
         ({"WORKER__NATS__PING": "{ interval_s = 0, max_outstanding = 2 }"}, "nats.ping"),
     ],
 )

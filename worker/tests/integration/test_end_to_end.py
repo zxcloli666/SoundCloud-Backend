@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -24,7 +24,6 @@ import soxr
 from aiohttp import web
 from nats.aio.client import Client
 from nats.aio.msg import Msg
-from nats.aio.subscription import Subscription
 from nats.js import JetStreamContext
 from nats.js.manager import JetStreamManager
 
@@ -37,19 +36,16 @@ WORKER_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = WORKER_ROOT / "config"
 CONTRACT_PATH = WORKER_ROOT / "contract" / "worker-contract.json"
 WORKER_ID = "e2e-worker"
-ALL_LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "ai")
-CPU_LANES = ("collab", "ai")
+ALL_LANES = ("audio", "lyrics", "transcribe", "encode", "collab")
+CPU_LANES = ("collab",)
 SPEECH_CLIP_ENV = "WORKER_TEST_SPEECH_CLIP"
 MARKER_ENV = "WORKER_E2E_MARKER"
 TRANSCRIPT = "Mr Quilter is the apostle of the middle classes and we are glad to welcome his gospel"
 ENCODE_TEXT = "a quiet song about the sea"
 CLIP_RATE = 16_000
 SILENCE_S = 1.0
-LLM_ARTIST = "M83"
-RPC_WINDOW_S = 20.0
 READY_TIMEOUT_S = 600.0
 DONE_TIMEOUT_S = 600.0
-RPC_TIMEOUT_S = 30.0
 STOP_TIMEOUT_S = 90.0
 DRIFT_TIMEOUT_S = 150.0
 COLLAB_OBJECT = "collab-e2e-input"
@@ -58,7 +54,6 @@ COLLAB_SESSION_LENGTH = 8
 QUICK_COLLAB = (600, 20)
 SLOW_COLLAB = (100_000, 50)
 SHORT_GRACE_S = "2"
-SLOW_LLM_S = 10.0
 QUEUE_TASKS: Mapping[str, tuple[str, str]] = {
     "audio": ("index.audio.new", "storage-audio:901:1:1"),
     "lyrics": ("embed.lyrics.new", "embed:902:lyr:902:1"),
@@ -102,16 +97,10 @@ class Live:
 class Fixtures:
     base_url: str = ""
     clip: bytes = b""
-    llm_delay_s: float = 0.0
-    llm_requests: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def clip_url(self) -> str:
         return f"{self.base_url}/clip.flac"
-
-    @property
-    def llm_url(self) -> str:
-        return f"{self.base_url}/v1/chat/completions"
 
 
 @dataclass
@@ -160,14 +149,8 @@ async def fixtures() -> AsyncIterator[Fixtures]:
     async def serve_clip(request: web.Request) -> web.Response:
         return web.Response(body=state.clip, content_type="audio/flac")
 
-    async def complete(request: web.Request) -> web.Response:
-        state.llm_requests.append(await request.json())
-        await asyncio.sleep(state.llm_delay_s)
-        return web.json_response(openai_reply(llm_answer()))
-
     app = web.Application()
     app.router.add_get("/clip.flac", serve_clip)
-    app.router.add_post("/v1/chat/completions", complete)
     runner = web.AppRunner(app)
     await runner.setup()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -189,10 +172,6 @@ async def test_every_lane_is_served_end_to_end(
         await put_collab_input(live, *QUICK_COLLAB)
         for name, (subject, msg_id) in QUEUE_TASKS.items():
             await live.publish(subject, queue_task(name, fixtures), {"Nats-Msg-Id": msg_id})
-        replies = {
-            method: await (await send_rpc(live, method, request)).next_msg(RPC_TIMEOUT_S)
-            for method, request in rpc_requests().items()
-        }
         dones = await wait_for_dones(live, worker, len(QUEUE_TASKS))
         health_reply = await live.admin.request(f"worker.health.{WORKER_ID}", b"", timeout=5)
         health_exit = await run_health(tmp_path / "health.json")
@@ -201,7 +180,6 @@ async def test_every_lane_is_served_end_to_end(
 
     assert code == 0, worker.tail()
     assert_dones(live.contract, dones)
-    assert_rpc_replies(live.contract, replies, fixtures)
     assert_status(status)
     assert json.loads(health_reply.data)["worker_id"] == WORKER_ID
     assert health_exit == 0
@@ -212,10 +190,9 @@ async def test_every_lane_is_served_end_to_end(
     assert_nothing_left(worker)
 
 
-async def test_sigterm_mid_task_naks_the_queue_task_and_expires_the_rpc(
+async def test_sigterm_mid_task_naks_the_queue_task(
     live: Live, fixtures: Fixtures, tmp_path: Path
 ) -> None:
-    fixtures.llm_delay_s = SLOW_LLM_S
     worker = await start_serve(
         live, fixtures, tmp_path, CPU_LANES, WORKER__RUNTIME__SHUTDOWN_GRACE_S=SHORT_GRACE_S
     )
@@ -225,16 +202,13 @@ async def test_sigterm_mid_task_naks_the_queue_task_and_expires_the_rpc(
         await live.publish(
             "train.collab.new", collab_task(SLOW_COLLAB[1]), {"Nats-Msg-Id": "collab:slow"}
         )
-        pending = await send_rpc(live, "resolve_artist", rpc_requests()["resolve_artist"])
-        await wait_until(worker, lambda: both_in_flight(live, fixtures), READY_TIMEOUT_S, "work")
+        await wait_until(worker, lambda: collab_in_flight(live), READY_TIMEOUT_S, "work")
         code = await worker.terminate()
     finally:
         if worker.process.returncode is None:
             await worker.terminate()
 
     assert code == 0, worker.tail()
-    reply = json.loads((await pending.next_msg(RPC_TIMEOUT_S)).data)
-    assert reply == {"ok": False, "error": "expired"}
     assert await live.done_messages() == []
     assert await live.messages_left("TRAIN_COLLAB") == 1
     events = worker.event_names()
@@ -245,7 +219,7 @@ async def test_sigterm_mid_task_naks_the_queue_task_and_expires_the_rpc(
 async def test_consumer_drift_at_start_exits_78_before_any_engine(
     live: Live, fixtures: Fixtures, tmp_path: Path
 ) -> None:
-    lane = live.contract.lane("ai")
+    lane = live.contract.lane("collab")
     await live.jsm.add_consumer(lane.stream, consumer_config(lane, ack_wait=61.0))
     worker = await start_serve(live, fixtures, tmp_path, CPU_LANES)
 
@@ -254,7 +228,7 @@ async def test_consumer_drift_at_start_exits_78_before_any_engine(
     assert code == 78, worker.tail()
     events = worker.events()
     [drift] = [event for event in events if event.get("event") == "consumer_drift_at_start"]
-    assert drift["lane"] == "ai" and drift["diff"] == {"ack_wait_s": [30.0, 61.0]}
+    assert drift["lane"] == "collab" and drift["diff"] == {"ack_wait_s": [300.0, 61.0]}
     assert "engine_spawned" not in {event.get("event") for event in events}
 
 
@@ -264,7 +238,7 @@ async def test_consumer_drift_in_work_drains_and_exits_78(
     worker = await start_serve(live, fixtures, tmp_path, CPU_LANES)
     try:
         await wait_for_status(worker, all_lanes_serving(CPU_LANES))
-        lane = live.contract.lane("ai")
+        lane = live.contract.lane("collab")
         await live.jsm.add_consumer(lane.stream, consumer_config(lane, ack_wait=61.0))
         code = await worker.wait_exit(DRIFT_TIMEOUT_S)
     finally:
@@ -315,7 +289,7 @@ def serve_env(
         name: value
         for name, value in os.environ.items()
         if not name.startswith("WORKER__")
-        and name not in ("WORKER_PROFILE", "ANTHROPIC_API_KEY", "CUDA_VISIBLE_DEVICES")
+        and name not in ("WORKER_PROFILE", "CUDA_VISIBLE_DEVICES")
     }
     return {
         **inherited,
@@ -331,9 +305,6 @@ def serve_env(
         "WORKER__SLOTS__SEP__REPLICAS": "1",
         "WORKER__SLOTS__ASR__REPLICAS": "1",
         "WORKER__SLOTS__ALIGN__REPLICAS": "1",
-        "LLM_FALLBACK_URL": fixtures.llm_url,
-        "LLM_FALLBACK_MODEL": "fake-llm",
-        "LLM_FALLBACK_KEY": "fake-key",
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
         "TOKENIZERS_PARALLELISM": "false",
@@ -403,47 +374,6 @@ def collab_task(epochs: int) -> dict[str, object]:
     }
 
 
-def rpc_requests() -> dict[str, dict[str, object]]:
-    return {
-        "resolve_artist": {"title": "Midnight City", "uploader": LLM_ARTIST},
-        "match_track": {
-            "target": {"artist": LLM_ARTIST, "title": "Midnight City"},
-            "candidates": [
-                {"id": 7, "artist": LLM_ARTIST, "title": "Midnight City", "duration_sec": 243.0},
-                {"id": 8, "artist": "Someone Else", "title": "Another Song"},
-            ],
-        },
-    }
-
-
-def llm_answer() -> dict[str, object]:
-    return {
-        "primary_artist": LLM_ARTIST,
-        "featured": [],
-        "producers": [],
-        "remixers": [],
-        "album": None,
-        "confidence": 0.95,
-    }
-
-
-def openai_reply(answer: Mapping[str, object]) -> dict[str, object]:
-    message = {"role": "assistant", "content": json.dumps(answer)}
-    return {"choices": [{"finish_reason": "stop", "message": message}]}
-
-
-async def send_rpc(live: Live, method: str, request: Mapping[str, object]) -> Subscription:
-    inbox = f"_INBOX.e2e.{uuid.uuid4().hex}"
-    subscription = await live.admin.subscribe(inbox, max_msgs=1)
-    headers = {
-        "Nats-Msg-Id": f"rpc:{method}:{uuid.uuid4().hex}",
-        "X-Reply-To": inbox,
-        "X-Deadline": str(int((time.time() + RPC_WINDOW_S) * 1000)),
-    }
-    await live.publish(f"ai.rpc.{method}", request, headers)
-    return subscription
-
-
 async def put_collab_input(live: Live, sessions: int, epochs: int) -> None:
     generator = np.random.default_rng(epochs)
     rows = [
@@ -473,10 +403,10 @@ def all_lanes_serving(lanes: Sequence[str]) -> Callable[[Mapping[str, object]], 
     return serving
 
 
-async def both_in_flight(live: Live, fixtures: Fixtures) -> bool:
+async def collab_in_flight(live: Live) -> bool:
     lane = live.contract.lane("collab")
     info = await live.jsm.consumer_info(lane.stream, lane.durable)
-    return info.num_ack_pending == 1 and bool(fixtures.llm_requests)
+    return info.num_ack_pending == 1
 
 
 async def wait_for_status(
@@ -550,17 +480,6 @@ def assert_dones(contract: Contract, dones: list[tuple[str, dict[str, object]]])
     assert collab["status"] == "ok" and collab["trained"] is True, collab
     assert collab["input_object"] == COLLAB_OBJECT
     assert collab["points_count"] == COLLAB_ITEMS
-
-
-def assert_rpc_replies(contract: Contract, replies: Mapping[str, Msg], fixtures: Fixtures) -> None:
-    answers = {method: json.loads(reply.data) for method, reply in replies.items()}
-    for method, answer in answers.items():
-        assert contract.validate(f"ai.rpc.{method}.reply", answer) == [], (method, answer)
-        assert answer["ok"] is True, answer
-    resolved = answers["resolve_artist"]["data"]
-    assert resolved["primary_artist"] == LLM_ARTIST and resolved["source"] == "llm"
-    assert [request["model"] for request in fixtures.llm_requests] == ["fake-llm"]
-    assert answers["match_track"]["data"]["match_id"] == 7
 
 
 def assert_status(status: Mapping[str, object]) -> None:

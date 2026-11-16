@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import orjson
 
 from worker.contract import CompleteLimits
+from worker.domain import fields
 from worker.domain.deadline import Deadline
-from worker.domain.metadata import fields
 from worker.domain.outcome import NotServedHere, PermanentFailure, Reason
 from worker.domain.ports import ChatMessage, ChatRole, Completion, Engines, EngineUnavailable
 from worker.domain.validate import validate

@@ -27,9 +27,7 @@ def reporter(harness: Harness, settings: Settings) -> StatusReporter:
 
 
 async def test_snapshot_has_the_documented_shape(harness: Harness, settings: Settings) -> None:
-    harness.counters.inc("llm_calls_total", provider="anthropic", outcome="ok")
     harness.counters.inc("align_engine_total", engine="mms")
-    harness.counters.observe("llm_latency_ms", 120.0, provider="anthropic")
     harness.counters.inc("lease_lost_total", lane="audio")
     status = reporter(harness, settings)
     harness.clock.advance(5)
@@ -52,8 +50,6 @@ async def test_snapshot_has_the_documented_shape(harness: Harness, settings: Set
     counters = snapshot["counters"]
     assert counters["lease_lost"] == 1
     assert counters["align_engine"] == {"qwen": 0, "mms": 1, "gapfill": 0, "global": 0}
-    assert counters["llm_calls"] == {"anthropic": {"ok": 1}}
-    assert counters["llm_latency_ms_p95"] == {"anthropic": 120.0}
     assert counters["complete_answers"] == 0
     assert counters["complete_rejected"] == counters["rpc_handed_on"] == {}
     assert counters["rpc_expired_by_method"] == {}
@@ -71,7 +67,7 @@ async def test_snapshot_carries_the_complete_and_hand_over_counters(
     harness.counters.inc("complete_unavailable_total", state="off")
     harness.counters.inc("rpc_handed_on_total", method="complete", by=4)
     harness.counters.inc("rpc_expired_total", method="complete", by=2)
-    harness.counters.inc("rpc_expired_total", method="match_track")
+    harness.counters.inc("rpc_expired_total", method="say")
     harness.counters.inc("pull_unanswered_total", lane="audio")
 
     snapshot = reporter(harness, settings).snapshot()
@@ -82,7 +78,7 @@ async def test_snapshot_carries_the_complete_and_hand_over_counters(
     assert counters["complete_unavailable"] == {"off": 1}
     assert counters["rpc_handed_on"] == {"complete": 4}
     assert counters["rpc_expired"] == 3
-    assert counters["rpc_expired_by_method"] == {"complete": 2, "match_track": 1}
+    assert counters["rpc_expired_by_method"] == {"complete": 2, "say": 1}
     assert snapshot["lanes"]["audio"]["pull_unanswered"] == 1
 
 

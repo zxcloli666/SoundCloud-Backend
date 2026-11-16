@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import Mapping
 from pathlib import Path
 
 import aiohttp
@@ -16,7 +14,6 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
 from tests.fakes.http_audio import FakeAudioServer
 from tests.fakes.jetstream import PERMISSIONS_VIOLATION, FakeNats, ForbiddenCall
-from tests.fakes.llm import FakeProvider, FakeProviderError, FakeRefiner
 from tests.fakes.object_store import FakeBlobStore
 from worker.contract import Contract
 from worker.domain.deadline import Deadline
@@ -330,47 +327,3 @@ async def test_audio_server_fake() -> None:
             async with session.get(server.url("/garbage")) as response:
                 assert response.content_type == "audio/mpeg"
         assert server.requests[0] == "/ok.wav"
-
-
-async def test_llm_provider_fake(clock: FakeClock) -> None:
-    provider = FakeProvider("anthropic", clock)
-    provider.reply_with({"primary_artist": "x"}, delay_s=2)
-    provider.fail_with(RuntimeError("boom"))
-    provider.hang()
-    deadline = Deadline.after(5, clock.now)
-    task = asyncio.create_task(provider.complete("prompt", {}, deadline))
-    await clock.tick(0)
-    await clock.tick(1)
-    assert not task.done()
-    await clock.tick(1)
-    assert await task == {"primary_artist": "x"}
-    with pytest.raises(RuntimeError):
-        await provider.complete("prompt", {}, deadline)
-    hung = asyncio.create_task(provider.complete("prompt", {}, deadline))
-    await clock.tick(0)
-    await clock.tick(1)
-    hung.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await hung
-    assert provider.cancelled == 1
-    with pytest.raises(FakeProviderError):
-        await provider.complete("prompt", {}, deadline)
-    assert len(provider.calls) == 4
-
-
-async def test_refiner_fake_applies_grounding(clock: FakeClock) -> None:
-    refiner = FakeRefiner()
-    refiner.reply_with({"primary_artist": "Kendrick Lamar"})
-    refiner.reply_with({"primary_artist": "Invented"})
-    deadline = Deadline.after(5, clock.now)
-
-    def grounded(reply: Mapping[str, object]) -> bool:
-        return reply["primary_artist"] == "Kendrick Lamar"
-
-    assert await refiner.refine("p", {}, grounded, deadline) == {"primary_artist": "Kendrick Lamar"}
-    assert await refiner.refine("p", {}, grounded, deadline) is None
-    assert await refiner.refine("p", {}, grounded, deadline) is None
-    assert refiner.ungrounded == 1 and len(refiner.calls) == 3
-    clock.advance(6)
-    with pytest.raises(TransientFailure):
-        await refiner.refine("p", {}, grounded, deadline)

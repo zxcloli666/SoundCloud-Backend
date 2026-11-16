@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from tests.conftest import BASE_ENV, CONFIG_DIR, LLM_KEYS
+from tests.conftest import BASE_ENV, CONFIG_DIR
 from worker import app
 from worker import settings as s
 from worker.app import TTS_THREADS_ENV, Blueprint, StartupError, tts_options
@@ -92,7 +92,7 @@ SPEAK_ONLY = {"speak"}
 
 
 def load(profile: str) -> s.Settings:
-    return s.load(CONFIG_DIR, {**BASE_ENV, **LLM_KEYS, s.PROFILE_ENV: profile})
+    return s.load(CONFIG_DIR, {**BASE_ENV, s.PROFILE_ENV: profile})
 
 
 def test_shipped_profiles_are_exactly_the_design_set() -> None:
@@ -122,7 +122,6 @@ def test_profile_ships_every_fallback(name: str) -> None:
     assert settings.sync.align.region_fallback and settings.sync.align.gap_fill
     assert settings.sync.rescue_strategy == "global_ctc"
     assert settings.runtime.oom_unload is True
-    assert settings.llm.fallback and settings.llm.fallback != settings.llm.primary
 
 
 @pytest.mark.parametrize("name", sorted(DESIGN))
