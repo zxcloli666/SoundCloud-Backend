@@ -110,7 +110,7 @@ def largest_ok_done(contract: Contract, lane: str) -> dict[str, object]:
     return done
 
 
-RPC_LANES = {"ai": ("resolve_artist", "match_track", "complete"), "speak": ("say",)}
+RPC_LANES = {"ai": ("complete",), "speak": ("say",)}
 
 
 def rpc_lane(contract: Contract, subject: str) -> LaneSpec:
@@ -154,12 +154,7 @@ def test_rpc_windows_bound_their_lane(contract: Contract, name: str) -> None:
 def test_every_rpc_method_belongs_to_one_lane(contract: Contract) -> None:
     owned = [method for methods in RPC_LANES.values() for method in methods]
     assert sorted(owned) == sorted(contract.rpc.windows_s)
-    assert contract.rpc.windows_s == {
-        "resolve_artist": 20,
-        "match_track": 10,
-        "complete": 30,
-        "say": 90,
-    }
+    assert contract.rpc.windows_s == {"complete": 30, "say": 90}
 
 
 def test_a_say_reply_of_the_longest_line_fits_the_lane(contract: Contract) -> None:

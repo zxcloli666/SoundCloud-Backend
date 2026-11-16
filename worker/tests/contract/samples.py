@@ -74,21 +74,6 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
 
 RPC_REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
     {
-        "ai.rpc.resolve_artist": {
-            "title": "Kendrick Lamar - Luther (feat. SZA)",
-            "uploader": "kendricklamar",
-            "metadata_artist": None,
-            "isrc": None,
-            "description": None,
-            "duration_ms": 177000,
-        },
-        "ai.rpc.match_track": {
-            "target": {"artist": "Kendrick Lamar", "title": "Luther"},
-            "candidates": [
-                {"id": 1, "artist": "Kendrick Lamar", "title": "luther", "duration_sec": 177.0},
-                {"id": 4294967295, "artist": "SZA", "title": "Saturn"},
-            ],
-        },
         "ai.rpc.complete": {
             "system": "You are the voice of a music player. Answer with one JSON object.",
             "messages": [
@@ -110,36 +95,6 @@ RPC_REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
 
 RPC_REPLIES: Mapping[str, tuple[Mapping[str, object], ...]] = MappingProxyType(
     {
-        "ai.rpc.resolve_artist.reply": (
-            {
-                "ok": True,
-                "data": {
-                    "primary_artist": "Kendrick Lamar",
-                    "featured": ["SZA"],
-                    "producers": [],
-                    "remixers": [],
-                    "album": None,
-                    "confidence": 0.93,
-                    "source": "llm",
-                },
-            },
-            {
-                "ok": True,
-                "data": {
-                    "primary_artist": None,
-                    "featured": [],
-                    "producers": [],
-                    "remixers": [],
-                    "album": {"title": "GNX", "year": 2024},
-                    "confidence": 0.0,
-                    "source": "deterministic",
-                },
-            },
-        ),
-        "ai.rpc.match_track.reply": (
-            {"ok": True, "data": {"match_id": 1, "confidence": 0.88, "source": "deterministic"}},
-            {"ok": True, "data": {"match_id": None, "confidence": 0.41, "source": "llm"}},
-        ),
         "ai.rpc.complete.reply": (
             {
                 "ok": True,

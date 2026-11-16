@@ -40,12 +40,7 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "collab": 128,
         "taste": 128,
     }
-    assert contract.rpc.windows_s == {
-        "resolve_artist": 20,
-        "match_track": 10,
-        "complete": 30,
-        "say": 90,
-    }
+    assert contract.rpc.windows_s == {"complete": 30, "say": 90}
     assert contract.rpc.reply_header == "X-Reply-To"
     assert contract.max_message_bytes == 900_000
     assert contract.complete_limits == c.CompleteLimits(
@@ -546,33 +541,18 @@ def test_done_transcribe_requires_metrics_when_rejected(contract: c.Contract) ->
 
 
 def test_rpc_reply_schemas(contract: c.Contract) -> None:
-    resolve = {
+    answered = {
         "ok": True,
         "data": {
-            "primary_artist": "Kendrick Lamar",
-            "featured": ["SZA"],
-            "producers": [],
-            "remixers": [],
-            "album": None,
-            "confidence": 0.93,
-            "source": "llm",
+            "text": '{"say": "Kendrick Lamar, Luther", "actions": []}',
+            "model": "org/model-GGUF/model-Q4_K_M.gguf@0123abcd",
+            "input_tokens": 1500,
+            "output_tokens": 80,
         },
     }
-    assert contract.validate("ai.rpc.resolve_artist.reply", resolve) == []
-    assert contract.validate("ai.rpc.resolve_artist.reply", {"ok": False, "error": "expired"}) == []
-    assert contract.validate("ai.rpc.resolve_artist.reply", {"ok": False, "error": "boom"})
-    match = {"ok": True, "data": {"match_id": None, "confidence": 0.4, "source": "deterministic"}}
-    assert contract.validate("ai.rpc.match_track.reply", match) == []
-    widest = {**match, "data": {**match["data"], "match_id": 2**32 - 1}}
-    assert contract.validate("ai.rpc.match_track.reply", widest) == []
-    beyond = {**match, "data": {**match["data"], "match_id": 2**32}}
-    assert contract.validate("ai.rpc.match_track.reply", beyond)
-    request = {
-        "target": {"artist": "a", "title": "t"},
-        "candidates": [{"id": 1, "artist": "a", "title": "t"}],
-    }
-    assert contract.validate("ai.rpc.match_track", request) == []
-    assert contract.validate("ai.rpc.match_track", {**request, "candidates": []})
+    assert contract.validate("ai.rpc.complete.reply", answered) == []
+    assert contract.validate("ai.rpc.complete.reply", {"ok": False, "error": "expired"}) == []
+    assert contract.validate("ai.rpc.complete.reply", {"ok": False, "error": "boom"})
 
 
 def test_say_schemas(contract: c.Contract) -> None:

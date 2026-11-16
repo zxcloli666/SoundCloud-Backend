@@ -4,23 +4,20 @@ use schemars::{JsonSchema, Schema, generate::SchemaSettings};
 use serde_json::{Map, Value, json};
 
 use crate::pipeline::{
-    AI_COMPLETE, AI_MATCH_TRACK, AI_RESOLVE_ARTIST, AI_RPC_STREAM, AudioIndexRequest,
-    AudioIndexResult, COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest,
-    CollabTrainResult, CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS,
-    DONE_ENCODE, DONE_HIGHLIGHT, DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE,
-    DONE_TRANSCRIBE, EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW,
-    EncodeModel, EncodeRequest, EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK,
-    HighlightRequest, HighlightResult, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
-    LyricsEmbeddingResult, MATCH_TRACK_WINDOW_SECONDS, MAX_COMPLETE_MESSAGE_BYTES,
+    AI_COMPLETE, AI_RPC_STREAM, AudioIndexRequest, AudioIndexResult,
+    COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest, CollabTrainResult,
+    CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT,
+    DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, EMBED_LYRICS,
+    EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest, EncodeResult,
+    HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult, INDEX_AUDIO,
+    INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult, MAX_COMPLETE_MESSAGE_BYTES,
     MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
     MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
-    MatchTrackData, MatchTrackRequest, PipelineStreamSpec, REPLY_TO_HEADER,
-    RESOLVE_ARTIST_WINDOW_SECONDS, ResolveArtistData, ResolveArtistRequest, RpcError,
-    SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB,
-    TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
-    TasteTrainRequest, TasteTrainResult, TranscriptionRequest, TranscriptionResult,
-    WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT,
-    WORKER_STREAMS, collab_vectors_suffix,
+    PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY,
+    SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM,
+    TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest, TasteTrainResult, TranscriptionRequest,
+    TranscriptionResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES,
+    WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -436,11 +433,7 @@ pub const fn done_duplicate_window_seconds() -> u64 {
     widest.div_ceil(HOUR) * HOUR
 }
 
-pub const AI_RPC_WINDOWS: [(&str, u64); 3] = [
-    ("resolve_artist", RESOLVE_ARTIST_WINDOW_SECONDS),
-    ("match_track", MATCH_TRACK_WINDOW_SECONDS),
-    ("complete", COMPLETE_WINDOW_SECONDS),
-];
+pub const AI_RPC_WINDOWS: [(&str, u64); 1] = [("complete", COMPLETE_WINDOW_SECONDS)];
 
 pub const SPEAK_RPC_WINDOWS: [(&str, u64); 1] = [("say", SAY_WINDOW_SECONDS)];
 
@@ -656,11 +649,7 @@ pub fn schemas() -> BTreeMap<String, Value> {
         done::<CollabTrainResult>(WorkerLane::Collab),
         request::<TasteTrainRequest>(TRAIN_TASTE),
         done::<TasteTrainResult>(WorkerLane::Taste),
-        request::<ResolveArtistRequest>(AI_RESOLVE_ARTIST),
-        request::<MatchTrackRequest>(AI_MATCH_TRACK),
         request::<CompleteRequest>(AI_COMPLETE),
-        rpc_reply::<ResolveArtistData>(AI_RESOLVE_ARTIST),
-        rpc_reply::<MatchTrackData>(AI_MATCH_TRACK),
         rpc_reply::<CompleteData>(AI_COMPLETE),
         request::<SayRequest>(SPEAK_SAY),
         rpc_reply::<SayData>(SPEAK_SAY),
@@ -1021,7 +1010,7 @@ mod tests {
             assert!(schemas.contains_key(spec.filter_subject));
             assert!(schemas.contains_key(spec.done_subject.unwrap_or_default()));
         }
-        for method in [AI_RESOLVE_ARTIST, AI_MATCH_TRACK, AI_COMPLETE, SPEAK_SAY] {
+        for method in [AI_COMPLETE, SPEAK_SAY] {
             assert!(schemas.contains_key(method));
             assert!(schemas.contains_key(&rpc_reply_subject(method)));
         }
@@ -1041,7 +1030,7 @@ mod tests {
 
         assert_eq!(
             exported["rpc"]["windows_s"],
-            json!({ "resolve_artist": 20, "match_track": 10, "complete": 30, "say": 90 })
+            json!({ "complete": 30, "say": 90 })
         );
         for (lane, windows) in lanes {
             let prefix = lane.filter_subject.trim_end_matches('>');
