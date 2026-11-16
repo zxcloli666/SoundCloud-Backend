@@ -62,7 +62,6 @@ async fn a_clear_winner_needs_no_model_and_no_budget(pool: PgPool) -> anyhow::Re
     let picked = matcher(&pool, &worker)?
         .pick(WANTED, &candidates)
         .await
-        .map_err(|_| anyhow::anyhow!("the matcher was unavailable"))?
         .ok_or_else(|| anyhow::anyhow!("no match"))?;
 
     assert_eq!((picked.candidate_id, picked.confidence), (1, 0.95));
@@ -83,7 +82,6 @@ async fn a_borderline_pick_moves_past_an_answer_outside_the_shortlist(
     let picked = matcher(&pool, &worker)?
         .pick(WANTED, &candidates)
         .await
-        .map_err(|_| anyhow::anyhow!("the matcher was unavailable"))?
         .ok_or_else(|| anyhow::anyhow!("no match"))?;
 
     assert_eq!((picked.candidate_id, picked.confidence), (1, 0.8));
@@ -114,10 +112,7 @@ async fn the_model_may_say_none_of_them_is_the_recording(pool: PgPool) -> anyhow
     worker.answer(FIRST, json!({"match_id": null, "confidence": 0.7}));
     let candidates = vec![offer(0, "Billie Eilish", "Blue Eyes")];
 
-    let picked = matcher(&pool, &worker)?
-        .pick(WANTED, &candidates)
-        .await
-        .map_err(|_| anyhow::anyhow!("the matcher was unavailable"))?;
+    let picked = matcher(&pool, &worker)?.pick(WANTED, &candidates).await;
 
     assert!(picked.is_none());
     assert_eq!(worker.asked().len(), 1);
@@ -134,7 +129,6 @@ async fn a_ladder_without_an_answer_keeps_the_deterministic_verdict_and_refunds(
     let picked = matcher(&pool, &worker)?
         .pick(WANTED, &candidates)
         .await
-        .map_err(|_| anyhow::anyhow!("the matcher was unavailable"))?
         .ok_or_else(|| anyhow::anyhow!("the deterministic verdict was lost"))?;
 
     assert_eq!(picked.candidate_id, 0);
@@ -149,15 +143,17 @@ async fn a_ladder_without_an_answer_keeps_the_deterministic_verdict_and_refunds(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn an_exhausted_daily_budget_makes_the_matcher_unavailable(
+async fn an_exhausted_daily_budget_keeps_the_deterministic_verdict_without_a_call(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let worker = Arc::new(Scripted::default());
     assert!(budget_left(&pool).await);
 
-    let picked = matcher(&pool, &worker)?.pick(WANTED, &tied()).await;
+    let picked = matcher(&pool, &worker)?
+        .pick(WANTED, &[offer(0, "Billie Eilish", "Blue Eyes")])
+        .await;
 
-    assert_eq!(picked.err(), Some(AiUnavailable));
+    assert_eq!(picked.map(|picked| picked.candidate_id), Some(0));
     assert!(worker.asked().is_empty());
     Ok(())
 }
@@ -178,7 +174,6 @@ async fn a_cached_model_answer_is_reused_without_a_call(pool: PgPool) -> anyhow:
     let picked = matcher(&pool, &worker)?
         .pick(WANTED, &candidates)
         .await
-        .map_err(|_| anyhow::anyhow!("the matcher was unavailable"))?
         .ok_or_else(|| anyhow::anyhow!("no match"))?;
 
     assert_eq!((picked.candidate_id, picked.confidence), (0, 0.9));

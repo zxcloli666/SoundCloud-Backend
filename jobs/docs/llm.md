@@ -48,7 +48,7 @@ Both prompts spell out the JSON answer in words, so a provider that ignores the 
 
 The ladder fails or no step gives an answer that counts: enrich keeps its own heuristic; wanted takes the score verdict (best at 0.5 or more and 0.05 ahead, else no match). The question goes back to the daily count.
 
-Daily count used up: enrich keeps its heuristic; wanted puts the track back for 30 minutes and the attempt does not count.
+Daily count used up: the same as no answer, nothing is asked.
 
 ## Cache
 
