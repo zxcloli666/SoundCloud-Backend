@@ -169,6 +169,7 @@ async fn rebuild_in_one_statement(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query(SINGLE_STATEMENT_REBUILD)
         .bind(SHRINKAGE)
         .bind(TOP_K_PER_ARTIST)
+        .bind(WEIGHT_TOLERANCE)
         .execute(pool)
         .await?;
     Ok(())
@@ -282,5 +283,36 @@ async fn a_second_rebuild_without_new_likes_writes_nothing(pool: PgPool) -> anyh
     assert!(second.batches > 1, "{second:?}");
     assert_eq!((second.upserted, second.removed), (0, 0));
     assert_eq!(row_versions(&pool).await?, written);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_weight_shift_under_one_percent_keeps_the_stored_edge(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_previous_likes(&pool).await?;
+    rebuild_in_batches_of(&pool, 500).await?;
+    let fresh = edges(&pool).await?;
+    nudge(&pool, edge(2, 3), 1.005).await?;
+    nudge(&pool, edge(4, 5), 1.02).await?;
+    let nudged = edges(&pool).await?;
+
+    let rebuild = rebuild_in_batches_of(&pool, 500).await?;
+
+    let after = edges(&pool).await?;
+    assert_ne!(nudged.get(&edge(2, 3)), fresh.get(&edge(2, 3)));
+    assert_eq!(after.get(&edge(2, 3)), nudged.get(&edge(2, 3)));
+    assert_eq!(after.get(&edge(4, 5)), fresh.get(&edge(4, 5)));
+    assert_eq!((rebuild.upserted, rebuild.removed), (1, 0));
+    Ok(())
+}
+
+async fn nudge(pool: &PgPool, (a, b): Edge, factor: f64) -> anyhow::Result<()> {
+    sqlx::query("UPDATE artist_colike SET w = w * $3 WHERE a_id = $1 AND b_id = $2")
+        .bind(a)
+        .bind(b)
+        .bind(factor)
+        .execute(pool)
+        .await?;
     Ok(())
 }
