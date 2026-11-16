@@ -55,6 +55,7 @@ pub struct JobsConfig {
     pub schedules: JobScheduleConfig,
     pub oauth: OAuthConfig,
     pub repl_verify: repl_verify::Mode,
+    pub repl_verify_pace: Duration,
     pub shutdown_grace: Duration,
 }
 
@@ -535,6 +536,10 @@ impl JobsConfig {
             schedules: JobScheduleConfig::from_env()?,
             oauth: OAuthConfig::from_env()?,
             repl_verify: env::parse("REPL_VERIFY", "repair")?,
+            repl_verify_pace: Duration::from_secs(env::positive_u64(
+                "REPL_VERIFY_PACE_SECONDS",
+                5,
+            )?),
             shutdown_grace: Duration::from_secs(env::positive_u64(
                 "JOBS_SHUTDOWN_GRACE_SECONDS",
                 30,

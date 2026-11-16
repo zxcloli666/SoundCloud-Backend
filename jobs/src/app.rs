@@ -384,6 +384,7 @@ pub async fn run() -> anyhow::Result<()> {
         supervisor.spawn(
             "replication verify",
             repl_verify::Verifier::new(databases.main.fast.clone(), config.repl_verify)
+                .with_pace(config.repl_verify_pace)
                 .run(cancellation.clone()),
         );
     }
