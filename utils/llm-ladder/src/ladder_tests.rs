@@ -26,6 +26,8 @@ mod complete;
 mod group;
 #[path = "ladder_tests/hedge.rs"]
 mod hedge;
+#[path = "ladder_tests/plain.rs"]
+mod plain;
 #[path = "ladder_tests/race.rs"]
 mod race;
 #[path = "ladder_tests/spend.rs"]
