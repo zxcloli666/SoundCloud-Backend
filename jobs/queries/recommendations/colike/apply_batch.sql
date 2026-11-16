@@ -21,7 +21,10 @@ WITH batch AS MATERIALIZED (
         w = excluded.w,
         updated_at = excluded.updated_at
     WHERE artist_colike.co IS DISTINCT FROM excluded.co
-       OR artist_colike.w IS DISTINCT FROM excluded.w
+       OR (artist_colike.w IS DISTINCT FROM excluded.w
+           AND (artist_colike.w IS NULL
+                OR excluded.w IS NULL
+                OR abs(excluded.w - artist_colike.w) >= $4 * abs(artist_colike.w)))
     RETURNING 1
 )
 SELECT (SELECT count(*) FROM upserted) AS upserted,

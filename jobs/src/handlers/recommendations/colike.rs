@@ -12,6 +12,7 @@ use crate::queue::{JobError, JobResult};
 
 const SHRINKAGE: f64 = 8.0;
 const TOP_K_PER_ARTIST: i64 = 80;
+const WEIGHT_TOLERANCE: f64 = 0.01;
 const BUILD_SESSION: [&str; 2] = [
     "SET LOCAL statement_timeout = '7000s'",
     "SET LOCAL work_mem = '512MB'",
@@ -122,6 +123,7 @@ async fn apply_batch(
     .bind(lower)
     .bind(upper)
     .bind(started_at)
+    .bind(WEIGHT_TOLERANCE)
     .fetch_one(connection)
     .await
 }
