@@ -48,9 +48,7 @@ async fn an_api_node_keeps_the_artists_indexes_it_reads(pool: PgPool) -> anyhow:
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_legacy_core_keeps_the_artists_indexes_its_api_reads(
-    pool: PgPool,
-) -> anyhow::Result<()> {
+async fn a_legacy_core_keeps_the_artists_indexes_its_api_reads(pool: PgPool) -> anyhow::Result<()> {
     run_core(&pool, None).await?;
 
     assert_eq!(remaining_api_indexes(&pool).await?, API_READ_INDEXES);
