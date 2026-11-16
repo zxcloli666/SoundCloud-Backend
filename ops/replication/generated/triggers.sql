@@ -5913,6 +5913,43 @@ ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zz_owner;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_search FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_skip_track_seeks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        NEW.created_at := least(OLD.created_at, NEW.created_at);
+        RETURN NEW;
+    END IF;
+    SELECT t.created_at INTO o FROM public.track_seeks t WHERE t.id = NEW.id;
+    IF FOUND THEN
+        IF NEW.created_at < o.created_at THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.track_seeks t SET created_at = least(t.created_at, NEW.created_at) WHERE t.id = NEW.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+        END IF;
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    INSERT INTO public.track_seeks (created_at, from_ms, id, position_ms, sc_track_id, sc_user_id, source)
+    VALUES (NEW.created_at, NEW.from_ms, NEW.id, NEW.position_ms, NEW.sc_track_id, NEW.sc_user_id, NEW.source)
+    ON CONFLICT DO NOTHING;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT OR UPDATE ON public.track_seeks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_track_seeks();
+ALTER TABLE public.track_seeks ENABLE REPLICA TRIGGER zz_skip;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_seeks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.track_seeks ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_storage_failures FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_storage_failures', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_sync_stamps FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_sync_stamps', 'cmd', 'migration', 'repl');
@@ -8319,6 +8356,8 @@ BEGIN
             ('track_search', 'zz_guard'),
             ('track_search', 'zz_owner'),
             ('track_search', 'zzz_suppress'),
+            ('track_seeks', 'zz_skip'),
+            ('track_seeks', 'zzz_suppress'),
             ('track_storage_failures', 'zz_guard'),
             ('track_sync_stamps', 'zz_guard'),
             ('track_sync_stamps', 'zz_owner'),

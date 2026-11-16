@@ -5,7 +5,7 @@ import logging
 from collections.abc import Mapping
 
 from worker.domain import embedding
-from worker.domain.audio import decode, windows
+from worker.domain.audio import decode, moment, windows
 from worker.domain.audio.source import AudioSource
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import Outcome, PermanentFailure, Reason, TransientFailure
@@ -66,7 +66,30 @@ class IndexAudioLane:
         mert = embedding.pooled(vectors.mert, MERT_DIM, "muq", self._counters)
         clap = embedding.pooled(vectors.clap, CLAP_DIM, "mulan", self._counters)
         fingerprint = await self._fingerprint(pcm, deadline)
-        return Outcome.ok(mert=mert, clap=clap, fingerprint=fingerprint)
+        found = await self._moment(mono, pcm.sample_rate, moment.hints_of(request))
+        if found is None:
+            return Outcome.ok(mert=mert, clap=clap, fingerprint=fingerprint)
+        return Outcome.ok(mert=mert, clap=clap, fingerprint=fingerprint, moment=found)
+
+    async def _moment(
+        self, mono: Float32Array, sample_rate: int, hints: moment.Hints
+    ) -> dict[str, object] | None:
+        try:
+            found = await asyncio.to_thread(
+                moment.find_moment_single_thread, mono, sample_rate, hints
+            )
+        except (ValueError, FloatingPointError, MemoryError) as error:
+            self._counters.inc("moment_failures_total", error=type(error).__name__)
+            log.warning(
+                "moment failed, publishing the index without it", extra={"error": repr(error)}
+            )
+            return None
+        return {
+            "version": moment.VERSION,
+            "start_ms": found.start_ms,
+            "length_ms": found.length_ms,
+            "score": round(found.score, 4),
+        }
 
     async def _fingerprint(self, pcm: decode.Pcm, deadline: Deadline) -> str | None:
         if pcm.duration_s < FINGERPRINT_MIN_S:

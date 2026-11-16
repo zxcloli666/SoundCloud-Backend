@@ -48,7 +48,9 @@ class HighlightLane:
         if loudness < self._settings.silence_dbfs:
             return Outcome.of(Reason.SILENT_AUDIO, f"rms_dbfs={loudness:.1f}")
         deadline.check("highlight")
-        found = await asyncio.to_thread(moment.find_moment, mono, pcm.sample_rate)
+        found = await asyncio.to_thread(
+            moment.find_moment_single_thread, mono, pcm.sample_rate, moment.hints_of(request)
+        )
         return Outcome.ok(
             version=moment.VERSION,
             start_ms=found.start_ms,

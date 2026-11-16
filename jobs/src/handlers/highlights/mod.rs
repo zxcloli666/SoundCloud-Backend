@@ -1,3 +1,4 @@
+pub(crate) mod hints;
 #[cfg(test)]
 mod live_tests;
 mod pass;
@@ -8,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use backend_contracts::pipeline::{
-    HIGHLIGHT_TRACK, HIGHLIGHT_VERSION, HighlightRequest, HighlightResult,
+    HIGHLIGHT_TRACK, HIGHLIGHT_VERSION, HighlightRequest, HighlightResult, MomentHints,
 };
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
@@ -87,9 +88,23 @@ impl HighlightHandler {
         if !claimed.is_empty() {
             debug!(claimed = claimed.len(), "highlight requests claimed");
         }
+        let ids: Vec<String> = claimed
+            .iter()
+            .map(|claim| claim.sc_track_id.clone())
+            .collect();
+        let mut hints = match hints::load(&self.pool, &ids).await {
+            Ok(hints) => hints,
+            Err(error) => {
+                for claim in &claimed {
+                    queue::release(&self.pool, claim).await;
+                }
+                return Err(error);
+            }
+        };
         let mut first_failure = None;
         for claim in claimed {
-            if let Err(error) = self.publish(&claim).await {
+            let hints = hints.remove(&claim.sc_track_id);
+            if let Err(error) = self.publish(&claim, hints).await {
                 queue::release(&self.pool, &claim).await;
                 first_failure.get_or_insert(error);
             }
@@ -97,13 +112,14 @@ impl HighlightHandler {
         first_failure.map_or(Ok(()), Err)
     }
 
-    async fn publish(&self, claim: &Claimed) -> JobResult {
+    async fn publish(&self, claim: &Claimed, hints: Option<MomentHints>) -> JobResult {
         let request = HighlightRequest {
             s3_url: canonical_storage_url(&self.storage_url, &claim.sc_track_id)
                 .map_err(JobError::permanent)?,
             sc_track_id: claim.sc_track_id.clone(),
             attempt: i64::from(claim.attempt),
             version: claim.version,
+            hints,
         };
         self.bus
             .publish_dedup(HIGHLIGHT_TRACK, &request, &claim.message_id())

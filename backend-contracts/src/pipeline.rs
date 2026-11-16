@@ -35,6 +35,7 @@ pub const MAX_MESSAGE_BYTES: u32 = 900_000;
 pub const MAX_UTF8_BYTES_KEYWORD: &str = "x-max-utf8-bytes";
 pub const COLLAB_DATASET_VERSION: u32 = 2;
 pub const TASTE_DATASET_VERSION: u32 = 1;
+pub const MAX_MOMENT_HINTS: u32 = 64;
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct Producer {
@@ -56,6 +57,34 @@ pub struct AudioIndexRequest {
     pub upload_generation: i64,
     #[schemars(range(min = 1))]
     pub attempt: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "MomentHints")]
+    pub hints: Option<MomentHints>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct MomentHints {
+    #[serde(default)]
+    #[schemars(length(max = MAX_MOMENT_HINTS), inner(range(min = 0)))]
+    pub chorus_ms: Vec<i32>,
+    #[serde(default)]
+    #[schemars(length(max = MAX_MOMENT_HINTS), inner(range(min = 0)))]
+    pub comment_ms: Vec<i32>,
+    #[serde(default)]
+    #[schemars(length(max = MAX_MOMENT_HINTS), inner(range(min = 0)))]
+    pub replay_ms: Vec<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct IndexedMoment {
+    #[schemars(range(min = 1))]
+    pub version: i16,
+    #[schemars(range(min = 0))]
+    pub start_ms: i32,
+    #[schemars(range(min = 1))]
+    pub length_ms: i32,
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub score: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -88,6 +117,9 @@ pub struct AudioIndexResult {
     pub clap: Option<Vec<f32>>,
     #[schemars(length(max = MAX_FINGERPRINT_CHARS))]
     pub fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "IndexedMoment")]
+    pub moment: Option<IndexedMoment>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -227,6 +259,9 @@ pub struct HighlightRequest {
     pub attempt: i64,
     #[schemars(range(min = 1))]
     pub version: i16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "MomentHints")]
+    pub hints: Option<MomentHints>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -747,7 +782,7 @@ pub const DONE_TRAIN_COLLAB: &str = "done.train_collab";
 pub const DONE_TRAIN_TASTE: &str = "done.train_taste";
 pub const DONE_ENCODE: &str = "done.encode";
 pub const DONE_HIGHLIGHT: &str = "done.highlight";
-pub const HIGHLIGHT_VERSION: i16 = 1;
+pub const HIGHLIGHT_VERSION: i16 = 2;
 
 pub const WORKER_INVALID_SUBJECT: &str = "worker.invalid.<lane>";
 pub const WORKER_STATUS_SUBJECT: &str = "worker.status.<worker_id>";

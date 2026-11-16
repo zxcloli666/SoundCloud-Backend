@@ -11,7 +11,7 @@ mod live_tests;
 mod lock_tests;
 
 use anyhow::{Context, anyhow, ensure};
-use backend_contracts::pipeline::{AudioIndexRequest, AudioIndexResult};
+use backend_contracts::pipeline::{AudioIndexRequest, AudioIndexResult, IndexedMoment};
 use backend_contracts::reasons::{WorkerReason, WorkerStatus, outcome_rank};
 use backend_contracts::vector_store::{TRACKS_CLAP_DIMENSIONS, TRACKS_MERT_DIMENSIONS};
 use backend_contracts::worker_contract::WorkerLane;
@@ -47,6 +47,7 @@ struct AudioIndex {
     mert: Vec<f32>,
     clap: Vec<f32>,
     fingerprint: Option<String>,
+    moment: Option<IndexedMoment>,
 }
 
 struct Committed {
@@ -307,6 +308,11 @@ impl AudioIndexResultHandler {
                 }
                 apply_fingerprint(&mut transaction, fingerprint, locks).await?;
             }
+            if outcome.committed
+                && let Some(moment) = index.moment.as_ref()
+            {
+                store_moment(&mut transaction, sc_track_id, moment).await?;
+            }
             transaction.commit().await.map_err(JobError::retryable)?;
             return Ok(Committed {
                 already_settled: outcome.already_settled,
@@ -419,6 +425,33 @@ async fn lock_fingerprint_rows(
     }))
 }
 
+async fn store_moment(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sc_track_id: &str,
+    moment: &IndexedMoment,
+) -> JobResult {
+    let applied = sqlx::query_file!(
+        "queries/highlights/indexed.sql",
+        sc_track_id,
+        moment.start_ms,
+        moment.length_ms,
+        moment.score,
+        moment.version
+    )
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(JobError::retryable)?;
+    tracing::debug!(
+        track = %sc_track_id,
+        start_ms = moment.start_ms,
+        version = moment.version,
+        stored = applied.stored,
+        settled = applied.settled,
+        "moment stored from the audio index"
+    );
+    Ok(())
+}
+
 async fn apply_fingerprint(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     fingerprint: &str,
@@ -506,6 +539,20 @@ fn validate_result(result: AudioIndexResult) -> anyhow::Result<AudioResult> {
         }),
         "audio index result has an invalid fingerprint"
     );
+    let moment = result.moment.filter(|moment| {
+        let valid = valid_moment(moment);
+        if !valid {
+            tracing::warn!(
+                track = %result.sc_track_id,
+                start_ms = moment.start_ms,
+                length_ms = moment.length_ms,
+                score = moment.score,
+                version = moment.version,
+                "audio index result carries an invalid moment, the index keeps going without it"
+            );
+        }
+        valid
+    });
 
     Ok(AudioResult::Indexed(AudioIndex {
         sc_track_id: result.sc_track_id,
@@ -515,7 +562,16 @@ fn validate_result(result: AudioIndexResult) -> anyhow::Result<AudioResult> {
         mert,
         clap,
         fingerprint,
+        moment,
     }))
+}
+
+fn valid_moment(moment: &IndexedMoment) -> bool {
+    moment.version > 0
+        && moment.start_ms >= 0
+        && moment.length_ms > 0
+        && moment.score.is_finite()
+        && (0.0..=1.0).contains(&moment.score)
 }
 
 fn worker_lost_outcome(payload: &[u8]) -> anyhow::Result<AudioOutcome> {

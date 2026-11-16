@@ -11,6 +11,7 @@ use crate::background_jobs::{CollabJobs, IndexingJobs};
 use crate::common::sc_ids::normalize_sc_track_id;
 use crate::error::{AppError, AppResult};
 use crate::modules::dislikes::DislikesService;
+use crate::modules::events::seek::Seek;
 
 const LIKE_WEIGHT: f64 = 1.0;
 pub const PLAYLIST_ADD_WEIGHT: f64 = 0.9;
@@ -184,6 +185,30 @@ impl EventsService {
         if COLLAB_TRIGGER_EVENTS.contains(&event_type) {
             self.collab_jobs.note_event().await;
         }
+        Ok(())
+    }
+
+    pub async fn record_seek(
+        &self,
+        sc_user_id: &str,
+        sc_track_id: &str,
+        seek: Seek,
+    ) -> AppResult<()> {
+        let Some(normalized) = normalize_sc_track_id(sc_track_id) else {
+            warn!(sc_track_id, "Invalid scTrackId");
+            return Ok(());
+        };
+        sqlx::query_file!(
+            "queries/events/service/insert_seek.sql",
+            Uuid::now_v7(),
+            sc_user_id,
+            &normalized,
+            seek.position_ms,
+            seek.from_ms,
+            seek.source.as_str(),
+        )
+        .execute(&self.pg)
+        .await?;
         Ok(())
     }
 }

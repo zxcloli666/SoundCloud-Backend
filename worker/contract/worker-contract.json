@@ -1866,6 +1866,39 @@
     },
     "done.index_audio": {
       "$defs": {
+        "IndexedMoment": {
+          "properties": {
+            "length_ms": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "score": {
+              "format": "float",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "start_ms": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "version": {
+              "format": "int16",
+              "maximum": 32767,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "version",
+            "start_ms",
+            "length_ms",
+            "score"
+          ],
+          "type": "object"
+        },
         "Producer": {
           "properties": {
             "build": {
@@ -2090,6 +2123,9 @@
           "maxItems": 1024,
           "minItems": 1024,
           "type": "array"
+        },
+        "moment": {
+          "$ref": "#/$defs/IndexedMoment"
         },
         "producer": {
           "$ref": "#/$defs/Producer"
@@ -3140,12 +3176,52 @@
       "type": "object"
     },
     "highlight.track.new": {
+      "$defs": {
+        "MomentHints": {
+          "properties": {
+            "chorus_ms": {
+              "default": [],
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "comment_ms": {
+              "default": [],
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "replay_ms": {
+              "default": [],
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 64,
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "attempt": {
           "format": "int64",
           "minimum": 1,
           "type": "integer"
+        },
+        "hints": {
+          "$ref": "#/$defs/MomentHints"
         },
         "s3_url": {
           "maxLength": 4096,
@@ -3173,12 +3249,52 @@
       "type": "object"
     },
     "index.audio.new": {
+      "$defs": {
+        "MomentHints": {
+          "properties": {
+            "chorus_ms": {
+              "default": [],
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "comment_ms": {
+              "default": [],
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "replay_ms": {
+              "default": [],
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 64,
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "attempt": {
           "format": "int64",
           "minimum": 1,
           "type": "integer"
+        },
+        "hints": {
+          "$ref": "#/$defs/MomentHints"
         },
         "s3_url": {
           "maxLength": 4096,

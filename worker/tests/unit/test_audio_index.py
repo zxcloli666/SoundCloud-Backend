@@ -10,6 +10,7 @@ import pytest
 from tests.fakes.engines import FakeEngines
 from tests.fakes.http_audio import FakeAudioServer
 from tests.unit.test_audio_decode import wav_bytes
+from worker.domain.audio import moment
 from worker.domain.audio.source import AudioSource
 from worker.domain.deadline import Deadline
 from worker.domain.index_audio import IndexAudioLane
@@ -31,8 +32,16 @@ def music(seconds: float, *, channels: int = 2, amplitude: float = 0.3) -> np.nd
     return frames.astype(np.float32)
 
 
-def request(url: str) -> dict[str, object]:
-    return {"sc_track_id": "98765", "s3_url": url, "upload_generation": 3, "attempt": 1}
+def request(url: str, hints: dict[str, list[int]] | None = None) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "sc_track_id": "98765",
+        "s3_url": url,
+        "upload_generation": 3,
+        "attempt": 1,
+    }
+    if hints is not None:
+        fields["hints"] = hints
+    return fields
 
 
 class Harness:
@@ -60,10 +69,15 @@ class Harness:
             engines, source, Workspace(work_dir, self.counters), audio, self.counters
         )
 
-    async def run(self, body: bytes | None = None, path: str = "/ok.wav") -> Outcome:
+    async def run(
+        self,
+        body: bytes | None = None,
+        path: str = "/ok.wav",
+        hints: dict[str, list[int]] | None = None,
+    ) -> Outcome:
         if body is not None:
             self.server.body = body
-        return await self.lane.process(request(self.server.url(path)), Deadline.after(60))
+        return await self.lane.process(request(self.server.url(path), hints), Deadline.after(60))
 
 
 @pytest.fixture
@@ -94,6 +108,40 @@ async def test_indexes_a_track(harness: Harness) -> None:
     assert method == "embed_audio"
     assert kwargs["windows"].shape == (3, 720_000)
     assert list(harness.work_dir.iterdir()) == []
+
+
+async def test_the_index_carries_the_moment_of_the_decoded_track(harness: Harness) -> None:
+    outcome = await harness.run(wav_bytes(music(100), RATE))
+
+    found = outcome.fields["moment"]
+    assert isinstance(found, dict)
+    assert found["version"] == moment.VERSION
+    assert found["length_ms"] == 30_000
+    assert 0 <= found["start_ms"] <= 70_000
+    assert 0.0 <= found["score"] <= 1.0
+
+
+async def test_the_index_moment_follows_its_hints(harness: Harness) -> None:
+    outcome = await harness.run(wav_bytes(music(100), RATE), hints={"chorus_ms": [40_000]})
+
+    found = outcome.fields["moment"]
+    assert isinstance(found, dict)
+    assert found["start_ms"] == 40_000
+
+
+async def test_a_failed_moment_still_publishes_the_index(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_: object) -> moment.Moment:
+        raise ValueError("bad frames")
+
+    monkeypatch.setattr(moment, "find_moment_single_thread", broken)
+
+    outcome = await harness.run(wav_bytes(music(100), RATE))
+
+    assert outcome.status is Status.OK
+    assert "moment" not in outcome.fields
+    assert harness.counters.value("moment_failures_total", error="ValueError") == 1
 
 
 async def test_fingerprint_gets_first_seconds_of_original_pcm(harness: Harness) -> None:

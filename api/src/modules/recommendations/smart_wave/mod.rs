@@ -213,8 +213,12 @@ pub async fn build(
 
     let variants = user_id_variants(req.sc_user_id);
     let pooled: Vec<u64> = artist_of.keys().copied().collect();
-    let blocked = blocked::blocked_uploads(&svc.pg, &variants, &pooled).await;
-    artist_of.retain(|tid, _| !blocked.contains(tid));
+    let (blocked, with_moment) = tokio::join!(
+        blocked::blocked_uploads(&svc.pg, &variants, &pooled),
+        moments::with_moment(&svc.pg, req.mode, &pooled),
+    );
+    artist_of
+        .retain(|tid, _| !blocked.contains(tid) && moments::allowed(with_moment.as_ref(), *tid));
     let cand_ids: Vec<u64> = artist_of.keys().copied().collect();
     let liked_ids = taste_ids(&signals);
     let session_pull = match &req.seed {
@@ -232,7 +236,6 @@ pub async fn build(
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
     let mut cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
-    moments::keep_with_moment(&svc.pg, req.mode, &mut cands).await;
 
     let tail = reach.tail(rest, &cands, &settled);
     if !tail.is_empty() {
@@ -248,14 +251,16 @@ pub async fn build(
         .await;
         graph_tracks.extend(more);
         let mut fresh = reach::reclaim(&mut cands, &graph_tracks, &mert_artists);
+        let reclaimed: Vec<u64> = fresh.keys().copied().collect();
+        let with_moment = moments::with_moment(&svc.pg, req.mode, &reclaimed).await;
+        fresh.retain(|tid, _| moments::allowed(with_moment.as_ref(), *tid));
         let fresh_ids: Vec<u64> = fresh.keys().copied().collect();
         let (blocked, [fm, fc, fl]) = tokio::join!(
             blocked::blocked_uploads(&svc.pg, &variants, &fresh_ids),
             track_vectors(svc, &fresh_ids),
         );
         fresh.retain(|tid, _| !blocked.contains(tid));
-        let mut fresh = score_candidates(fresh, &taste, &skipped, &sunk_artists, [&fm, &fc, &fl]);
-        moments::keep_with_moment(&svc.pg, req.mode, &mut fresh).await;
+        let fresh = score_candidates(fresh, &taste, &skipped, &sunk_artists, [&fm, &fc, &fl]);
         cands.extend(fresh);
     }
     let picked = reach.pick(&cands);

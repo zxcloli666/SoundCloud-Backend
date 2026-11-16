@@ -4,7 +4,6 @@ use sqlx::PgPool;
 use tracing::debug;
 
 use super::cursor::WaveMode;
-use super::rank::Candidate;
 
 const OVERFETCH: usize = 2;
 
@@ -15,13 +14,18 @@ pub fn widen(mode: WaveMode, pool: usize) -> usize {
     }
 }
 
-pub async fn keep_with_moment(pg: &PgPool, mode: WaveMode, cands: &mut Vec<Candidate>) {
-    if mode == WaveMode::Full || cands.is_empty() {
-        return;
+pub async fn with_moment(pg: &PgPool, mode: WaveMode, ids: &[u64]) -> Option<HashSet<u64>> {
+    if mode == WaveMode::Full {
+        return None;
     }
-    let ids: Vec<u64> = cands.iter().map(|cand| cand.sc_track_id).collect();
-    let found = highlighted(pg, &ids).await;
-    cands.retain(|cand| found.contains(&cand.sc_track_id));
+    if ids.is_empty() {
+        return Some(HashSet::new());
+    }
+    Some(highlighted(pg, ids).await)
+}
+
+pub fn allowed(found: Option<&HashSet<u64>>, sc_track_id: u64) -> bool {
+    found.is_none_or(|found| found.contains(&sc_track_id))
 }
 
 async fn highlighted(pg: &PgPool, ids: &[u64]) -> HashSet<u64> {

@@ -2370,6 +2370,26 @@
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "track_search_pkey", "primary": true, "where": null}
    ]
   },
+  "track_seeks": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "from_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "position_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_skip_track_seeks", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "track_seeks_pkey", "primary": true, "where": null}
+   ]
+  },
   "track_storage_failures": {
    "columns": [
     {"default": null, "generated": false, "name": "failed_at", "notnull": true, "type": "timestamp with time zone"},
