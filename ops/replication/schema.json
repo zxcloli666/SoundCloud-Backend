@@ -211,6 +211,21 @@
     {"cols": ["a_id", "b_id"], "expr": false, "keys": ["a_id", "b_id"], "name": "artist_coplay_pkey", "primary": true, "where": null}
    ]
   },
+  "artist_interest": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "score", "notnull": true, "type": "real"}
+   ],
+   "fks": [
+    {"cols": ["artist_id"], "name": "artist_interest_artist_fk", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["artist_id"], "expr": false, "keys": ["artist_id"], "name": "artist_interest_pkey", "primary": true, "where": null}
+   ]
+  },
   "artist_sc_accounts": {
    "columns": [
     {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
@@ -278,7 +293,6 @@
     {"default": "now()", "generated": false, "name": "genius_next_run_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": "false", "generated": false, "name": "has_sc_account", "notnull": true, "type": "boolean"},
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
-    {"default": "0", "generated": false, "name": "interest_score", "notnull": true, "type": "real"},
     {"default": "false", "generated": false, "name": "is_star", "notnull": true, "type": "boolean"},
     {"default": null, "generated": false, "name": "isni", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "last_account_walk_at", "notnull": false, "type": "timestamp with time zone"},

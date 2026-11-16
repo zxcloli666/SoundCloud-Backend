@@ -139,6 +139,8 @@ impl DiscoverHandler {
 }
 
 #[cfg(test)]
+mod interest_tests;
+#[cfg(test)]
 mod paced_tests;
 #[cfg(test)]
 mod tests;

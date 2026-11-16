@@ -118,6 +118,18 @@ AS $f$
 SELECT md5(ROW(t.a_id, t.b_id, t.last_seen, t.weight)::text) FROM public.artist_coplay t WHERE t.a_id = (k ->> 'a_id')::uuid AND t.b_id = (k ->> 'b_id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_artist_interest(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.artist_id, t.score)::text) FROM public.artist_interest t WHERE t.artist_id = (k ->> 'artist_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_artist_sc_accounts(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -151,7 +163,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.account_walk_locked_at, t.aggregates_updated_at, t.album_count_denorm, t.avatar_url, t.bio, t.confidence, t.country, t.crawl_attempts, t.crawl_dead, t.crawl_fail_count, t.created_at, t.genius_artist_id, t.genius_crawl_offset, t.genius_crawled_at, t.genius_locked_at, t.genius_next_run_at, t.id, t.interest_score, t.is_star, t.isni, t.last_account_walk_at, t.last_crawled_at, t.mb_artist_id, t.mb_crawl_offset, t.mb_crawled_at, t.mb_locked_at, t.mb_next_run_at, t.merged_into, t.monthly_listeners, t.name, t.normalized_name, t.popularity_score, t.sc_user_id, t.source, t.spotify_artist_id, t.star_aura_id, t.star_custom_hex, t.tags, t.track_count_featured, t.track_count_primary, t.trending_score, t.updated_at)::text) FROM public.artists t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.account_walk_locked_at, t.aggregates_updated_at, t.album_count_denorm, t.avatar_url, t.bio, t.confidence, t.country, t.crawl_attempts, t.crawl_dead, t.crawl_fail_count, t.created_at, t.genius_artist_id, t.genius_crawl_offset, t.genius_crawled_at, t.genius_locked_at, t.genius_next_run_at, t.id, t.is_star, t.isni, t.last_account_walk_at, t.last_crawled_at, t.mb_artist_id, t.mb_crawl_offset, t.mb_crawled_at, t.mb_locked_at, t.mb_next_run_at, t.merged_into, t.monthly_listeners, t.name, t.normalized_name, t.popularity_score, t.sc_user_id, t.source, t.spotify_artist_id, t.star_aura_id, t.star_custom_hex, t.tags, t.track_count_featured, t.track_count_primary, t.trending_score, t.updated_at)::text) FROM public.artists t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_audio_index_wire_state(k jsonb)
@@ -1440,6 +1452,8 @@ BEGIN
             RETURN public.scd_row_hash_artist_colike(k);
         WHEN 'artist_coplay' THEN
             RETURN public.scd_row_hash_artist_coplay(k);
+        WHEN 'artist_interest' THEN
+            RETURN public.scd_row_hash_artist_interest(k);
         WHEN 'artist_sc_accounts' THEN
             RETURN public.scd_row_hash_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN
