@@ -14,10 +14,9 @@ SELECT track.id,
 FROM by_artist
 JOIN tracks AS track ON track.id = by_artist.id
 WHERE track.superseded_by IS NULL
-  AND (EXISTS (SELECT 1
-               FROM track_work_keys AS keys
-               WHERE keys.track_id = track.id
-                 AND keys.work_key = ANY ($2))
+  AND (track.id IN (SELECT keys.track_id
+                    FROM track_work_keys AS keys
+                    WHERE keys.work_key = ANY ($2))
     OR track.title_normalized = $3
     OR track.title_normalized LIKE $4
     OR EXISTS (SELECT 1
