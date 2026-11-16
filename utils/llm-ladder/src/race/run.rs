@@ -21,6 +21,7 @@ pub(super) struct Run {
     pub received: usize,
     pub accepted: bool,
     pub ended: bool,
+    pub parked: bool,
     pub started: Instant,
     pub expires: Instant,
     pub first_output: Option<Duration>,
@@ -47,6 +48,7 @@ impl Run {
             received: 0,
             accepted: false,
             ended: false,
+            parked: false,
             started,
             expires,
             first_output: None,
@@ -90,7 +92,14 @@ impl Run {
         }
     }
 
+    pub fn answered_plainly(&self) -> bool {
+        self.parked && self.document.is_complete()
+    }
+
     pub fn wake_at(&self, deadline: Instant) -> Instant {
+        if self.ended {
+            return deadline;
+        }
         let tail = self.answered_at.map_or(deadline, |at| at + USAGE_WAIT);
         self.expires.min(deadline).min(tail)
     }

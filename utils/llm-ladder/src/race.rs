@@ -95,6 +95,10 @@ impl Race {
     }
 
     async fn contend(&mut self) -> Option<Item> {
+        if let Some(index) = self.unblocked() {
+            let held = self.crown(index);
+            return self.deliver(held);
+        }
         if self.running.is_empty() && !self.start_next() {
             return Some(Item::Failed(LadderError::Exhausted));
         }
@@ -155,6 +159,10 @@ impl Race {
     }
 
     fn end(&mut self, index: usize) -> Option<Item> {
+        if self.running[index].answered_plainly() {
+            self.running[index].ended = true;
+            return None;
+        }
         let field = self.asked(self.running[index].step).1.text_field;
         if field.is_some_and(|field| self.running[index].end_as(field)) {
             return self.judge(index);
@@ -165,15 +173,30 @@ impl Race {
 
     fn judge(&mut self, index: usize) -> Option<Item> {
         self.hedge_at = None;
-        let (form, _) = self.asked(self.running[index].step);
-        if (self.rule.commit)(form, &self.running[index].held) {
-            let held = self.crown(index);
-            return self.deliver(held);
-        }
-        if self.running[index].ended {
-            self.drop_out(index, Failure::Invalid);
+        let run = &self.running[index];
+        let (form, _) = self.asked(run.step);
+        let passed = run.parked || (self.rule.commit)(form, &run.held);
+        match (passed, form) {
+            (true, Form::Full) => {
+                let held = self.crown(index);
+                return self.deliver(held);
+            }
+            (true, Form::Plain) => self.running[index].parked = true,
+            (false, _) if run.ended => self.drop_out(index, Failure::Invalid),
+            (false, _) => {}
         }
         None
+    }
+
+    fn unblocked(&self) -> Option<usize> {
+        let tools_pending = self
+            .running
+            .iter()
+            .any(|run| self.asked(run.step).0 == Form::Full);
+        match tools_pending {
+            true => None,
+            false => self.running.iter().position(|run| run.parked),
+        }
     }
 
     fn start_next(&mut self) -> bool {
@@ -236,12 +259,21 @@ impl Race {
         let now = Instant::now();
         if now >= self.deadline {
             self.blame_the_silent(now);
-            return Some(Item::Failed(LadderError::Deadline));
+            return match self.running.iter().position(Run::answered_plainly) {
+                Some(index) => {
+                    let held = self.crown(index);
+                    self.deliver(held)
+                }
+                None => Some(Item::Failed(LadderError::Deadline)),
+            };
         }
         let deadline = self.deadline;
         let due = |run: &Run| run.wake_at(deadline) <= now;
         while let Some(index) = self.running.iter().position(due) {
-            self.drop_out(index, Failure::Timeout);
+            match self.running[index].answered_plainly() {
+                true => self.running[index].ended = true,
+                false => self.drop_out(index, Failure::Timeout),
+            }
         }
         if self.hedge_at.is_some_and(|at| at <= now) {
             self.start_next();
@@ -365,6 +397,9 @@ impl Drop for Race {
 async fn next_event(running: &mut [Run]) -> (usize, Option<Result<StepEvent, Failure>>) {
     poll_fn(|context| {
         for (index, run) in running.iter_mut().enumerate() {
+            if run.ended {
+                continue;
+            }
             if let Poll::Ready(event) = run.stream.poll_next_unpin(context) {
                 return Poll::Ready((index, event));
             }

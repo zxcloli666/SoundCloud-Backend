@@ -23,9 +23,11 @@ fn bucket() -> String {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_micros();
+        .as_micros()
+        % 10_000_000_000;
     let nth = BUCKETS.fetch_add(1, Ordering::Relaxed);
-    format!("spend_test_{micros}_{nth}")
+    let process = std::process::id();
+    format!("spend_{process}_{micros}_{nth}")
 }
 
 async fn context() -> Context {
