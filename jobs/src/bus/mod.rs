@@ -4,6 +4,7 @@ mod consumer;
 mod priority_tests;
 #[cfg(test)]
 mod reaper_tests;
+mod request;
 mod rpc;
 #[cfg(test)]
 mod tests;
@@ -31,23 +32,21 @@ use backend_contracts::{
     IMPRESSION_CONSUMER, IMPRESSION_STREAM, IMPRESSION_SUBJECT, JOB_INGRESS_CONSUMER,
     JOB_INGRESS_STREAM, JOB_INGRESS_SUBJECT,
     pipeline::{
-        DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT, DONE_INDEX_AUDIO,
-        DONE_STREAM, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
+        DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT, DONE_INDEX_AUDIO, DONE_STREAM,
+        DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE,
         MAX_MESSAGE_BYTES as CONTRACT_MAX_MESSAGE_BYTES, MSG_ID_HEADER, ObjectStoreSpec,
-        PIPELINE_STREAMS, PipelineStreamSpec, REPLY_TO_HEADER, STORAGE_EVENTS_STREAM,
-        STORAGE_TRACK_REJECTED, STORAGE_TRACK_UPLOADED, StreamDiscard, StreamStorage,
-        WORKER_OBJECT_STORES,
+        PIPELINE_STREAMS, PipelineStreamSpec, STORAGE_EVENTS_STREAM, STORAGE_TRACK_REJECTED,
+        STORAGE_TRACK_UPLOADED, StreamDiscard, StreamStorage, WORKER_OBJECT_STORES,
     },
 };
 use futures::StreamExt;
-use serde::Deserialize;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use tokio::io::AsyncReadExt;
 
 use crate::config::NatsConfig;
 
 pub use consumer::{DeliveryContext, WorkConsumer};
+pub use request::RequestError;
 pub use worker_consumers::WorkerQueueSnapshot;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -174,13 +173,6 @@ impl ObjectStoreError {
     }
 }
 
-#[derive(Deserialize)]
-struct RpcReply<T> {
-    ok: bool,
-    data: Option<T>,
-    error: Option<String>,
-}
-
 impl Bus {
     pub async fn connect(config: &NatsConfig, instance_id: &str) -> anyhow::Result<Self> {
         let (options, server, display_server) = connection(config, instance_id)?;
@@ -195,6 +187,10 @@ impl Bus {
             client,
             topology: Arc::new(Topology::of(config)),
         })
+    }
+
+    pub fn jetstream(&self) -> &async_nats::jetstream::Context {
+        &self.jetstream
     }
 
     pub async fn provision(&self, config: &NatsConfig) -> anyhow::Result<BusConsumers> {
@@ -613,66 +609,6 @@ impl Bus {
                 _ => ObjectStoreError::Unavailable(error.into()),
             }),
         }
-    }
-
-    pub async fn request<T, R>(
-        &self,
-        subject: &str,
-        payload: &T,
-        timeout: Duration,
-        msg_id: &str,
-    ) -> anyhow::Result<Option<R>>
-    where
-        T: Serialize,
-        R: DeserializeOwned,
-    {
-        let inbox = self.client.new_inbox();
-        let mut subscription = self
-            .client
-            .subscribe(inbox.clone())
-            .await
-            .context("NATS reply subscription failed")?;
-        subscription
-            .unsubscribe_after(1)
-            .await
-            .context("NATS reply subscription could not be bounded")?;
-
-        let mut headers = HeaderMap::new();
-        headers.insert(REPLY_TO_HEADER, inbox.as_str());
-        headers.insert(MSG_ID_HEADER, msg_id);
-        headers.insert(
-            DEADLINE_HEADER,
-            deadline_header(SystemTime::now(), timeout).as_str(),
-        );
-        let payload = serde_json::to_vec(payload).context("NATS payload could not be encoded")?;
-        let acknowledgement = tokio::time::timeout(
-            PUBLISH_TIMEOUT,
-            self.jetstream
-                .publish_with_headers(subject.to_owned(), headers, payload.into()),
-        )
-        .await
-        .context("NATS request publish timed out")?
-        .with_context(|| format!("NATS request {subject} could not be published"))?;
-        tokio::time::timeout(PUBLISH_TIMEOUT, acknowledgement)
-            .await
-            .context("NATS request acknowledgement timed out")?
-            .with_context(|| format!("NATS request {subject} was not acknowledged"))?;
-
-        let Some(message) = tokio::time::timeout(timeout, subscription.next())
-            .await
-            .context("NATS request timed out")?
-        else {
-            return Ok(None);
-        };
-        let reply: RpcReply<R> =
-            serde_json::from_slice(&message.payload).context("NATS reply is not valid JSON")?;
-        if reply.ok {
-            return Ok(reply.data);
-        }
-        Err(anyhow::anyhow!(
-            "NATS request {subject} failed: {}",
-            reply.error.unwrap_or_else(|| "unknown error".to_owned())
-        ))
     }
 
     async fn ensure_work_stream(

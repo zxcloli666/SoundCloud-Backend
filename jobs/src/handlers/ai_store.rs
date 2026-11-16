@@ -1,8 +1,9 @@
-use backend_contracts::pipeline::RpcSource;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sqlx::PgPool;
 use tracing::debug;
+
+const MODEL_ANSWER_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 pub struct AiStore {
     pool: PgPool,
@@ -22,14 +23,18 @@ impl AiStore {
         serde_json::from_value(stored).ok()
     }
 
-    pub async fn remember<T: Serialize>(&self, key: &str, reply: &T, ttl_seconds: i64) {
-        let Ok(payload) = serde_json::to_value(reply) else {
+    pub async fn remember<T: Serialize>(&self, key: &str, answer: &T) {
+        let Ok(payload) = serde_json::to_value(answer) else {
             return;
         };
-        let stored =
-            sqlx::query_file!("queries/enrich/ai/cache_set.sql", key, payload, ttl_seconds)
-                .execute(&self.pool)
-                .await;
+        let stored = sqlx::query_file!(
+            "queries/enrich/ai/cache_set.sql",
+            key,
+            payload,
+            MODEL_ANSWER_TTL_SECONDS
+        )
+        .execute(&self.pool)
+        .await;
         if let Err(error) = stored {
             debug!(%error, "ai cache write failed");
         }
@@ -51,8 +56,8 @@ impl AiStore {
         }
     }
 
-    pub async fn settle_budget(&self, source: RpcSource) {
-        if self.daily_budget == 0 || source == RpcSource::Llm {
+    pub async fn refund_budget(&self) {
+        if self.daily_budget == 0 {
             return;
         }
         let refunded = sqlx::query_file!("queries/enrich/ai/budget_refund.sql")
@@ -69,13 +74,32 @@ mod tests {
     use super::*;
 
     #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-    async fn only_a_language_model_answer_keeps_its_budget_unit(pool: PgPool) {
+    async fn a_refunded_unit_can_be_taken_again(pool: PgPool) {
         let store = AiStore::new(pool, 1);
 
         assert!(store.take_budget().await);
-        store.settle_budget(RpcSource::Deterministic).await;
+        store.refund_budget().await;
         assert!(store.take_budget().await);
-        store.settle_budget(RpcSource::Llm).await;
         assert!(!store.take_budget().await);
+    }
+
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+    async fn a_remembered_answer_reads_back_for_a_month(pool: PgPool) -> anyhow::Result<()> {
+        let store = AiStore::new(pool.clone(), 1);
+
+        store
+            .remember("match:key", &serde_json::json!({"match_id": 2}))
+            .await;
+
+        let answer: Option<serde_json::Value> = store.cached("match:key").await;
+        assert_eq!(answer, Some(serde_json::json!({"match_id": 2})));
+        let lives_a_month: bool = sqlx::query_scalar(
+            "SELECT expires_at > now() + interval '29 days' FROM ai_resolver_cache WHERE cache_key = $1",
+        )
+        .bind("match:key")
+        .fetch_one(&pool)
+        .await?;
+        assert!(lives_a_month);
+        Ok(())
     }
 }

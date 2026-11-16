@@ -17,14 +17,15 @@ use sqlx::PgPool;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::bus::Bus;
 use crate::config::WantedConfig;
 use crate::queue::{JobError, JobRepository, JobResult};
 
 use super::catalog_read::PublicCatalogReader;
 use super::lyrics::wake;
 
-use self::ai_matcher::{AiMatcherClient, AiUnavailable, MatchCandidate, MatchTarget};
+use self::ai_matcher::{AiUnavailable, MatchCandidate, MatchTarget};
+
+pub use self::ai_matcher::AiMatcherClient;
 
 const SEARCH_LIMIT: i64 = 10;
 const WANTED_DEADLINE: Duration = Duration::from_secs(120);
@@ -55,17 +56,9 @@ impl WantedHandler {
     pub fn new(
         pool: PgPool,
         reader: Arc<PublicCatalogReader>,
-        bus: Bus,
+        ai: Option<AiMatcherClient>,
         config: WantedConfig,
     ) -> Self {
-        let ai = config.ai_enabled.then(|| {
-            AiMatcherClient::new(
-                bus,
-                pool.clone(),
-                config.ai_timeout_ms,
-                config.ai_daily_budget,
-            )
-        });
         Self {
             queue: JobRepository::new(pool.clone(), "wanted".to_owned()),
             pool,

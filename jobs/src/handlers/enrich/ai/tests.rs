@@ -27,7 +27,7 @@ fn a_language_model_answer_becomes_an_ai_attribution() -> anyhow::Result<()> {
 }
 
 #[test]
-fn a_deterministic_answer_leaves_the_local_heuristic_in_charge() -> anyhow::Result<()> {
+fn a_cached_deterministic_answer_leaves_the_local_heuristic_in_charge() -> anyhow::Result<()> {
     let track = ctx("Kendrick Lamar - All The Stars", None, None);
 
     assert!(build_result(reply("deterministic")?, &track).is_none());
@@ -35,13 +35,7 @@ fn a_deterministic_answer_leaves_the_local_heuristic_in_charge() -> anyhow::Resu
 }
 
 #[test]
-fn only_a_language_model_answer_is_remembered_for_a_month() {
-    assert_eq!(answer_ttl(RpcSource::Llm), 30 * 24 * 60 * 60);
-    assert_eq!(answer_ttl(RpcSource::Deterministic), 24 * 60 * 60);
-}
-
-#[test]
-fn a_reply_without_its_source_is_not_read() {
+fn a_cached_reply_without_its_source_is_not_read() {
     let legacy = r#"{"primary_artist":"Kendrick Lamar","featured":[],"producers":[],"remixers":[],"album":null,"confidence":0.93}"#;
 
     assert!(serde_json::from_str::<ResolveArtistData>(legacy).is_err());
@@ -69,7 +63,7 @@ fn the_request_stays_inside_the_contract_limits() -> anyhow::Result<()> {
 }
 
 #[test]
-fn the_cache_key_changes_with_every_field_the_worker_reads() {
+fn the_cache_key_changes_with_every_field_the_model_reads() {
     let plain = ctx("Song", Some("uploader"), None);
     let with_artist = ctx("Song", Some("uploader"), Some("Artist"));
     let mut with_description = ctx("Song", Some("uploader"), None);
@@ -84,21 +78,11 @@ fn the_cache_key_changes_with_every_field_the_worker_reads() {
 }
 
 #[test]
-fn a_silent_or_failing_ai_lane_is_a_source_failure_not_an_empty_answer() -> anyhow::Result<()> {
-    let silent = answered(Ok(None));
-    let failing = answered(Err(anyhow::anyhow!("NATS request timed out")));
-    let answer = answered(Ok(Some(reply("llm")?)))?;
-
-    assert!(matches!(
-        silent,
-        Err(EnrichError::Source(SourceError::Unreachable(_)))
-    ));
-    assert!(matches!(
-        failing,
-        Err(EnrichError::Source(SourceError::Unreachable(_)))
-    ));
-    assert_eq!(answer.primary_artist.as_deref(), Some("Kendrick Lamar"));
-    Ok(())
+fn the_cache_key_is_the_one_the_worker_replies_were_stored_under() {
+    assert_eq!(
+        context_hash(&ctx("Song", Some("uploader"), None)),
+        "Rx5vOahYr987gbmBBHiTTZP3_x2ydJMEYC8TxH3kDhM"
+    );
 }
 
 #[test]

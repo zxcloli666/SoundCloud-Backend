@@ -5,7 +5,9 @@ use std::time::Instant;
 
 use async_nats::jetstream::consumer::{self, DeliverPolicy, PullConsumer, ReplayPolicy};
 use async_nats::jetstream::stream::RawMessageErrorKind;
-use backend_contracts::pipeline::WORKER_STREAMS;
+use backend_contracts::pipeline::{
+    DEADLINE_HEADER, MSG_ID_HEADER, REPLY_TO_HEADER, WORKER_STREAMS,
+};
 use backend_contracts::reasons::{WorkerReason, WorkerStatus, outcome_rank};
 use backend_contracts::worker_contract::{AUDIO_LANE, WORKER_LANES, WorkerLane, WorkerLaneSpec};
 use serde_json::json;
@@ -249,9 +251,9 @@ async fn a_request_carries_its_deadline_reply_inbox_and_message_id() -> anyhow::
     let request_subject = subject.clone();
     let request = tokio::spawn(async move {
         caller
-            .request::<_, String>(
+            .request(
                 &request_subject,
-                &json!({ "title": "x" }),
+                json!({ "title": "x" }).to_string().into(),
                 timeout,
                 "rpc:42",
             )
@@ -303,7 +305,7 @@ async fn a_request_carries_its_deadline_reply_inbox_and_message_id() -> anyhow::
         .await
         .map_err(|error| anyhow::anyhow!("ack failed: {error}"))?;
 
-    assert_eq!(request.await??.as_deref(), Some("pong"));
+    assert_eq!(request.await?, Ok(json!("pong")));
     bus.jetstream.delete_stream(rpc.name).await?;
     Ok(())
 }

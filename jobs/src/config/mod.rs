@@ -1,3 +1,4 @@
+mod ai;
 pub(crate) mod database;
 mod env;
 mod oauth;
@@ -10,6 +11,7 @@ use std::time::Duration;
 use backend_contracts::COLLAB_MAX_MIN_COUNT;
 use backend_contracts::worker_contract::WorkerLane;
 
+pub use ai::AiConfig;
 pub use database::{DatabaseConfig, PoolConfig, PoolCoverage, SessionLimits};
 
 use database::{maintenance_pool_from_env, queue_pool_from_env, read_database_from_env};
@@ -37,6 +39,7 @@ pub struct JobsConfig {
     pub crawl: CrawlConfig,
     pub wanted: WantedConfig,
     pub enrich: EnrichConfig,
+    pub ai: AiConfig,
     pub lyrics: LyricsConfig,
     pub worker_dispatch: WorkerDispatchConfig,
     pub admin_maintenance: AdminMaintenanceConfig,
@@ -115,9 +118,6 @@ pub struct WantedConfig {
     pub search_concurrency: usize,
     pub lease_seconds: i64,
     pub max_attempts: i16,
-    pub ai_enabled: bool,
-    pub ai_timeout_ms: u64,
-    pub ai_daily_budget: u64,
 }
 
 impl WantedConfig {
@@ -132,9 +132,6 @@ impl WantedConfig {
             search_concurrency: env::non_zero_usize("WANTED_RESOLVE_CONCURRENCY", 64)?,
             lease_seconds: env::positive_u64("WANTED_RESOLVE_LEASE_SECONDS", 1_800)? as i64,
             max_attempts,
-            ai_enabled: env::boolean("ENRICH_AI_ENABLED", true)?,
-            ai_timeout_ms: env::positive_u64("ENRICH_AI_TIMEOUT_MS", 20_000)?,
-            ai_daily_budget: env::positive_u64("ENRICH_AI_DAILY_BUDGET", 5_000)?,
         })
     }
 }
@@ -263,9 +260,6 @@ pub struct EnrichConfig {
     pub musicbrainz_rate_limit_ms: u64,
     pub genius_access_token: redact::Secret<String>,
     pub genius_max_concurrent_scrapes: usize,
-    pub ai_enabled: bool,
-    pub ai_timeout_ms: u64,
-    pub ai_daily_budget: u64,
 }
 
 impl EnrichConfig {
@@ -287,9 +281,6 @@ impl EnrichConfig {
                 "GENIUS_MAX_CONCURRENT_SCRAPES",
                 128,
             )?,
-            ai_enabled: env::boolean("ENRICH_AI_ENABLED", true)?,
-            ai_timeout_ms: env::positive_u64("ENRICH_AI_TIMEOUT_MS", 20_000)?,
-            ai_daily_budget: env::positive_u64("ENRICH_AI_DAILY_BUDGET", 5_000)?,
         })
     }
 }
@@ -528,6 +519,7 @@ impl JobsConfig {
             crawl: CrawlConfig::from_env()?,
             wanted: WantedConfig::from_env()?,
             enrich: EnrichConfig::from_env()?,
+            ai: AiConfig::from_env()?,
             lyrics: LyricsConfig::from_env()?,
             worker_dispatch: WorkerDispatchConfig::from_env()?,
             admin_maintenance: AdminMaintenanceConfig::from_env()?,

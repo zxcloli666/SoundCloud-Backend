@@ -28,6 +28,7 @@ pub(crate) mod highlights;
 mod indexing;
 mod lyrics;
 mod maintenance;
+mod metadata;
 mod oauth_apps;
 mod oauth_cooldowns;
 mod playlist_legacy;
@@ -74,11 +75,12 @@ use self::collab::{CollabHandler, CollabResult};
 use self::crawl::CrawlHandler;
 use self::discover::{DiscoverHandler, Group as DiscoverGroup};
 use self::encode::EncodeResultHandler;
-use self::enrich::EnrichHandler;
+use self::enrich::{AiResolverClient, EnrichHandler};
 use self::external::ExternalSources;
 use self::indexing::IndexingHandler;
 use self::lyrics::LyricsHandler;
 use self::maintenance::MaintenanceHandler;
+use self::metadata::Normalizer;
 use self::oauth_apps::OAuthAppsRefreshHandler;
 use self::playlist_legacy::PlaylistLegacyHandler;
 use self::playlist_observe::PlaylistObserveHandler;
@@ -90,7 +92,7 @@ use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
 use self::sync_queue::SyncQueueHandler;
 use self::telemetry::TelemetryHandler;
-use self::wanted::WantedHandler;
+use self::wanted::{AiMatcherClient, WantedHandler};
 
 pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::AuthCleanupLinkRequests,
@@ -255,10 +257,19 @@ impl JobHandlers {
         };
         let reader = Arc::new(PublicCatalogReader::new(sc, databases.main.fast.clone()));
         let sources = ExternalSources::build(relay, &config.enrich, &config.lyrics)?;
+        let refine = crate::llm::refine_ladder(&config.ai, &bus)?;
+        let normalizer = Arc::new(Normalizer::new()?);
         let wanted = Arc::new(WantedHandler::new(
             databases.main.bulk.clone(),
             reader.clone(),
-            bus.clone(),
+            refine.clone().map(|ladder| {
+                AiMatcherClient::new(
+                    ladder,
+                    normalizer.clone(),
+                    databases.main.bulk.clone(),
+                    &config.ai,
+                )
+            }),
             config.wanted.clone(),
         ));
         Ok(Self {
@@ -310,9 +321,15 @@ impl JobHandlers {
                 databases.maintenance.clone(),
                 enrich::build_resolver_deps(
                     databases.maintenance.clone(),
-                    bus.clone(),
+                    refine.map(|ladder| {
+                        AiResolverClient::new(
+                            ladder,
+                            normalizer.clone(),
+                            databases.maintenance.clone(),
+                            &config.ai,
+                        )
+                    }),
                     &sources,
-                    &config.enrich,
                 ),
                 &config.enrich,
             ),
