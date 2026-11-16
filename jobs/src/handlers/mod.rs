@@ -63,7 +63,7 @@ use crate::bus::Bus;
 use crate::config::JobsConfig;
 use crate::db::Databases;
 use crate::qdrant::QdrantProvisioner;
-use crate::queue::{JobError, JobResult, LeasedJob, LookupLane};
+use crate::queue::{JobError, JobResult, LeasedJob, LookupLane, WriteGovernor};
 
 use self::account_walk::AccountWalkHandler;
 use self::admin_maintenance::AdminMaintenanceHandler;
@@ -244,6 +244,7 @@ impl JobHandlers {
         qdrant: QdrantProvisioner,
         relay: Option<std::sync::Arc<call_relay::Client>>,
         lookups: Arc<LookupLane>,
+        governor: Arc<WriteGovernor>,
     ) -> Result<Self, crate::ClientBuildError> {
         let sc = sc_transport::ScClient::new(&sc_transport::ScConfig {
             proxy_url: config.enrich.proxy_url.clone(),
@@ -282,6 +283,7 @@ impl JobHandlers {
                 databases.main.bulk.clone(),
                 sources.musicbrainz.clone(),
                 config.admin_maintenance,
+                governor,
             ),
             attribution: AttributionHandler::new(databases.maintenance.clone()),
             catalog: CatalogWorkHandler::new(databases.maintenance.clone()),

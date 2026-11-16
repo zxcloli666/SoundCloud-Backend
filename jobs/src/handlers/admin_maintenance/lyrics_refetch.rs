@@ -2,7 +2,7 @@
 #[path = "lyrics_refetch_tests.rs"]
 mod tests;
 
-use super::track_search::{MAX_LAG_SECONDS, lagging, yielded, yielding};
+use super::track_search::{MAX_LAG_SECONDS, held_back, yielded, yielding};
 use super::{AdminMaintenanceHandler, LYRICS_REFETCH, PhaseOutcome, RunState, SliceProgress};
 use crate::queue::{JobError, JobResult};
 
@@ -23,7 +23,7 @@ pub async fn execute(
 }
 
 async fn seed(handler: &AdminMaintenanceHandler, state: &RunState) -> JobResult<PhaseOutcome> {
-    if lagging(handler, MAX_LAG_SECONDS).await? {
+    if held_back(handler, MAX_LAG_SECONDS).await? {
         return Ok(PhaseOutcome::Advanced);
     }
     let cursor = state.cursor_text.as_deref().unwrap_or("");

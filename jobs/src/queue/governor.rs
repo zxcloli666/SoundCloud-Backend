@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
@@ -23,6 +23,7 @@ const PRESSURE: &str = include_str!("../../queries/queue/write_pressure.sql");
 pub(crate) struct WriteGovernor {
     limit: AtomicUsize,
     ceiling: usize,
+    calm: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, sqlx::FromRow)]
@@ -64,6 +65,7 @@ impl WriteGovernor {
         Arc::new(Self {
             limit: AtomicUsize::new(FLOOR.min(ceiling)),
             ceiling,
+            calm: AtomicBool::new(false),
         })
     }
 
@@ -75,9 +77,18 @@ impl WriteGovernor {
         self.ceiling
     }
 
+    pub(crate) fn calm(&self) -> bool {
+        self.calm.load(Ordering::Relaxed)
+    }
+
     #[cfg(test)]
     pub(crate) fn hold_at(&self, limit: usize) {
         self.limit.store(limit, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_calm(&self, calm: bool) {
+        self.calm.store(calm, Ordering::Relaxed);
     }
 
     pub(crate) async fn run(
@@ -105,6 +116,7 @@ impl WriteGovernor {
                         write_bytes_per_second: write_rate
                             .observe(reading.wal_position, Instant::now()),
                     };
+                    self.calm.store(calm(pressure), Ordering::Relaxed);
                     if self.adjust(pressure, changed_at.elapsed()) {
                         changed_at = Instant::now();
                     }
@@ -135,17 +147,23 @@ impl WriteGovernor {
     }
 }
 
+fn heavy(pressure: Pressure) -> bool {
+    pressure.replication_backlog_bytes > HEAVY_BACKLOG_BYTES
+        || pressure.active_backends > HEAVY_ACTIVE_BACKENDS
+        || pressure.write_bytes_per_second > HEAVY_WRITE_BYTES_PER_SECOND
+}
+
+fn calm(pressure: Pressure) -> bool {
+    pressure.replication_backlog_bytes < CALM_BACKLOG_BYTES
+        && pressure.active_backends < CALM_ACTIVE_BACKENDS
+        && pressure.write_bytes_per_second < CALM_WRITE_BYTES_PER_SECOND
+}
+
 fn next_limit(current: usize, ceiling: usize, pressure: Pressure, since_change: Duration) -> usize {
     let floor = FLOOR.min(ceiling);
-    let heavy = pressure.replication_backlog_bytes > HEAVY_BACKLOG_BYTES
-        || pressure.active_backends > HEAVY_ACTIVE_BACKENDS
-        || pressure.write_bytes_per_second > HEAVY_WRITE_BYTES_PER_SECOND;
-    let calm = pressure.replication_backlog_bytes < CALM_BACKLOG_BYTES
-        && pressure.active_backends < CALM_ACTIVE_BACKENDS
-        && pressure.write_bytes_per_second < CALM_WRITE_BYTES_PER_SECOND;
-    if heavy && since_change >= LOWER_EVERY {
+    if heavy(pressure) && since_change >= LOWER_EVERY {
         (current / 2).max(floor)
-    } else if calm && since_change >= RAISE_EVERY {
+    } else if calm(pressure) && since_change >= RAISE_EVERY {
         (current + 1).min(ceiling)
     } else {
         current
@@ -176,6 +194,14 @@ mod tests {
         assert_eq!(next_limit(16, 32, writing(9.0), SETTLED), 8);
         assert_eq!(next_limit(16, 32, writing(4.5), SETTLED), 16);
         assert_eq!(next_limit(16, 32, writing(1.0), SETTLED), 17);
+    }
+
+    #[test]
+    fn maintenance_runs_only_below_the_bar_that_raises_the_slots() {
+        assert!(calm(writing(1.0)));
+        assert!(!calm(writing(4.5)));
+        assert!(!calm(pressure(200, 3)));
+        assert!(!calm(pressure(10, 20)));
     }
 
     #[test]

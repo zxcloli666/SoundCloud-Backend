@@ -22,7 +22,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::config::AdminMaintenanceConfig;
-use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError};
+use crate::queue::{
+    JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError, WriteGovernor,
+};
 
 pub const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
 pub const LYRICS_DESCRIPTION: &str = "lyrics_description";
@@ -72,10 +74,16 @@ pub struct AdminMaintenanceHandler {
     track_sync_stamps_batch: i64,
     track_work_keys_batch: i64,
     track_enrich_queue_batch: i64,
+    governor: Arc<WriteGovernor>,
 }
 
 impl AdminMaintenanceHandler {
-    pub fn new(pool: PgPool, musicbrainz: Arc<MbClient>, config: AdminMaintenanceConfig) -> Self {
+    pub fn new(
+        pool: PgPool,
+        musicbrainz: Arc<MbClient>,
+        config: AdminMaintenanceConfig,
+        governor: Arc<WriteGovernor>,
+    ) -> Self {
         Self {
             queue: JobRepository::new(pool.clone(), "admin-maintenance".to_owned()),
             pool,
@@ -85,6 +93,7 @@ impl AdminMaintenanceHandler {
             track_sync_stamps_batch: config.track_sync_stamps_batch,
             track_work_keys_batch: config.track_work_keys_batch,
             track_enrich_queue_batch: config.track_enrich_queue_batch,
+            governor,
         }
     }
 

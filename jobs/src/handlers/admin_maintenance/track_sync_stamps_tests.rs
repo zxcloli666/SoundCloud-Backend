@@ -6,9 +6,10 @@ use backend_contracts::{AdminMaintenancePayload, JobKind};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::super::AdminMaintenanceHandler;
 use super::super::TRACK_SYNC_STAMPS;
-use super::super::tests::handler;
-use crate::queue::{ClaimOrder, JobRepository, NewJob};
+use super::super::tests::{handler, handler_with};
+use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob, WriteGovernor};
 
 const DRIFT: &str = "SELECT count(*)
     FROM tracks AS track
@@ -112,6 +113,29 @@ async fn the_backfill_races_live_writers_and_ends_with_no_drift(
     Ok(())
 }
 
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_busy_core_holds_the_backfill_until_it_is_calm(pool: PgPool) -> anyhow::Result<()> {
+    seed(&pool, 1, 500).await?;
+    let governor = WriteGovernor::new(4);
+    let handler = handler_with(&pool, governor.clone());
+    let run_id = Uuid::now_v7();
+    let job = claimed(&pool, run_id).await?;
+    for _ in 0..5 {
+        handler
+            .backfill_track_sync_stamps(&job, AdminMaintenancePayload { run_id })
+            .await?;
+    }
+    assert_eq!(count(&pool).await?, 0);
+
+    governor.hold_calm(true);
+    let totals = finish(&pool, &handler, &job, run_id).await?;
+
+    assert_eq!(count(&pool).await?, 500);
+    assert_eq!(drift(&pool).await?, 0);
+    assert_eq!(totals.skipped, 0);
+    Ok(())
+}
+
 async fn syncs(pool: PgPool, stop: Arc<AtomicBool>) -> anyhow::Result<u64> {
     let mut rounds = 0;
     while !stop.load(Ordering::Relaxed) {
@@ -148,9 +172,14 @@ async fn rollbacks(pool: PgPool, stop: Arc<AtomicBool>) -> anyhow::Result<u64> {
 
 async fn run(pool: &PgPool) -> anyhow::Result<Totals> {
     let run_id = Uuid::now_v7();
+    let job = claimed(pool, run_id).await?;
+    finish(pool, &handler(pool), &job, run_id).await
+}
+
+async fn claimed(pool: &PgPool, run_id: Uuid) -> anyhow::Result<LeasedJob> {
     let queue = JobRepository::new(pool.clone(), "track-sync-stamps-admin-test".to_owned());
     queue.enqueue_if_absent(&job(run_id)).await?;
-    let job = queue
+    queue
         .claim(
             &[JobKind::AdminTrackSyncStamps],
             ClaimOrder::Priority,
@@ -159,11 +188,18 @@ async fn run(pool: &PgPool) -> anyhow::Result<Totals> {
         )
         .await?
         .pop()
-        .ok_or_else(|| anyhow::anyhow!("track sync stamps job was not claimed"))?;
-    let handler = handler(pool);
+        .ok_or_else(|| anyhow::anyhow!("track sync stamps job was not claimed"))
+}
+
+async fn finish(
+    pool: &PgPool,
+    handler: &AdminMaintenanceHandler,
+    job: &LeasedJob,
+    run_id: Uuid,
+) -> anyhow::Result<Totals> {
     for _ in 0..500 {
         handler
-            .backfill_track_sync_stamps(&job, AdminMaintenancePayload { run_id })
+            .backfill_track_sync_stamps(job, AdminMaintenancePayload { run_id })
             .await?;
         let totals: Totals = sqlx::query_as(
             "SELECT status, scanned, changed, merged, skipped

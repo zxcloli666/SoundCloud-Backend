@@ -30,7 +30,7 @@ pub async fn execute(
     state: &RunState,
 ) -> JobResult<PhaseOutcome> {
     let cursor = state.cursor_uuid.unwrap_or(Uuid::nil());
-    if state.phase != RECHECK && lagging(handler, MAX_LAG_SECONDS).await? {
+    if state.phase != RECHECK && held_back(handler, MAX_LAG_SECONDS).await? {
         return Ok(PhaseOutcome::Advanced);
     }
     match state.phase.as_str() {
@@ -168,10 +168,14 @@ async fn finish(handler: &AdminMaintenanceHandler, state: &RunState) -> JobResul
     Ok(PhaseOutcome::Finished)
 }
 
-pub(super) async fn lagging(
+pub(super) async fn held_back(
     handler: &AdminMaintenanceHandler,
     max_lag_seconds: f64,
 ) -> JobResult<bool> {
+    if !handler.governor.calm() {
+        tracing::info!("admin maintenance waits for a calm core");
+        return Ok(true);
+    }
     let lag: Lag = sqlx::query_as(LAG)
         .fetch_one(&handler.pool)
         .await
