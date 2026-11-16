@@ -120,6 +120,18 @@ def test_shipped_profiles_enable_fallbacks(profile: Path, base_env: dict[str, st
         assert set(settings.lanes.enabled) <= {"audio", "lyrics", "transcribe", "speak"}
 
 
+@pytest.mark.parametrize(
+    "profile", ["", *sorted(p.stem for p in (CONFIG_DIR / "profiles").glob("*.toml"))]
+)
+def test_shipped_configs_enable_the_ai_lane_only_with_the_local_model(
+    profile: str, base_env: dict[str, str]
+) -> None:
+    settings = s.load(CONFIG_DIR, {**base_env, s.PROFILE_ENV: profile})
+    if s.AI_LANE in settings.lanes.enabled:
+        assert settings.llm.local.enabled is True
+        assert s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
+
+
 def test_fallback_gaps_are_reported(base_env: dict[str, str]) -> None:
     env = {
         **base_env,

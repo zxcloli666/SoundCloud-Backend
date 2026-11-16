@@ -66,7 +66,7 @@ from worker.runtime.supervisor import (
     pid_limit,
     plan_engines,
 )
-from worker.settings import CPU_ONLY_SLOTS, Settings, SettingsError, TtsSection
+from worker.settings import AI_LANE, CPU_ONLY_SLOTS, Settings, SettingsError, TtsSection
 
 CPU_TOOLS = "cpu-tools"
 CPU_TOOL_LOADERS: Mapping[str, str] = {
@@ -109,7 +109,6 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
-AI_LANE = "ai"
 SPEAK_LANE = "speak"
 LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
 TTS_THREADS_ENV = "SCD_QWEN_THREADS"
@@ -148,8 +147,8 @@ async def run(
 ) -> int:
     json_log = JsonLog(worker_id=settings.worker.id)
     json_logging.install(json_log, logging.INFO)
-    settings = local_llm_on_this_cpu(settings, json_log)
     try:
+        check_local_llm_cpu(settings)
         blueprint = Blueprint.of(settings, contract, environ)
     except (SettingsError, StartupError) as error:
         json_log.error("startup_config_error", error=str(error))
@@ -800,18 +799,12 @@ def check_slow_lanes(settings: Settings) -> None:
         raise StartupError(f"lanes {slow} on device=cpu need runtime.allow_slow_lanes=true")
 
 
-def local_llm_on_this_cpu(settings: Settings, json_log: JsonLog) -> Settings:
-    local = settings.llm.local
+def check_local_llm_cpu(settings: Settings) -> None:
     if AI_LANE not in settings.lanes.enabled:
-        return settings
-    if not local.enabled:
-        json_log.warning("local_llm_off", why="config")
-        return settings
+        return
     missing = cpu_flags.missing_on_this_host()
-    if not missing:
-        return settings
-    json_log.error("local_llm_off", why="cpu", missing=missing)
-    return replace(settings, llm=replace(settings.llm, local=replace(local, enabled=False)))
+    if missing:
+        raise StartupError(f"lane ai needs the local model, and this CPU lacks {missing}")
 
 
 def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:

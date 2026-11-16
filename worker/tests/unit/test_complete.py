@@ -447,20 +447,3 @@ async def test_a_request_the_model_refuses_is_counted(contract: Contract, clock:
         await subject.complete(request(max_tokens=0), deadline(clock))
 
     assert counters.value("complete_rejected_total", why="invalid_request") == 2
-
-
-async def test_a_worker_with_the_local_model_off_leaves_the_call_to_another_worker(
-    contract: Contract, clock: FakeClock
-) -> None:
-    engines, counters = FakeEngines(), Counters()
-    subject = Completer(
-        engines, contract.complete_limits, replace(LOCAL, enabled=False), MODEL, counters
-    )
-
-    with pytest.raises(NotServedHere) as off:
-        await subject.complete(request(), deadline(clock))
-
-    assert off.value.reason is Reason.INTERNAL_ERROR
-    assert "off" in str(off.value)
-    assert counters.value("complete_unavailable_total", state="off") == 1
-    assert engines.calls == []

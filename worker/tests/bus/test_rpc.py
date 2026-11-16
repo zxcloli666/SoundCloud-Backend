@@ -22,7 +22,7 @@ from worker.contract import Contract
 from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import NotServedHere, PermanentFailure, Reason, TransientFailure
-from worker.domain.ports import ChatMessage, Completion
+from worker.domain.ports import ChatMessage, Completion, EngineUnavailable
 from worker.settings import Settings
 
 METHOD = settings_module.LOCAL_LLM_METHOD
@@ -223,7 +223,7 @@ async def test_failures_map_to_the_error_envelope(
 @pytest.mark.parametrize(
     ("reason", "error"),
     [(Reason.INTERNAL_ERROR, "internal"), (Reason.DEADLINE_EXCEEDED, "expired")],
-    ids=["off", "busy"],
+    ids=["unavailable", "busy"],
 )
 async def test_a_call_this_worker_cannot_serve_is_handed_on_and_answered_on_its_last_delivery(
     rpc: Rpc, reason: Reason, error: str
@@ -245,7 +245,7 @@ async def test_a_call_this_worker_cannot_serve_is_handed_on_and_answered_on_its_
 
 
 async def test_a_call_with_no_time_left_for_another_worker_is_answered_at_once(rpc: Rpc) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, PROCESS_MARGIN_S + REPLY_MARGIN_S))
 
     assert await rpc.run_one() == {"ok": False, "error": "internal"}
@@ -256,7 +256,7 @@ async def test_a_call_with_no_time_left_for_another_worker_is_answered_at_once(r
 async def test_a_call_is_answered_when_the_connection_cannot_be_trusted_with_a_hand_over(
     rpc: Rpc,
 ) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.harness.connection.suspect("test")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
 
@@ -268,7 +268,7 @@ async def test_a_call_is_answered_when_the_connection_cannot_be_trusted_with_a_h
 async def test_a_redelivery_that_overtakes_the_hand_over_is_handled_as_a_new_delivery(
     rpc: Rpc,
 ) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     [msg] = await rpc.harness.fetch()
     send_nak = msg.nak
@@ -286,7 +286,7 @@ async def test_a_redelivery_that_overtakes_the_hand_over_is_handled_as_a_new_del
 
 
 async def test_a_hand_over_that_cannot_be_sent_leaves_the_call_to_the_ack_wait(rpc: Rpc) -> None:
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     [msg] = await rpc.harness.fetch()
     rpc.harness.bus.closed = True
@@ -396,14 +396,8 @@ def serve_complete(rpc: Rpc, contract: Contract) -> TimedEngines:
     return engines
 
 
-def local_worker(harness: Harness, contract: Contract, enabled: bool) -> LaneRunner:
-    completer = Completer(
-        TimedEngines(),
-        contract.complete_limits,
-        replace(LOCAL, enabled=enabled),
-        LOCAL_MODEL,
-        harness.counters,
-    )
+def local_worker(harness: Harness, contract: Contract, engines: FakeEngines) -> LaneRunner:
+    completer = Completer(engines, contract.complete_limits, LOCAL, LOCAL_MODEL, harness.counters)
     handler = rpc_handler(harness, contract, {METHOD: completer.complete})
     return LaneRunner(
         harness.lane,
@@ -418,11 +412,16 @@ def local_worker(harness: Harness, contract: Contract, enabled: bool) -> LaneRun
     )
 
 
-async def test_a_call_taken_by_a_worker_with_the_model_off_is_answered_by_one_that_has_it(
+async def test_a_call_taken_by_a_worker_whose_model_is_unavailable_is_answered_by_another(
     rpc: Rpc, fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
 ) -> None:
     without, having = rpc.harness, await build_harness(fake_nats, contract, settings, clock, "ai")
-    runners = [local_worker(without, contract, False), local_worker(having, contract, True)]
+    broken = TimedEngines()
+    broken.fail(METHOD, EngineUnavailable(settings_module.LOCAL_LLM_SLOT, "broken"))
+    runners = [
+        local_worker(without, contract, broken),
+        local_worker(having, contract, TimedEngines()),
+    ]
     for harness, runner in zip((without, having), runners, strict=True):
         await harness.watch.check()
         harness.tasks.append(asyncio.create_task(runner.run()))
@@ -583,7 +582,7 @@ async def test_answered_calls_count_in_the_lane_throughput_and_handed_on_ones_do
 ) -> None:
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     await rpc.run_one()
-    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
+    rpc.failure = NotServedHere(Reason.INTERNAL_ERROR, "slot llm-local is broken")
     rpc.enqueue(deadline_ms=epoch_ms(rpc.harness.clock, 20))
     await rpc.run_one()
 

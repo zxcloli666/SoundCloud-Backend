@@ -232,6 +232,21 @@ async def test_consumer_drift_at_start_exits_78_before_any_engine(
     assert "engine_spawned" not in {event.get("event") for event in events}
 
 
+async def test_the_ai_lane_without_the_local_model_exits_78_before_any_engine(
+    live: Live, fixtures: Fixtures, tmp_path: Path
+) -> None:
+    worker = await start_serve(
+        live, fixtures, tmp_path, ("ai",), WORKER__LLM__LOCAL__ENABLED="false"
+    )
+
+    code = await worker.wait_exit(60)
+
+    assert code == 78, worker.tail()
+    [error] = [event for event in worker.events() if event.get("event") == "startup_config_error"]
+    assert "lane ai needs llm.local.enabled = true" in str(error["error"])
+    assert "engine_spawned" not in worker.event_names()
+
+
 async def test_consumer_drift_in_work_drains_and_exits_78(
     live: Live, fixtures: Fixtures, tmp_path: Path
 ) -> None:

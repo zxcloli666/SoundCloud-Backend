@@ -64,7 +64,7 @@ async def test_snapshot_carries_the_complete_and_hand_over_counters(
     harness.counters.inc("complete_answers_total", by=3)
     harness.counters.inc("complete_rejected_total", why="busy")
     harness.counters.inc("complete_rejected_total", why="off_schema", by=2)
-    harness.counters.inc("complete_unavailable_total", state="off")
+    harness.counters.inc("complete_unavailable_total", state="broken")
     harness.counters.inc("rpc_handed_on_total", method="complete", by=4)
     harness.counters.inc("rpc_expired_total", method="complete", by=2)
     harness.counters.inc("rpc_expired_total", method="say")
@@ -75,7 +75,7 @@ async def test_snapshot_carries_the_complete_and_hand_over_counters(
     counters = snapshot["counters"]
     assert counters["complete_answers"] == 3
     assert counters["complete_rejected"] == {"busy": 1, "off_schema": 2}
-    assert counters["complete_unavailable"] == {"off": 1}
+    assert counters["complete_unavailable"] == {"broken": 1}
     assert counters["rpc_handed_on"] == {"complete": 4}
     assert counters["rpc_expired"] == 3
     assert counters["rpc_expired_by_method"] == {"complete": 2, "say": 1}

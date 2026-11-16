@@ -46,18 +46,24 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
 
 
-def test_the_local_model_can_be_switched_off_without_dropping_the_ai_lane(
+def test_the_ai_lane_without_the_local_model_is_a_start_error(base_env: dict[str, str]) -> None:
+    env = {**base_env, "WORKER__LLM__LOCAL__ENABLED": "false"}
+    with pytest.raises(s.SettingsError, match=r"lane ai needs llm\.local\.enabled = true"):
+        s.load(CONFIG_DIR, env)
+
+
+def test_the_local_model_can_be_switched_off_together_with_the_ai_lane(
     base_env: dict[str, str],
 ) -> None:
     env = {
         **base_env,
+        "WORKER__LANES__ENABLED": '["audio", "lyrics"]',
         "WORKER__LLM__LOCAL__ENABLED": "false",
         "WORKER__SLOTS__LLM_LOCAL__REPLICAS": "0",
         "WORKER__SLOTS__LLM_LOCAL__MODEL": "",
     }
     settings = s.load(CONFIG_DIR, env)
     assert settings.llm.local.enabled is False
-    assert "ai" in settings.lanes.enabled
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(settings)
 
 

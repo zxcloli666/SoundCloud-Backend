@@ -28,6 +28,7 @@ DEVICES = ("auto", "cuda", "cpu")
 SYNC_STRATEGIES = ("anchored", "global_ctc")
 RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
+AI_LANE = "ai"
 LOCAL_LLM_SLOT = "llm-local"
 LOCAL_LLM_METHOD = "complete"
 LOCAL_LLM_DEVICE = "llama-cpu"
@@ -51,7 +52,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "encode": ("text", "mulan"),
         "collab": ("train-collab",),
         "taste": ("train-taste",),
-        "ai": (LOCAL_LLM_SLOT,),
+        AI_LANE: (LOCAL_LLM_SLOT,),
         "speak": (TTS_SLOT,),
         "highlight": (),
     }
@@ -630,7 +631,7 @@ def validate_slots(settings: Settings) -> list[str]:
         if slot.fallback is not None and slot.fallback not in allowed_fallbacks:
             problems.append(f"slots.{name}.fallback refers to unknown slot {slot.fallback!r}")
     for lane in settings.lanes.enabled:
-        for slot_name in lane_slots(settings, lane):
+        for slot_name in LANE_SLOTS.get(lane, ()):
             needed = settings.slots.get(slot_name)
             if needed is None:
                 problems.append(f"lane {lane} needs slots.{slot_name}")
@@ -670,9 +671,13 @@ def validate_local_llm(settings: Settings) -> list[str]:
     local = settings.llm.local
     problems = []
     slot = settings.slots.get(LOCAL_LLM_SLOT)
-    serves = local.enabled and "ai" in settings.lanes.enabled
-    if serves and slot is not None and not (slot.model and slot.revision):
-        problems.append(f"lane ai needs slots.{LOCAL_LLM_SLOT}.model and revision")
+    if AI_LANE in settings.lanes.enabled:
+        if not local.enabled:
+            problems.append(
+                "lane ai needs llm.local.enabled = true: it serves only the local model"
+            )
+        if slot is not None and not (slot.model and slot.revision):
+            problems.append(f"lane ai needs slots.{LOCAL_LLM_SLOT}.model and revision")
     if not local.file.endswith(LOCAL_LLM_FILE_SUFFIX):
         problems.append(f"llm.local.file must be a {LOCAL_LLM_FILE_SUFFIX} file of the model repo")
     if not SHA256_HEX.fullmatch(local.sha256):
@@ -809,17 +814,10 @@ def local_llm_ref(settings: Settings) -> str:
     return f"{slot.model}/{settings.llm.local.file}@{slot.revision[:8]}"
 
 
-def lane_slots(settings: Settings, lane: str) -> tuple[str, ...]:
-    slots = LANE_SLOTS.get(lane, ())
-    if settings.llm.local.enabled:
-        return slots
-    return tuple(slot for slot in slots if slot != LOCAL_LLM_SLOT)
-
-
 def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) -> tuple[str, ...]:
     wanted: list[str] = []
     for lane in settings.lanes.enabled if lanes is None else lanes:
-        for slot in lane_slots(settings, lane):
+        for slot in LANE_SLOTS.get(lane, ()):
             if slot not in wanted:
                 wanted.append(slot)
     for slot in list(wanted):

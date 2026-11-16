@@ -44,9 +44,6 @@ class Completer:
     async def complete(
         self, request: Mapping[str, object], deadline: Deadline
     ) -> Mapping[str, object]:
-        if not self._local.enabled:
-            self._counters.inc("complete_unavailable_total", state="off")
-            raise NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
         deadline.minus(RPC_MARGIN_S).check(LOCAL_LLM_METHOD)
         try:
             asked = Request.parse(request, self._limits)
