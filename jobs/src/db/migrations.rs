@@ -272,6 +272,8 @@ pub enum MigrationError {
 }
 
 #[cfg(test)]
+mod api_index_tests;
+#[cfg(test)]
 mod target_tests;
 #[cfg(test)]
 mod tests;
