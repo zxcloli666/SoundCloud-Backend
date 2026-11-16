@@ -231,6 +231,11 @@ impl Race {
             ladder.skipped(step, Skip::Breaker);
             return;
         };
+        if !step.provider.admits(now) {
+            step.breaker.left(pass);
+            ladder.skipped(step, Skip::Rate);
+            return;
+        }
         let time_left = self.deadline.saturating_duration_since(now);
         let (_, asked) = self.asked(index);
         let stream = step.provider.start(asked.clone(), time_left);

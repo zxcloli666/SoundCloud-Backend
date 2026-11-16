@@ -42,6 +42,7 @@ pub enum Failure {
 pub enum Skip {
     Breaker,
     Budget,
+    Rate,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,6 +67,7 @@ impl StepResult {
             Self::Failed(Failure::Invalid) => "failed_invalid",
             Self::Skipped(Skip::Breaker) => "skipped_breaker",
             Self::Skipped(Skip::Budget) => "skipped_budget",
+            Self::Skipped(Skip::Rate) => "skipped_rate",
         }
     }
 }

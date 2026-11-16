@@ -5,6 +5,7 @@ mod document;
 mod error;
 mod ladder;
 mod observer;
+mod pace;
 mod provider;
 mod race;
 mod request;

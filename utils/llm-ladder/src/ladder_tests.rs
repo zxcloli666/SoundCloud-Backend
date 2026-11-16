@@ -30,6 +30,8 @@ mod hedge;
 mod plain;
 #[path = "ladder_tests/race.rs"]
 mod race;
+#[path = "ladder_tests/rate.rs"]
+mod rate;
 #[path = "ladder_tests/spend.rs"]
 mod spend;
 
