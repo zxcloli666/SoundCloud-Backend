@@ -141,7 +141,8 @@ pub fn init() {
         .set_buckets_for_metric(Matcher::Full(JOB_DURATION.to_owned()), DURATION_BUCKETS)
         .and_then(|builder| {
             builder.set_buckets_for_metric(Matcher::Full(POOL_WAIT.to_owned()), POOL_WAIT_BUCKETS)
-        });
+        })
+        .and_then(crate::llm::buckets);
     let builder = match builder {
         Ok(builder) => builder,
         Err(error) => {
@@ -175,6 +176,7 @@ fn start_upkeep(handle: PrometheusHandle) {
 }
 
 fn register_series_that_start_at_zero() {
+    crate::llm::start_at_zero();
     for reason in CollabSkipReason::ALL {
         metrics::counter!(COLLAB_SKIPPED, "reason" => reason.as_str()).increment(0);
     }

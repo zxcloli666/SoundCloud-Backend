@@ -134,13 +134,27 @@ impl Ladder {
         })
     }
 
-    pub async fn complete<T: DeserializeOwned>(
+    pub async fn complete<T: DeserializeOwned + 'static>(
         self: &Arc<Self>,
         request: Request,
     ) -> Result<Completion<T>, LadderError> {
+        self.complete_if(request, |_: &T| true).await
+    }
+
+    pub async fn complete_if<T, F>(
+        self: &Arc<Self>,
+        request: Request,
+        fits: F,
+    ) -> Result<Completion<T>, LadderError>
+    where
+        T: DeserializeOwned + 'static,
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
         let rule = Rule {
             commit: Arc::new(|_, _| true),
-            accept: Some(parses::<T>),
+            accept: Some(Arc::new(move |document| {
+                serde_json::from_str::<T>(document).is_ok_and(|value| fits(&value))
+            })),
         };
         let mut race = self.enter(request, rule).await?;
         loop {
@@ -275,10 +289,6 @@ fn spend_store(
             "[budget] needs a JetStream connection from the host service".to_owned(),
         )),
     }
-}
-
-fn parses<T: DeserializeOwned>(document: &str) -> bool {
-    serde_json::from_str::<T>(document).is_ok()
 }
 
 #[cfg(test)]

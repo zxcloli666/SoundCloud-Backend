@@ -20,7 +20,7 @@ use crate::handlers::external::ExternalSources;
 use crate::handlers::star_priority::Turns;
 use crate::queue::{JobError, JobResult};
 
-use self::ai::AiResolverClient;
+pub use self::ai::AiResolverClient;
 use self::claim::Claim;
 use self::error::{EnrichError, EnrichResult};
 use self::resolver::{ResolveSource, ResolverDeps, TrackContext};
@@ -211,22 +211,13 @@ impl EnrichHandler {
 
 pub fn build_resolver_deps(
     pool: PgPool,
-    bus: crate::bus::Bus,
+    ai: Option<AiResolverClient>,
     sources: &ExternalSources,
-    config: &EnrichConfig,
 ) -> ResolverDeps {
-    let ai = config.ai_enabled.then(|| {
-        Arc::new(AiResolverClient::new(
-            bus,
-            pool.clone(),
-            config.ai_timeout_ms,
-            config.ai_daily_budget,
-        ))
-    });
     ResolverDeps {
         mb: sources.musicbrainz.clone(),
         genius: sources.genius.clone(),
-        ai,
+        ai: ai.map(Arc::new),
         pg: pool,
     }
 }

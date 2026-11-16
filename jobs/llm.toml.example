@@ -1,0 +1,21 @@
+[providers.alpha]
+kind = "openai_compatible"
+endpoint = "https://example.invalid/v1/chat/completions"
+model = "example-model"
+api_key = "env:EXAMPLE_ALPHA_KEY"
+stream = false
+max_output_tokens = 400
+total_timeout_ms = 6000
+
+[providers.onsite]
+kind = "worker"
+subject = "ai.rpc.complete"
+max_output_tokens = 400
+total_timeout_ms = 9000
+hedge = false
+
+[ladders.refine]
+steps = ["alpha", "onsite"]
+hedge_after_ms = 4000
+deadline_ms = 10000
+breaker = { failures = 4, window_s = 60, open_s = 120 }

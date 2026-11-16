@@ -11,6 +11,7 @@ mod db;
 mod env_surface_tests;
 mod handlers;
 mod health;
+mod llm;
 mod metrics;
 mod migration_app;
 mod qdrant;

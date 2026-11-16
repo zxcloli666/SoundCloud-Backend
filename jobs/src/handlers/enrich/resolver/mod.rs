@@ -258,16 +258,12 @@ async fn resolve(
 
     if let Some(ai) = deps.ai.as_ref() {
         match ai.resolve(ctx).await {
-            Ok(Some(res)) => {
+            Some(res) => {
                 let mut out = merge::merge_with(heuristic, res, ctx, signals);
                 out.degraded = degraded;
                 return Ok(out);
             }
-            Ok(None) => debug!("AI resolve empty"),
-            Err(e) => {
-                debug!(error = %e, "AI resolve failed");
-                degraded = true;
-            }
+            None => debug!("AI resolve empty"),
         }
     }
 

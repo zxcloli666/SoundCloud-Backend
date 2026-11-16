@@ -26,9 +26,11 @@ pub(crate) enum Item {
     Failed(LadderError),
 }
 
+pub(crate) type Accept = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 pub(crate) struct Rule {
     pub commit: Commit,
-    pub accept: Option<fn(&str) -> bool>,
+    pub accept: Option<Accept>,
 }
 
 pub(crate) struct Race {
@@ -351,6 +353,7 @@ impl Race {
         let accepted = self
             .rule
             .accept
+            .as_ref()
             .is_none_or(|accept| accept(&self.collected));
         if !winner.document.is_complete() || !accepted {
             return self.dethrone(Failure::Invalid);
