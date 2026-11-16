@@ -10,6 +10,7 @@ pub enum Schema {
     Number,
     Boolean,
     AnyOf(Vec<Schema>),
+    Null,
 }
 
 impl Schema {
@@ -28,6 +29,10 @@ impl Schema {
 
     pub fn one_of<V: Into<String>>(values: impl IntoIterator<Item = V>) -> Self {
         Self::OneOf(values.into_iter().map(Into::into).collect())
+    }
+
+    pub fn or_null(self) -> Self {
+        Self::AnyOf(vec![self, Self::Null])
     }
 }
 
@@ -54,6 +59,7 @@ impl Serialize for Schema {
             Self::Number => map.serialize_entry("type", "number")?,
             Self::Boolean => map.serialize_entry("type", "boolean")?,
             Self::AnyOf(options) => map.serialize_entry("anyOf", options)?,
+            Self::Null => map.serialize_entry("type", "null")?,
         }
         map.end()
     }
@@ -146,6 +152,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Schema::AnyOf(vec![Schema::Integer, Schema::Boolean])).unwrap(),
             serde_json::json!({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})
+        );
+    }
+
+    #[test]
+    fn a_nullable_value_is_any_of_itself_and_null() {
+        assert_eq!(
+            serde_json::to_value(Schema::String.or_null()).unwrap(),
+            serde_json::json!({"anyOf": [{"type": "string"}, {"type": "null"}]})
         );
     }
 }

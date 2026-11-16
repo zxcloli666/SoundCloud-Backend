@@ -39,6 +39,25 @@ async fn complete_moves_on_when_an_answer_does_not_fit_the_type() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn complete_if_moves_on_when_the_caller_rejects_a_typed_answer() {
+    let (made_up, _) = free("made_up", vec![text(10, "{\"say\":\"invented\"}")]);
+    let (grounded, _) = free("grounded", vec![text(10, "{\"say\":\"hello\"}")]);
+    let bench = uncapped(vec![made_up, grounded]);
+
+    let completion: Completion<Said> = bench
+        .ladder
+        .complete_if(request(), |said: &Said| said.say == "hello")
+        .await
+        .unwrap();
+
+    assert_eq!(completion.value.say, "hello");
+    assert_eq!(
+        bench.seen.steps(),
+        steps(&[("made_up", "failed_invalid"), ("grounded", "won")])
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn complete_comes_back_to_a_hedge_it_cancelled_when_the_winner_fails() {
     let (first, _) = free(
         "first",
