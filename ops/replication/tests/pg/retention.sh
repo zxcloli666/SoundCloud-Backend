@@ -72,6 +72,28 @@ wait_for scd_b1_star "SELECT count(*) = 0 FROM public.repl_purges WHERE pk ->> '
 want "young rows untouched on main" "$(young_rows main | cut -d/ -f3,4)" 2/2
 want "young rows untouched on star" "$(young_rows star | cut -d/ -f3,4)" 2/2
 
+say "B7 retention: seeks older than 180 days go on core and, through core's deletes, on main and star"
+seeks() {
+  sql -d "scd_b1_$1" -c "INSERT INTO public.track_seeks (id, sc_user_id, sc_track_id, position_ms, from_ms, source, created_at)
+    SELECT (lpad(to_hex(floor(extract(epoch FROM now() - age) * 1000)::bigint), 12, '0') || '7' || substr(md5(random()::text), 1, 19))::uuid,
+           'ret', '7001', 1000, 0, 'player', now() - age
+    FROM unnest(ARRAY[$2]) age" > /dev/null
+}
+seek_rows() { only "$1" "SELECT count(*) FILTER (WHERE created_at < now() - interval '180 days') || '/' || count(*) FILTER (WHERE created_at >= now() - interval '180 days') FROM public.track_seeks WHERE sc_user_id = 'ret'"; }
+seeks main "interval '200 days', interval '180 days 1 minute', interval '179 days 23 hours', interval '1 hour'"
+seeks star "interval '181 days', interval '1 day'"
+for n in core main star; do
+  wait_for "scd_b1_$n" "SELECT count(*) = 6 FROM public.track_seeks WHERE sc_user_id = 'ret'" "$n has every seek"
+done
+want "a batch of 2 over 3 old seeks deletes 2" "$(batch track_seeks 2)" "2|"
+want "then 1" "$(batch track_seeks 2)" "1|"
+want "then 0" "$(batch track_seeks 2)" "0|"
+want "core keeps only the seeks inside 180 days" "$(seek_rows core)" 0/3
+for n in main star; do
+  wait_for "scd_b1_$n" "SELECT count(*) FILTER (WHERE created_at < now() - interval '180 days') = 0 AND count(*) = 3 FROM public.track_seeks WHERE sc_user_id = 'ret'" "$n lost the old seeks and kept the young ones"
+done
+want "a seek of 179 days 23 hours stays on main" "$(only main "SELECT count(*) FROM public.track_seeks WHERE sc_user_id = 'ret' AND created_at < now() - interval '179 days'")" 1
+
 say "B7 retention: a locked table makes the batch give up after lock_timeout instead of waiting"
 seed
 sql -d scd_b1_core -c "BEGIN" -c "LOCK TABLE public.cmd_done IN ACCESS EXCLUSIVE MODE" -c "SELECT pg_sleep(8)" > /dev/null &

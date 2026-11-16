@@ -69,6 +69,30 @@ async fn retention_deletes_the_rows_past_seven_days_and_keeps_the_rest(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn retention_deletes_the_seeks_past_the_replay_hint_window(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO track_seeks (id, sc_user_id, sc_track_id, position_ms, from_ms, source, created_at)
+         SELECT (lpad(to_hex(floor(extract(epoch FROM now() - age) * 1000)::bigint), 12, '0')
+                 || '7' || substr(md5(random()::text), 1, 19))::uuid,
+                'u', '1', 1000, 0, 'player', now() - age
+         FROM unnest(ARRAY[interval '400 days', interval '181 days', interval '179 days',
+                           interval '1 hour']) AS age",
+    )
+    .execute(&pool)
+    .await?;
+
+    ReplHandler::new(pool.clone()).retain().await?;
+
+    let left: Vec<i64> = sqlx::query_scalar(
+        "SELECT extract(day FROM now() - created_at)::bigint FROM track_seeks ORDER BY created_at",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(left, vec![179, 0]);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_split_core_without_its_peers_keeps_tombstones_receipts_and_acks(
     pool: PgPool,
 ) -> anyhow::Result<()> {
