@@ -16,7 +16,7 @@ CROSS JOIN LATERAL (
     WHERE uploader_sc_user_id = u.uploader
       AND sharing = 'public' AND deleted_at IS NULL AND superseded_by IS NULL
     ORDER BY release_date DESC NULLS LAST, sc_created_at DESC NULLS LAST, sc_track_id DESC
-    LIMIT $3 + $4
+    LIMIT $3::bigint + $4::bigint
 ) t
 WHERE f.wanted_state
 ORDER BY t.release_date DESC NULLS LAST, t.sc_created_at DESC NULLS LAST, t.sc_track_id DESC
