@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use backend_contracts::{AdminMaintenancePayload, JobKind};
@@ -6,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{AdminMaintenanceHandler, CATALOG_RENORMALIZE, WANTED_ALIASES};
-use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob};
+use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob, WriteGovernor};
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
@@ -79,6 +80,12 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
 }
 
 pub(super) fn handler(pool: &PgPool) -> AdminMaintenanceHandler {
+    let governor = WriteGovernor::new(4);
+    governor.hold_calm(true);
+    handler_with(pool, governor)
+}
+
+pub(super) fn handler_with(pool: &PgPool, governor: Arc<WriteGovernor>) -> AdminMaintenanceHandler {
     let http = sc_fingerprint::builder(None)
         .timeout(Duration::from_secs(1))
         .build()
@@ -94,6 +101,7 @@ pub(super) fn handler(pool: &PgPool) -> AdminMaintenanceHandler {
             track_work_keys_batch: 5_000,
             track_enrich_queue_batch: 5_000,
         },
+        governor,
     )
 }
 

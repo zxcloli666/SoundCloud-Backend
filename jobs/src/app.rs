@@ -116,6 +116,7 @@ pub async fn run() -> anyhow::Result<()> {
             qdrant.clone(),
             connect_call_relay().await,
             lookup_lane.clone(),
+            bulk_governor.clone(),
         )
         .context("jobs handlers could not be created")?,
     );

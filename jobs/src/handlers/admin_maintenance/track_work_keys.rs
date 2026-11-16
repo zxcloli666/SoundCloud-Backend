@@ -4,7 +4,7 @@ mod tests;
 
 use uuid::Uuid;
 
-use super::track_search::{lagging, yielded, yielding};
+use super::track_search::{held_back, yielded, yielding};
 use super::{AdminMaintenanceHandler, PhaseOutcome, RunState, SliceProgress, TRACK_WORK_KEYS};
 use crate::queue::{JobError, JobResult};
 
@@ -21,7 +21,7 @@ pub async fn execute(
     state: &RunState,
 ) -> JobResult<PhaseOutcome> {
     let cursor = state.cursor_uuid.unwrap_or(Uuid::nil());
-    if state.phase != RECHECK && lagging(handler, MAX_LAG_SECONDS).await? {
+    if state.phase != RECHECK && held_back(handler, MAX_LAG_SECONDS).await? {
         return Ok(PhaseOutcome::Advanced);
     }
     match state.phase.as_str() {
