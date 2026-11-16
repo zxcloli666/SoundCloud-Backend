@@ -11,7 +11,7 @@ mod request;
 mod schema;
 
 pub use config::{
-    BreakerSettings, BudgetSettings, CapSettings, Kind, LadderSettings, ProviderSettings,
+    BreakerSettings, BudgetSettings, CapSettings, Kind, LadderSettings, ProviderSettings, Rung,
     SecretRef, Settings,
 };
 pub use document::Document;

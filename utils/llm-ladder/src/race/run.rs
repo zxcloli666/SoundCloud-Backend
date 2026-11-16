@@ -11,6 +11,7 @@ const USAGE_WAIT: Duration = Duration::from_secs(1);
 
 pub(super) struct Run {
     pub step: usize,
+    pub rung: usize,
     pub stream: StepStream,
     pub pass: Pass,
     pub document: Document,
@@ -27,7 +28,7 @@ pub(super) struct Run {
 
 impl Run {
     pub fn new(
-        step: usize,
+        (step, rung): (usize, usize),
         stream: StepStream,
         pass: Pass,
         started: Instant,
@@ -35,6 +36,7 @@ impl Run {
     ) -> Self {
         Self {
             step,
+            rung,
             stream,
             pass,
             document: Document::default(),

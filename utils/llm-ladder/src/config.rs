@@ -66,12 +66,19 @@ pub struct SecretRef {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LadderSettings {
-    pub steps: Vec<String>,
+    pub steps: Vec<Rung>,
     pub hedge_after_ms: u64,
     pub deadline_ms: u64,
     pub breaker: BreakerSettings,
     #[serde(default)]
     pub budget: CapSettings,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Rung {
+    One(String),
+    Together(Vec<String>),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -124,6 +131,7 @@ impl Settings {
         let steps = &self.ladders.get(ladder)?.steps;
         steps
             .iter()
+            .flat_map(Rung::providers)
             .filter_map(|step| self.providers.get(step))
             .any(|provider| provider.kind == Kind::Worker)
             .then_some(WORKER_MAX_SYSTEM_BYTES)
@@ -149,6 +157,15 @@ impl TryFrom<String> for SecretRef {
                 variable: variable.to_owned(),
             }),
             _ => Err("a secret is written as env:NAME, never as the value itself".to_owned()),
+        }
+    }
+}
+
+impl Rung {
+    pub fn providers(&self) -> &[String] {
+        match self {
+            Self::One(id) => std::slice::from_ref(id),
+            Self::Together(ids) => ids,
         }
     }
 }

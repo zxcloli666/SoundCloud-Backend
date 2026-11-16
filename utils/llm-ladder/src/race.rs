@@ -35,7 +35,8 @@ pub(crate) struct Race {
     ladder: Arc<Ladder>,
     request: Arc<Request>,
     plain: Option<Arc<Request>>,
-    waiting: VecDeque<usize>,
+    waiting: VecDeque<Vec<usize>>,
+    rungs_started: usize,
     running: Vec<Run>,
     winner: Option<Run>,
     rule: Rule,
@@ -54,7 +55,7 @@ impl Race {
     pub fn new(
         ladder: Arc<Ladder>,
         request: Request,
-        steps: Vec<usize>,
+        rungs: Vec<Vec<usize>>,
         rule: Rule,
         started: Instant,
     ) -> Self {
@@ -65,7 +66,8 @@ impl Race {
             ladder,
             plain: request.plainly().map(Arc::new),
             request: Arc::new(request),
-            waiting: steps.into(),
+            waiting: rungs.into(),
+            rungs_started: 0,
             running: Vec::new(),
             winner: None,
             rule,
@@ -159,35 +161,51 @@ impl Race {
     }
 
     fn start_next(&mut self) -> bool {
-        while let Some(&index) = self.waiting.front() {
-            let step = &self.ladder.steps[index];
-            if !step.provider.hedged && !self.running.is_empty() {
+        while let Some(rung) = self.waiting.pop_front() {
+            if !self.hedged(&rung) && !self.running.is_empty() {
+                self.waiting.push_front(rung);
                 self.hedge_at = None;
                 return false;
             }
-            self.waiting.pop_front();
             let now = Instant::now();
-            let Some(pass) = step.breaker.enter(now) else {
-                self.ladder.skipped(step, Skip::Breaker);
-                continue;
-            };
-            let time_left = self.deadline.saturating_duration_since(now);
-            let (_, asked) = self.asked(index);
-            let stream = step.provider.start(asked.clone(), time_left);
-            let expires = now + step.provider.total_timeout;
-            self.running
-                .push(Run::new(index, stream, pass, now, expires));
-            self.hedge_at = self.hedge_after(now);
-            return true;
+            let id = self.rungs_started;
+            self.rungs_started += 1;
+            let before = self.running.len();
+            for step in rung {
+                self.launch(step, id, now);
+            }
+            if self.running.len() > before {
+                self.hedge_at = self.hedge_after(now);
+                return true;
+            }
         }
         self.hedge_at = None;
         false
     }
 
+    fn launch(&mut self, index: usize, rung: usize, now: Instant) {
+        let ladder = self.ladder.clone();
+        let step = &ladder.steps[index];
+        let Some(pass) = step.breaker.enter(now) else {
+            ladder.skipped(step, Skip::Breaker);
+            return;
+        };
+        let time_left = self.deadline.saturating_duration_since(now);
+        let (_, asked) = self.asked(index);
+        let stream = step.provider.start(asked.clone(), time_left);
+        let expires = now + step.provider.total_timeout;
+        self.running
+            .push(Run::new((index, rung), stream, pass, now, expires));
+    }
+
+    fn hedged(&self, rung: &[usize]) -> bool {
+        rung.iter()
+            .all(|step| self.ladder.steps[*step].provider.hedged)
+    }
+
     fn hedge_after(&self, now: Instant) -> Option<Instant> {
-        let next = *self.waiting.front()?;
-        let hedged = self.ladder.steps[next].provider.hedged;
-        hedged.then(|| now + self.ladder.hedge_after)
+        let next = self.waiting.front()?;
+        self.hedged(next).then(|| now + self.ladder.hedge_after)
     }
 
     fn wake_at(&self) -> Instant {
@@ -235,7 +253,7 @@ impl Race {
         let mut winner = self.running.remove(index);
         for loser in std::mem::take(&mut self.running).into_iter().rev() {
             if self.rule.accept.is_some() {
-                self.waiting.push_front(loser.step);
+                self.waiting.push_front(vec![loser.step]);
             }
             self.settle(loser, StepResult::Lost);
         }
@@ -257,12 +275,15 @@ impl Race {
 
     fn drop_out(&mut self, index: usize, failure: Failure) {
         let run = self.running.remove(index);
+        let rung = run.rung;
         let failure = match run.document.is_complete() {
             true => Failure::Invalid,
             false => failure,
         };
         self.settle(run, StepResult::Failed(failure));
-        self.start_next();
+        if !self.running.iter().any(|run| run.rung == rung) {
+            self.start_next();
+        }
     }
 
     fn dethrone(&mut self, failure: Failure) -> Option<Item> {

@@ -27,7 +27,7 @@ Spend caps need NATS JetStream: the api opens the KV bucket named in `[budget]` 
 | `prefix_cache` | `anthropic_compatible` only: the object sent as `cache_control` on the system blocks that end a shared prefix, for example `{ type = "ephemeral" }`. Missing = the system text goes as one string and nothing is cached |
 | `body` | optional JSON object merged into the request body, for provider-specific knobs |
 | `headers` | http kinds: static request headers, for example the API version a vendor needs: `{ "anthropic-version" = "..." }`. `authorization`, `x-api-key`, `content-type`, `content-length` and `host` are refused |
-| `hedge` | default `true`. `false`: the step starts only when every earlier step has failed, never because they are silent. Set it on a model that must not get parallel calls, such as a local CPU model |
+| `hedge` | default `true`. `false`: the step starts only when every earlier step has failed, never because they are silent. Set it on a model that must not get parallel calls, such as a local CPU model. Such a step cannot be in a group |
 | `plain` | default `false`. `true`: the provider is asked the plain form of a request when the caller gives one, and its answer is judged by the rule of that form. Set it on a model that must not be trusted with the full request, such as a small local model. For the voice chat the plain form is the turn without tools |
 | `subject` | `worker` only: NATS subject of the local model |
 
@@ -37,8 +37,8 @@ A `worker` step gets the request cut to the limits of the worker method: the new
 
 | Key | Meaning |
 | --- | --- |
-| `steps` | provider ids, most wanted first |
-| `hedge_after_ms` | the next step starts when the running ones gave no output for this long, or at once when a step fails |
+| `steps` | provider ids, most wanted first. A list inside the list is a group: its steps start together and the first answer wins, for example `["alpha", ["beta", "gamma"]]` |
+| `hedge_after_ms` | the next step or group starts when the running ones gave no output for this long, or at once when a step fails and no other step of its group is still running |
 | `deadline_ms` | limit for the whole answer. Every step's `total_timeout_ms` must be below it |
 | `breaker` | `failures` within `window_s` seconds skip the provider for `open_s` seconds, then one call probes |
 | `[ladders.<id>.budget]` | optional caps in USD: `month_usd`, `day_usd`, `user_month_usd`, `user_day_usd`. A reached cap skips priced steps, free steps keep answering |

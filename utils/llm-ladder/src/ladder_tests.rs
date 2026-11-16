@@ -20,6 +20,8 @@ mod breaker;
 mod commit;
 #[path = "ladder_tests/complete.rs"]
 mod complete;
+#[path = "ladder_tests/group.rs"]
+mod group;
 #[path = "ladder_tests/hedge.rs"]
 mod hedge;
 #[path = "ladder_tests/race.rs"]
@@ -223,11 +225,26 @@ fn bench(providers: Vec<Provider>, caps: CapSettings) -> Bench {
 }
 
 fn assembled(providers: Vec<Provider>, caps: CapSettings, breaker: BreakerSettings) -> Bench {
+    let rungs = (0..providers.len()).map(|step| vec![step]).collect();
+    rungs_of(providers, rungs, caps, breaker)
+}
+
+fn grouped(providers: Vec<Provider>, rungs: Vec<Vec<usize>>) -> Bench {
+    rungs_of(providers, rungs, CapSettings::default(), BREAKER)
+}
+
+fn rungs_of(
+    providers: Vec<Provider>,
+    rungs: Vec<Vec<usize>>,
+    caps: CapSettings,
+    breaker: BreakerSettings,
+) -> Bench {
     let seen = Arc::new(Watched::default());
     let spend = Arc::new(MemorySpend::default());
     let caps = Caps::from(caps);
     let ladder = Ladder {
         id: "chat".to_owned(),
+        rungs,
         steps: providers
             .into_iter()
             .map(|provider| Step {

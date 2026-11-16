@@ -66,6 +66,14 @@ fn broken(text: &str) -> String {
     parsed(text).expect_err("the config is refused").to_string()
 }
 
+fn one(id: &str) -> Rung {
+    Rung::One(id.to_owned())
+}
+
+fn with_steps(steps: &str) -> String {
+    EXAMPLE.replace("[\"paid\", \"free\", \"local\"]", steps)
+}
+
 #[test]
 fn the_three_kinds_a_ladder_and_the_host_section_are_read() {
     let (settings, host) = parsed(EXAMPLE).unwrap();
@@ -89,7 +97,7 @@ fn the_three_kinds_a_ladder_and_the_host_section_are_read() {
         Some("ai.rpc.complete")
     );
     let chat = &settings.ladders["chat"];
-    assert_eq!(chat.steps, ["paid", "free", "local"]);
+    assert_eq!(chat.steps, [one("paid"), one("free"), one("local")]);
     assert_eq!(chat.budget.month_usd, Some(30.0));
     assert_eq!(chat.budget.day_usd, None);
     assert_eq!(settings.budget.unwrap().bucket, "example_spend");
@@ -235,6 +243,39 @@ fn static_headers_are_read_for_http_kinds_and_checked() {
         "max_output_tokens = 400\nheaders = { \"example-version\" = \"1\" }",
     ));
     assert!(on_a_worker.contains("is a worker"), "{on_a_worker}");
+}
+
+#[test]
+fn a_group_of_steps_is_read_as_one_rung() {
+    let (settings, _) = parsed(&with_steps("[\"paid\", [\"free\", \"local\"]]")).unwrap();
+    let together = Rung::Together(vec!["free".to_owned(), "local".to_owned()]);
+    assert_eq!(settings.ladders["chat"].steps, [one("paid"), together]);
+    assert_eq!(settings.max_system_bytes("chat"), Some(48_000));
+}
+
+#[test]
+fn a_group_is_never_empty_and_names_a_provider_once_in_the_whole_ladder() {
+    let empty = broken(&with_steps("[\"paid\", []]"));
+    assert!(empty.contains("empty group"), "{empty}");
+    let twice = broken(&with_steps("[\"paid\", [\"free\", \"paid\"]]"));
+    assert!(twice.contains("paid twice"), "{twice}");
+    let unknown = broken(&with_steps("[[\"paid\", \"ghost\"]]"));
+    assert!(unknown.contains("unknown provider ghost"), "{unknown}");
+}
+
+#[test]
+fn a_step_kept_out_of_the_hedge_is_never_put_into_a_group() {
+    let text = with_steps("[\"paid\", [\"free\", \"local\"]]").replace(
+        "max_output_tokens = 400",
+        "max_output_tokens = 400\nhedge = false",
+    );
+    let reason = broken(&text);
+    assert!(reason.contains("local into a group"), "{reason}");
+    let alone = EXAMPLE.replace(
+        "max_output_tokens = 400",
+        "max_output_tokens = 400\nhedge = false",
+    );
+    assert!(parsed(&alone).is_ok());
 }
 
 #[test]
