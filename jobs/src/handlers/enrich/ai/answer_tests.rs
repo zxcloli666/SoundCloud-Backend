@@ -309,6 +309,8 @@ fn the_prompt_carries_the_worker_words() -> anyhow::Result<()> {
          Uploaders are often re-upload channels; the real artist is then usually written in\n\
          the title as 'Artist - Title'. Every name you return must appear verbatim in the\n\
          metadata. Return null or empty lists when the metadata does not say.\n\
+         When the title names no artist, the uploader is usually the artist: return the uploader then,\n\
+         unless the uploader name says it is a channel, label, mix series or fan page posting other people's music.\n\
          Answer with exactly one JSON object and nothing else, no markdown and no text around it:\n\
          {\"primary_artist\": <name or null>, \"featured\": [<names>], \"producers\": [<names>],\n\
          \"remixers\": [<names>], \"album\": {\"title\": <name>, \"year\": <year or null>,\n\
