@@ -2449,6 +2449,7 @@
     {"cols": ["sc_track_id"], "name": "track_video_dispatch_track_fk", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "track_video_dispatch_pkey", "primary": true, "where": null}
@@ -2471,6 +2472,7 @@
     {"cols": ["sc_track_id"], "name": "track_videos_track_fk", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id", "kind"], "expr": false, "keys": ["sc_track_id", "kind"], "name": "track_videos_pkey", "primary": true, "where": null}
@@ -3065,6 +3067,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["name"], "expr": false, "keys": ["name"], "name": "video_accounts_name_key", "primary": false, "where": null},
@@ -3081,6 +3084,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["kind", "sc_user_id"], "expr": false, "keys": ["kind", "sc_user_id"], "name": "video_flags_pkey", "primary": true, "where": null}
