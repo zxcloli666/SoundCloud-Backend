@@ -224,6 +224,17 @@ pub async fn run() -> anyhow::Result<()> {
         Arc::new(AdminCatalogRpc::new(databases.main.fast.clone()))
             .serve(bus.clone(), cancellation.clone()),
     );
+    let video_accounts = handlers.video_accounts();
+    supervisor.spawn(
+        "admin video RPC",
+        video_accounts
+            .clone()
+            .serve(bus.clone(), cancellation.clone()),
+    );
+    supervisor.spawn(
+        "video account checks",
+        video_accounts.daily(cancellation.clone()),
+    );
     supervisor.spawn(
         "dependency health monitor",
         crate::health::monitor_dependencies(

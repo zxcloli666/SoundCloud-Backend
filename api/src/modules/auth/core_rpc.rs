@@ -4,6 +4,7 @@ use std::time::Duration;
 use backend_contracts::admin_catalog::{
     ADMIN_CATALOG_SUBJECT, AdminCatalogReply, AdminCatalogRequest,
 };
+use backend_contracts::admin_video::{ADMIN_VIDEO_SUBJECT, AdminVideoReply, AdminVideoRequest};
 use backend_contracts::auth::{
     AUTH_APP_TOKEN_SUBJECT, AUTH_REFRESH_SUBJECT, AppTokenReply, AppTokenRequest, RefreshReply,
     RefreshRequest,
@@ -18,6 +19,7 @@ use crate::bus::nats::{NatsRequestError, NatsService};
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const APP_TOKEN_TIMEOUT: Duration = Duration::from_secs(2);
 const ADMIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
+const ADMIN_VIDEO_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct CoreRpc {
     nats: Option<Arc<NatsService>>,
@@ -54,6 +56,14 @@ impl CoreRpc {
         request: &AdminCatalogRequest,
     ) -> Result<AdminCatalogReply, NatsRequestError> {
         self.request(ADMIN_CATALOG_SUBJECT, request, ADMIN_CATALOG_TIMEOUT)
+            .await
+    }
+
+    pub async fn admin_video(
+        &self,
+        request: &AdminVideoRequest,
+    ) -> Result<AdminVideoReply, NatsRequestError> {
+        self.request(ADMIN_VIDEO_SUBJECT, request, ADMIN_VIDEO_TIMEOUT)
             .await
     }
 

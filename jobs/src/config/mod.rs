@@ -32,6 +32,7 @@ pub struct JobsConfig {
     pub collab: CollabConfig,
     pub taste: TasteConfig,
     pub highlights: HighlightConfig,
+    pub video_accounts: VideoAccountsConfig,
     pub durations: DurationConfig,
     pub indexing: IndexingConfig,
     pub sync_queue: SyncQueueConfig,
@@ -360,6 +361,40 @@ impl HighlightConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct VideoAccountsConfig {
+    pub check_every: Duration,
+    pub spotify_totp_version: u32,
+    pub spotify_totp_cipher: Vec<u8>,
+    pub tg_webhook: redact::Secret<String>,
+}
+
+impl VideoAccountsConfig {
+    fn from_env() -> Result<Self, ConfigError> {
+        let cipher = env::parse::<String>(
+            "VIDEO_SPOTIFY_TOTP_CIPHER",
+            "44,55,47,42,70,40,34,114,76,74,50,111,120,97,75,76,94,102,43,69,49,120,118,80,64,78",
+        )?;
+        let spotify_totp_cipher = cipher
+            .split(',')
+            .map(|byte| byte.trim().parse::<u8>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| ConfigError::Invalid {
+                key: "VIDEO_SPOTIFY_TOTP_CIPHER".to_owned(),
+                reason: error.to_string(),
+            })?;
+        Ok(Self {
+            check_every: Duration::from_secs(env::positive_u64(
+                "VIDEO_ACCOUNTS_CHECK_SECONDS",
+                86_400,
+            )?),
+            spotify_totp_version: env::parse("VIDEO_SPOTIFY_TOTP_VERSION", "61")?,
+            spotify_totp_cipher,
+            tg_webhook: env::optional("TG_WEBHOOK").unwrap_or_default().into(),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct TasteConfig {
     pub export_interval: Duration,
     pub refresh_interval: Duration,
@@ -513,6 +548,7 @@ impl JobsConfig {
             collab: CollabConfig::from_env()?,
             taste: TasteConfig::from_env()?,
             highlights: HighlightConfig::from_env()?,
+            video_accounts: VideoAccountsConfig::from_env()?,
             durations: DurationConfig::from_env()?,
             indexing: IndexingConfig::from_env()?,
             sync_queue: SyncQueueConfig::from_env()?,

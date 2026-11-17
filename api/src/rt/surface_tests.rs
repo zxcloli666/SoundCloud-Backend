@@ -8,7 +8,7 @@ const REACHABLE_FROM_RT: [&str; 4] = [
     "src/modules/auth/link_service.rs",
 ];
 
-const NEVER_ON_RT: [&str; 11] = [
+const NEVER_ON_RT: [&str; 12] = [
     "get_valid_access_token",
     "get_lasting_access_token",
     "refresh_soundcloud",
@@ -19,6 +19,7 @@ const NEVER_ON_RT: [&str; 11] = [
     ".lasting_access_token(",
     ".app_token(",
     ".admin_catalog(",
+    ".admin_video(",
     "CoreRpc::new",
 ];
 

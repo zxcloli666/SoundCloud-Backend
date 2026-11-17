@@ -1114,6 +1114,30 @@ AS $f$
 SELECT md5(ROW(t.sc_synced_at, t.track_id)::text) FROM public.track_sync_stamps t WHERE t.track_id = (k ->> 'track_id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_video_dispatch(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempts, t.last_error, t.next_at, t.sc_track_id, t.stage, t.updated_at)::text) FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_videos(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.created_at, t.duration_ms, t.kind, t.loop, t.offset_ms, t.s3_key, t.sc_track_id, t.source, t.source_ref, t.verify)::text) FROM public.track_videos t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text AND t.kind = (k ->> 'kind')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_work_aliases(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1378,6 +1402,30 @@ AS $f$
 SELECT md5(ROW(t.avatar_url, t.banner_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_video_accounts(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.alerted_at, t.created_at, t.id, t.last_checked_at, t.last_error, t.name, t.secret, t.source, t.status, t.updated_at)::text) FROM public.video_accounts t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_video_flags(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.added_by, t.created_at, t.kind, t.sc_user_id)::text) FROM public.video_flags t WHERE t.kind = (k ->> 'kind')::text AND t.sc_user_id = (k ->> 'sc_user_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_wanted_track_albums(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1618,6 +1666,10 @@ BEGIN
             RETURN public.scd_row_hash_track_storage_failures(k);
         WHEN 'track_sync_stamps' THEN
             RETURN public.scd_row_hash_track_sync_stamps(k);
+        WHEN 'track_video_dispatch' THEN
+            RETURN public.scd_row_hash_track_video_dispatch(k);
+        WHEN 'track_videos' THEN
+            RETURN public.scd_row_hash_track_videos(k);
         WHEN 'track_work_aliases' THEN
             RETURN public.scd_row_hash_track_work_aliases(k);
         WHEN 'track_work_keys' THEN
@@ -1662,6 +1714,10 @@ BEGIN
             RETURN public.scd_row_hash_user_web_profiles(k);
         WHEN 'users' THEN
             RETURN public.scd_row_hash_users(k);
+        WHEN 'video_accounts' THEN
+            RETURN public.scd_row_hash_video_accounts(k);
+        WHEN 'video_flags' THEN
+            RETURN public.scd_row_hash_video_flags(k);
         WHEN 'wanted_track_albums' THEN
             RETURN public.scd_row_hash_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN
