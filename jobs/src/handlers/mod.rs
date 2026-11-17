@@ -47,6 +47,7 @@ mod subscriptions;
 mod sync_queue;
 pub(crate) mod taste;
 mod telemetry;
+pub(crate) mod video_accounts;
 mod wanted;
 mod worker_backlog;
 
@@ -92,6 +93,7 @@ use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
 use self::sync_queue::SyncQueueHandler;
 use self::telemetry::TelemetryHandler;
+use self::video_accounts::{Checker, Proxied, SpotifyKey, Telegram, VideoAccounts};
 use self::wanted::{AiMatcherClient, WantedHandler};
 
 pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
@@ -234,6 +236,7 @@ pub struct JobHandlers {
     sync_queue: SyncQueueHandler,
     telemetry: TelemetryHandler,
     wanted: Arc<WantedHandler>,
+    video_accounts: Arc<VideoAccounts<Proxied, Telegram>>,
 }
 
 impl JobHandlers {
@@ -387,7 +390,23 @@ impl JobHandlers {
                 databases.main.fast.clone(),
             ),
             wanted,
+            video_accounts: Arc::new(VideoAccounts::new(
+                databases.main.fast.clone(),
+                Checker::new(
+                    Proxied::new(sources.fetcher.clone()),
+                    SpotifyKey::new(
+                        config.video_accounts.spotify_totp_version,
+                        &config.video_accounts.spotify_totp_cipher,
+                    ),
+                ),
+                Telegram::new(config.video_accounts.tg_webhook.clone())?,
+                config.video_accounts.check_every,
+            )),
         })
+    }
+
+    pub fn video_accounts(&self) -> Arc<VideoAccounts<Proxied, Telegram>> {
+        self.video_accounts.clone()
     }
 
     pub async fn bootstrap(&self) -> JobResult {

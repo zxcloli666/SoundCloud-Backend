@@ -69,6 +69,7 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   handler MUST take `_: AdminAuth` as its **first** argument or the route is open to the world (this is how
   `/admin/collab/*` leaked). Body extractors (`Json`, `Option<Json<…>>`) are `FromRequest` and must stay **last**.
 - **Admin catalog writes run on core.** Edits of artists, credits, albums, wanted tracks, legacy playlist intents and enrich resets live in `utils/admin-catalog`, which only `jobs` links. The api admin handlers keep `_: AdminAuth` first, take a `RequestKey` (`Idempotency-Key` header or a fresh UUID) and `forward` an `AdminCommand` over `admin.catalog.v1` (10 s, core down is 503 with Retry-After). Admin reads stay local. A new admin write is a new variant in `backend-contracts/src/admin_catalog.rs` and a function in the crate, never SQL in the api.
+- **Video source accounts live on core only.** `/admin/video-accounts` (list, save, check) forwards an `AdminVideoCommand` over `admin.video.v1` (60 s); jobs checks the secret through the proxy pool before it saves and the api never sees a secret again. The tables are core-private (class P), so the api reads nothing of them.
 - **Комментариев в коде нет** — ни `//`, ни `///`, ни `//!`, ни в SQL, TOML, Dockerfile и CI. Смысл несут имена, типы и структура; объяснения идут в `docs/` и в чат.
 
 ## Gotchas (verified in prod)

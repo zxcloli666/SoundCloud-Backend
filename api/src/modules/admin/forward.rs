@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use backend_contracts::admin_catalog::{AdminCatalogRequest, AdminCommand};
+use backend_contracts::admin_video::{AdminVideoCommand, AdminVideoRequest};
 use uuid::Uuid;
 
 use crate::bus::nats::NatsRequestError;
@@ -42,6 +43,22 @@ pub async fn forward(
     let reply = state
         .core
         .admin_catalog(&request)
+        .await
+        .map_err(unreachable_core)?;
+    let status = StatusCode::from_u16(reply.status).map_err(|_| {
+        AppError::coded(
+            StatusCode::BAD_GATEWAY,
+            "core_failed",
+            "core answered with a bad status",
+        )
+    })?;
+    Ok((status, Json(reply.body)).into_response())
+}
+
+pub async fn forward_video(state: &AppState, command: AdminVideoCommand) -> AppResult<Response> {
+    let reply = state
+        .core
+        .admin_video(&AdminVideoRequest { command })
         .await
         .map_err(unreachable_core)?;
     let status = StatusCode::from_u16(reply.status).map_err(|_| {

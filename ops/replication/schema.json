@@ -2436,6 +2436,48 @@
     {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "track_sync_stamps_pkey", "primary": true, "where": null}
    ]
   },
+  "track_video_dispatch": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "attempts", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "next_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "stage", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["sc_track_id"], "name": "track_video_dispatch_track_fk", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "track_video_dispatch_pkey", "primary": true, "where": null}
+   ]
+  },
+  "track_videos": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "duration_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "loop", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "offset_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "s3_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "source_ref", "notnull": false, "type": "text"},
+    {"default": "'{}'::jsonb", "generated": false, "name": "verify", "notnull": true, "type": "jsonb"}
+   ],
+   "fks": [
+    {"cols": ["sc_track_id"], "name": "track_videos_track_fk", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["sc_track_id", "kind"], "expr": false, "keys": ["sc_track_id", "kind"], "name": "track_videos_pkey", "primary": true, "where": null}
+   ]
+  },
   "track_work_aliases": {
    "columns": [
     {"default": null, "generated": false, "name": "alias_key", "notnull": true, "type": "text"},
@@ -3007,6 +3049,45 @@
    "unique": [
     {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "users_pkey", "primary": true, "where": null},
     {"cols": ["urn"], "expr": false, "keys": ["urn"], "name": "users_urn_key", "primary": false, "where": null}
+   ]
+  },
+  "video_accounts": {
+   "columns": [
+    {"default": null, "generated": false, "name": "alerted_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "last_checked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "secret", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "text"},
+    {"default": "'unchecked'::text", "generated": false, "name": "status", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["name"], "expr": false, "keys": ["name"], "name": "video_accounts_name_key", "primary": false, "where": null},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "video_accounts_pkey", "primary": true, "where": null}
+   ]
+  },
+  "video_flags": {
+   "columns": [
+    {"default": null, "generated": false, "name": "added_by", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["kind", "sc_user_id"], "expr": false, "keys": ["kind", "sc_user_id"], "name": "video_flags_pkey", "primary": true, "where": null}
    ]
   },
   "wanted_track_albums": {

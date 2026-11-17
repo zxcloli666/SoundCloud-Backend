@@ -10,10 +10,11 @@ pub mod playlists;
 pub mod rooms;
 pub mod stats;
 pub mod sync_queue;
+pub mod video_accounts;
 pub mod wanted;
 
 use axum::Router;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 
 use crate::state::AppState;
 
@@ -79,6 +80,12 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/playlists/legacy/{archive_id}/abandon",
             post(playlists::abandon_legacy),
+        )
+        .route("/admin/video-accounts", get(video_accounts::list))
+        .route("/admin/video-accounts/{name}", put(video_accounts::save))
+        .route(
+            "/admin/video-accounts/{name}/check",
+            post(video_accounts::check),
         )
         .route("/admin/wanted-tracks", get(wanted::list))
         .route("/admin/wanted-tracks/{id}/link", post(wanted::link))

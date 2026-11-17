@@ -212,6 +212,16 @@ impl ExternalFetcher {
             .await
     }
 
+    pub async fn get_authenticated(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        max_bytes: usize,
+    ) -> SourceResult<Bytes> {
+        self.send_proxy(Method::GET, url, headers, None, max_bytes)
+            .await
+    }
+
     pub async fn get_scrape(
         &self,
         url: &str,

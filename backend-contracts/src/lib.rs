@@ -1,4 +1,5 @@
 pub mod admin_catalog;
+pub mod admin_video;
 pub mod auth;
 mod catalog_collection;
 mod catalog_refresh;

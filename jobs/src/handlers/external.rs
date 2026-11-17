@@ -8,6 +8,7 @@ use crate::config::{EnrichConfig, LyricsConfig};
 
 #[derive(Clone)]
 pub struct ExternalSources {
+    pub fetcher: Arc<ExternalFetcher>,
     pub musicbrainz: Arc<MbClient>,
     pub genius: Arc<GeniusService>,
     pub lyrics: Arc<LyricsSources>,
@@ -40,6 +41,7 @@ impl ExternalSources {
             lyrics.musixmatch_base.clone(),
         );
         Ok(Self {
+            fetcher: fetcher.clone(),
             musicbrainz: MbClient::new(background, enrich.musicbrainz_rate_limit_ms),
             genius,
             lyrics_on_demand: lyrics.with_fetcher(fetcher),

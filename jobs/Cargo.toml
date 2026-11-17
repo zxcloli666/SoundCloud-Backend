@@ -11,6 +11,8 @@ base64 = "0.22"
 bytes = "1"
 caseless = "0.2"
 sha2 = "0.10"
+hmac = "0.12"
+sha1 = "0.10"
 admin-catalog = { version = "0.1.0", path = "../utils/admin-catalog" }
 backend-contracts = { version = "1.0.0", path = "../backend-contracts" }
 catalog-normalize = { version = "0.1.0", path = "../utils/catalog-normalize" }

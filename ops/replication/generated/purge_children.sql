@@ -1032,6 +1032,36 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_track_video_dispatch(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_track_videos(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.kind, t.sc_track_id INTO p FROM public.track_videos t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text AND t.kind = (k ->> 'kind')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_videos t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text AND t.kind = (k ->> 'kind')::text;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_track_work_aliases(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1089,6 +1119,8 @@ BEGIN
     DELETE FROM public.track_highlights c WHERE c.track_id = p.id;
     DELETE FROM public.track_storage_failures c WHERE c.track_id = p.id;
     DELETE FROM public.track_sync_stamps c WHERE c.track_id = p.id;
+    DELETE FROM public.track_video_dispatch c WHERE c.sc_track_id = p.sc_track_id;
+    DELETE FROM public.track_videos c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.track_work_aliases c WHERE c.track_id = p.id;
     DELETE FROM public.track_work_keys c WHERE c.track_id = p.id;
     UPDATE public.tracks c SET superseded_by = NULL WHERE c.superseded_by = p.id;
@@ -1244,6 +1276,36 @@ BEGIN
         RETURN;
     END IF;
     DELETE FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_video_accounts(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.video_accounts t WHERE t.id = (k ->> 'id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.video_accounts t WHERE t.id = (k ->> 'id')::uuid;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_video_flags(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.kind, t.sc_user_id INTO p FROM public.video_flags t WHERE t.kind = (k ->> 'kind')::text AND t.sc_user_id = (k ->> 'sc_user_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.video_flags t WHERE t.kind = (k ->> 'kind')::text AND t.sc_user_id = (k ->> 'sc_user_id')::text;
 END
 $f$;
 
@@ -1449,6 +1511,10 @@ BEGIN
             PERFORM public.scd_purge_track_storage_failures(k);
         WHEN 'track_sync_stamps' THEN
             PERFORM public.scd_purge_track_sync_stamps(k);
+        WHEN 'track_video_dispatch' THEN
+            PERFORM public.scd_purge_track_video_dispatch(k);
+        WHEN 'track_videos' THEN
+            PERFORM public.scd_purge_track_videos(k);
         WHEN 'track_work_aliases' THEN
             PERFORM public.scd_purge_track_work_aliases(k);
         WHEN 'track_work_keys' THEN
@@ -1475,6 +1541,10 @@ BEGIN
             PERFORM public.scd_purge_user_web_profiles(k);
         WHEN 'users' THEN
             PERFORM public.scd_purge_users(k);
+        WHEN 'video_accounts' THEN
+            PERFORM public.scd_purge_video_accounts(k);
+        WHEN 'video_flags' THEN
+            PERFORM public.scd_purge_video_flags(k);
         WHEN 'wanted_track_albums' THEN
             PERFORM public.scd_purge_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN
