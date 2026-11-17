@@ -28,8 +28,8 @@ isolate_encode = false
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
-capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64, speak = 1, highlight = 2 }
-required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true, speak = true, highlight = true }
+capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64, speak = 1, highlight = 2, video-find = 1 }
+required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true, speak = true, highlight = true, video-find = true }
 required_grace_s = 300
 
 [slots.muq]
@@ -83,6 +83,13 @@ replicas = 1
 max_batch = 8
 max_wait_ms = 30
 
+[slots.clip]
+model = "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+revision = "1a25a446712ba5ee05982a381eed697ef9b435cf"
+replicas = 1
+max_batch = 16
+max_wait_ms = 0
+
 [slots.cpu-tools]
 model = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"
 revision = "7e69ec5451bc261cc7844e49e4792a85d7f09c06789ec800fc4a44aec362764e"
@@ -126,6 +133,49 @@ min_duration_s = 5.0
 max_duration_s = 450.0
 silence_dbfs = -60.0
 fingerprint_s = 120
+
+[video]
+upload_token = "env:VIDEO_UPLOAD_TOKEN"
+search_results = 5
+candidates_per_search = 3
+max_verified = 2
+min_candidate_s = 20.0
+max_candidate_s = 600.0
+duration_ratio_low = 0.7
+duration_ratio_high = 1.8
+duration_slack_s = 30.0
+max_download_mib = 96
+download_timeout_s = 240
+youtube_pause_min_s = 5.0
+youtube_pause_max_s = 10.0
+audio_format = "bestaudio[abr<=160]/bestaudio/worst"
+video_format = "bestvideo[height<=480]/bestvideo[height<=720]/bestvideo"
+window_s = 5.0
+window_stride_s = 2.5
+ber_max = 0.15
+overlap_min_s = 8.0
+peak_min = 12
+vote_hamming = 4
+max_pad_s = 15.0
+encode_height = 480
+encode_crf = 27
+encode_maxrate_kbps = 1400
+encode_fps = 30
+max_upload_mib = 64
+upload_timeout_s = 120
+
+[video.classifier]
+still_motion_med = 0.01
+still_motion_p90 = 0.05
+zoom_explained = 0.7
+over_still_static_share = 0.5
+animated_clip_div = 0.08
+short_file_s = 15.0
+loop_certain = 0.95
+loop_likely = 0.85
+cut_limit_per_min = 2.0
+uncertain_margin = 0.15
+static_margin = 0.3
 
 [sync]
 strategy = "anchored"

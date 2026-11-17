@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 ENV_PREFIX = "WORKER__"
 PROFILE_ENV = "WORKER_PROFILE"
 ENV_REF_PREFIX = "env:"
-SECRET_KEYS = frozenset({"password"})
+SECRET_KEYS = frozenset({"password", "upload_token"})
 INTEGER = re.compile(r"[+-]?\d+")
 
-LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak", "highlight")
+LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak", "highlight", "video-find")
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
 DEVICES = ("auto", "cuda", "cpu")
@@ -29,6 +29,7 @@ SYNC_STRATEGIES = ("anchored", "global_ctc")
 RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
 AI_LANE = "ai"
+VIDEO_LANE = "video-find"
 LOCAL_LLM_SLOT = "llm-local"
 LOCAL_LLM_METHOD = "complete"
 LOCAL_LLM_DEVICE = "llama-cpu"
@@ -55,6 +56,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         AI_LANE: (LOCAL_LLM_SLOT,),
         "speak": (TTS_SLOT,),
         "highlight": (),
+        "video-find": ("clip", "cpu-tools"),
     }
 )
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})
@@ -149,6 +151,54 @@ class AudioSection:
     max_duration_s: float
     silence_dbfs: float
     fingerprint_s: int
+
+
+@dataclass(frozen=True)
+class VideoClassifierSettings:
+    still_motion_med: float
+    still_motion_p90: float
+    zoom_explained: float
+    over_still_static_share: float
+    animated_clip_div: float
+    short_file_s: float
+    loop_certain: float
+    loop_likely: float
+    cut_limit_per_min: float
+    uncertain_margin: float
+    static_margin: float
+
+
+@dataclass(frozen=True)
+class VideoSection:
+    upload_token: str
+    search_results: int
+    candidates_per_search: int
+    max_verified: int
+    min_candidate_s: float
+    max_candidate_s: float
+    duration_ratio_low: float
+    duration_ratio_high: float
+    duration_slack_s: float
+    max_download_mib: int
+    download_timeout_s: float
+    youtube_pause_min_s: float
+    youtube_pause_max_s: float
+    audio_format: str
+    video_format: str
+    window_s: float
+    window_stride_s: float
+    ber_max: float
+    overlap_min_s: float
+    peak_min: int
+    vote_hamming: int
+    max_pad_s: float
+    encode_height: int
+    encode_crf: int
+    encode_maxrate_kbps: int
+    encode_fps: int
+    max_upload_mib: int
+    upload_timeout_s: float
+    classifier: VideoClassifierSettings
 
 
 @dataclass(frozen=True)
@@ -325,6 +375,7 @@ class Settings:
     lanes: LanesSection
     slots: Mapping[str, SlotSettings]
     audio: AudioSection
+    video: VideoSection
     sync: SyncSection
     collab: CollabSection
     taste: TasteSection
@@ -546,6 +597,7 @@ def validate(settings: Settings) -> None:
         *validate_slots(settings),
         *validate_sync(settings),
         *validate_taste(settings),
+        *validate_video(settings),
         *validate_local_llm(settings),
         *validate_tts(settings),
     ]
@@ -665,6 +717,20 @@ def validate_taste(settings: Settings) -> list[str]:
     if taste.max_object_mib < 1 or taste.min_users < 1 or taste.train_budget_s < 1:
         return ["taste.max_object_mib, min_users and train_budget_s must be >= 1"]
     return []
+
+
+def validate_video(settings: Settings) -> list[str]:
+    video = settings.video
+    problems = []
+    if VIDEO_LANE in settings.lanes.enabled and not video.upload_token:
+        problems.append("video.upload_token is empty while the video-find lane is enabled")
+    if video.window_s <= 0 or video.window_stride_s <= 0 or not 0 < video.ber_max < 0.5:
+        problems.append("video.window_s, window_stride_s must be > 0 and ber_max in (0, 0.5)")
+    if video.youtube_pause_min_s < 0 or video.youtube_pause_max_s < video.youtube_pause_min_s:
+        problems.append("video.youtube_pause_min_s <= youtube_pause_max_s, both >= 0")
+    if video.max_verified < 1 or video.candidates_per_search < 1 or video.search_results < 1:
+        problems.append("video.max_verified, candidates_per_search, search_results must be >= 1")
+    return problems
 
 
 def validate_local_llm(settings: Settings) -> list[str]:

@@ -75,6 +75,7 @@ CPU_TOOL_LOADERS: Mapping[str, str] = {
     "fingerprint": "worker.models.fingerprint:FingerprintSlot",
 }
 SLOT_LOADERS: Mapping[str, str] = {
+    "clip": "worker.models.clip:ClipSlot",
     "muq": "worker.models.muq:MuqSlot",
     "mulan": "worker.models.mulan:MulanSlot",
     "text": "worker.models.text_embed:TextEmbedSlot",
@@ -97,6 +98,7 @@ LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "ai": (),
     "speak": (settings_module.TTS_SLOT,),
     "highlight": (),
+    "video-find": ("clip",),
 }
 PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "audio": {"mert": "muq", "clap": "mulan"},
@@ -106,6 +108,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "collab": {},
     "taste": {},
     "highlight": {},
+    "video-find": {"clip": "clip"},
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
@@ -116,7 +119,7 @@ ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
 MULAN_TOWERS = "towers"
-AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight"})
+AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight", "video-find"})
 POOL_SPARE = 8
 EXIT_CRASHED = 1
 GATE_INTERVAL_S = 5.0

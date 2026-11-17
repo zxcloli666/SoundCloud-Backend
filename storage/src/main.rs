@@ -6,7 +6,7 @@ use std::time::Instant;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::Method;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
@@ -155,7 +155,13 @@ async fn main() {
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::HEAD, Method::POST, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+        ])
         .allow_headers(Any);
 
     let app = Router::new()
@@ -165,6 +171,10 @@ async fn main() {
         .route(
             "/upload",
             post(routes::upload::upload).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/video/{name}",
+            put(routes::video::put).layer(DefaultBodyLimit::disable()),
         )
         .route("/files/{filename}", delete(routes::files::delete))
         .route("/redirect/{*path}", get(routes::files::redirect))

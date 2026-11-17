@@ -76,6 +76,14 @@ impl Backend {
         }
     }
 
+    pub async fn put_file(&self, key: &str, src_tmp: &Path) -> Result<(), BackendError> {
+        match self {
+            Backend::Local(b) => b.put_file(key, src_tmp).await,
+            Backend::S3(b) => b.put_file(key, src_tmp).await,
+            Backend::Gdrive(b) => b.put_file(key, src_tmp).await,
+        }
+    }
+
     pub async fn delete_file(&self, key: &str) -> Result<bool, BackendError> {
         match self {
             Backend::Local(b) => b.delete_file(key).await,
@@ -138,6 +146,8 @@ pub fn content_type_for(key: &str) -> &'static str {
         "audio/ogg"
     } else if key.ends_with(".mp3") {
         "audio/mpeg"
+    } else if key.ends_with(".mp4") {
+        "video/mp4"
     } else {
         "application/octet-stream"
     }

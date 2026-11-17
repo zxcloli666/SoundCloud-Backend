@@ -64,6 +64,27 @@ impl LocalBackend {
         Ok(())
     }
 
+    pub async fn put_file(&self, key: &str, src_tmp: &Path) -> Result<(), BackendError> {
+        let dst = self.path_for(key);
+        let dst_dir = dst.parent().ok_or_else(|| {
+            BackendError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("destination has no parent: {}", dst.display()),
+            ))
+        })?;
+        tokio::fs::create_dir_all(dst_dir).await?;
+        let stage_path = dst_dir.join(format!(".{}.{}.tmp", key.replace('/', "_"), Uuid::new_v4()));
+        if let Err(err) = move_or_copy_file(src_tmp, &stage_path).await {
+            let _ = tokio::fs::remove_file(&stage_path).await;
+            return Err(err);
+        }
+        if let Err(err) = replace_file(&stage_path, &dst).await {
+            let _ = tokio::fs::remove_file(&stage_path).await;
+            return Err(err);
+        }
+        Ok(())
+    }
+
     pub async fn delete_file(&self, key: &str) -> Result<bool, BackendError> {
         let path = self.path_for(key);
         match tokio::fs::remove_file(&path).await {

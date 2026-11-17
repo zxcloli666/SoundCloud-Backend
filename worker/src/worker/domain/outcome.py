@@ -51,6 +51,10 @@ class Reason(StrEnum):
     WORKER_LOST = "worker_lost"
     PUBLIC_NODE_TIMEOUT = "public_node_timeout"
     SEPARATION_SKIPPED = "separation_skipped"
+    NO_VIDEO_FOUND = "no_video_found"
+    STATIC_VIDEO = "static_video"
+    SOURCE_RATE_LIMITED = "source_rate_limited"
+    SOURCE_AUTH_FAILED = "source_auth_failed"
 
 
 EMPTY_REASONS = frozenset(
@@ -61,6 +65,8 @@ EMPTY_REASONS = frozenset(
         Reason.AUDIO_TOO_SHORT,
         Reason.EMPTY_VOCAB,
         Reason.TOO_FEW_USERS,
+        Reason.NO_VIDEO_FOUND,
+        Reason.STATIC_VIDEO,
     }
 )
 MISSING_REASONS = frozenset(
@@ -96,6 +102,8 @@ TRANSIENT_FAILURES = frozenset(
         Reason.OUT_OF_MEMORY,
         Reason.DOWNLOAD_FAILED,
         Reason.OBJECT_STORE_UNAVAILABLE,
+        Reason.SOURCE_RATE_LIMITED,
+        Reason.SOURCE_AUTH_FAILED,
         Reason.INTERNAL_ERROR,
     }
 )
