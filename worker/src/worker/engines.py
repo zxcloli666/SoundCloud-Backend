@@ -340,7 +340,9 @@ class RuntimeEngines:
         return value
 
     async def embed_frames(self, frames: Uint8Array, deadline: Deadline) -> Float32Array:
-        arrays, _ = await self._slots.direct("clip", "embed_frames", {"frames": frames}, {}, deadline)
+        arrays, _ = await self._slots.direct(
+            "clip", "embed_frames", {"frames": frames}, {}, deadline
+        )
         return float32(arrays, "vectors", "clip")
 
     async def train_collab(

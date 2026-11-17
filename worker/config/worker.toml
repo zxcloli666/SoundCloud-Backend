@@ -136,6 +136,8 @@ fingerprint_s = 120
 
 [video]
 upload_token = "env:VIDEO_UPLOAD_TOKEN"
+proxy = "env:VIDEO_PROXY"
+analysis_s = 180.0
 search_results = 5
 candidates_per_search = 3
 max_verified = 2

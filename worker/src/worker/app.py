@@ -38,6 +38,9 @@ from worker.domain.lyrics.transcribe import TranscribeLane
 from worker.domain.outcome import Producer
 from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
+from worker.domain.video.publish import Uploader
+from worker.domain.video.ytdlp import YtDlp
+from worker.domain.video_find import VideoFindLane
 from worker.domain.workspace import WorkRoot, Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
 from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
@@ -441,6 +444,16 @@ class Node:
             ),
             "highlight": lambda: HighlightLane(
                 source, self.workspace, settings.audio, self.counters
+            ),
+            "video-find": lambda: VideoFindLane(
+                engines,
+                source,
+                YtDlp(settings.video, self.counters),
+                Uploader(audio_session, settings.video, self.counters),
+                self.workspace,
+                settings.audio,
+                settings.video,
+                self.counters,
             ),
         }
         rpc_methods: dict[str, Callable[[], Mapping[str, RpcMethod]]] = {

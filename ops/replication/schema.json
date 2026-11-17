@@ -2441,6 +2441,7 @@
     {"default": "0", "generated": false, "name": "attempts", "notnull": true, "type": "integer"},
     {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
     {"default": "now()", "generated": false, "name": "next_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "payload", "notnull": false, "type": "jsonb"},
     {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "stage", "notnull": true, "type": "text"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
@@ -3058,7 +3059,9 @@
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": null, "generated": false, "name": "last_checked_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_leased_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "paused_until", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "secret", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "source", "notnull": true, "type": "text"},
     {"default": "'unchecked'::text", "generated": false, "name": "status", "notnull": true, "type": "text"},

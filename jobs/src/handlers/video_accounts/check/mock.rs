@@ -7,30 +7,30 @@ use wreq::header::HeaderMap;
 use super::Fetch;
 
 #[derive(Clone)]
-pub(in crate::handlers::video_accounts) enum Answer {
+pub(crate) enum Answer {
     Body(String),
     Status(u16),
     Down,
 }
 
 #[derive(Default)]
-pub(in crate::handlers::video_accounts) struct Mock {
+pub(crate) struct Mock {
     routes: Mutex<Vec<(String, Answer)>>,
     seen: Mutex<Vec<(String, HeaderMap)>>,
 }
 
 impl Mock {
-    pub(in crate::handlers::video_accounts) fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
-    pub(in crate::handlers::video_accounts) fn route(&self, prefix: &str, answer: Answer) {
+    pub(crate) fn route(&self, prefix: &str, answer: Answer) {
         if let Ok(mut routes) = self.routes.lock() {
             routes.push((prefix.to_owned(), answer));
         }
     }
 
-    pub(in crate::handlers::video_accounts) fn requests(&self) -> Vec<(String, HeaderMap)> {
+    pub(crate) fn requests(&self) -> Vec<(String, HeaderMap)> {
         self.seen
             .lock()
             .map(|seen| seen.clone())
@@ -40,6 +40,16 @@ impl Mock {
 
 impl Fetch for Arc<Mock> {
     async fn get(&self, url: &str, headers: HeaderMap) -> SourceResult<Bytes> {
+        self.answer(url, headers)
+    }
+
+    async fn post(&self, url: &str, headers: HeaderMap, _body: Bytes) -> SourceResult<Bytes> {
+        self.answer(url, headers)
+    }
+}
+
+impl Mock {
+    fn answer(&self, url: &str, headers: HeaderMap) -> SourceResult<Bytes> {
         if let Ok(mut seen) = self.seen.lock() {
             seen.push((url.to_owned(), headers));
         }

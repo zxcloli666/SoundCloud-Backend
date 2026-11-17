@@ -1,7 +1,7 @@
 mod alert;
-mod check;
+pub(crate) mod check;
 mod rpc;
-mod store;
+pub(crate) mod store;
 #[cfg(test)]
 mod tests;
 
@@ -19,7 +19,9 @@ use tracing::{info, warn};
 use crate::bus::Bus;
 
 pub(crate) use self::alert::{Notify, Telegram};
-pub(crate) use self::check::{Checker, Fetch, Proxied, SpotifyKey, Verdict};
+pub(crate) use self::check::{
+    BROWSER_AGENT, Checker, Fetch, Proxied, SpotifyKey, Verdict, access_token, headers,
+};
 
 const TICK: Duration = Duration::from_secs(3_600);
 const CONCURRENCY: usize = 4;

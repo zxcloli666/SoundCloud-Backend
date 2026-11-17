@@ -81,6 +81,7 @@ DESIGN = {
             "taste": 1,
             "ai": 16,
             "highlight": 4,
+            "video-find": 1,
         },
         dict.fromkeys(SYNC_X2, 1),
         local_llm=True,

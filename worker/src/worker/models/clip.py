@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import open_clip
@@ -20,7 +21,7 @@ WARMUP_FRAMES = 2
 
 class ClipSlot:
     def __init__(self) -> None:
-        self._model: torch.nn.Module | None = None
+        self._model: Any = None
 
     def load(self, spec: SlotSpec) -> None:
         folder = snapshot_download(spec.model, revision=spec.revision, local_files_only=True)

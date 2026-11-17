@@ -26,6 +26,7 @@ BASE_ENV = {
     "NATS_URL": "nats://127.0.0.1:4222",
     "NATS_USER": "worker-trusted",
     "NATS_PASSWORD": "secret",
+    "VIDEO_UPLOAD_TOKEN": "video-secret",
 }
 
 

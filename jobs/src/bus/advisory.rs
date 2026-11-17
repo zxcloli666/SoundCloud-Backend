@@ -89,7 +89,8 @@ fn receiver_of(lane: WorkerLane) -> Option<WorkerLostLane> {
         | WorkerLane::Taste
         | WorkerLane::Ai
         | WorkerLane::Speak
-        | WorkerLane::Highlight => None,
+        | WorkerLane::Highlight
+        | WorkerLane::VideoFind => None,
     }
 }
 
@@ -598,7 +599,10 @@ mod tests {
                 .contains(&backend_contracts::reasons::WorkerReason::WorkerLost);
             let sent_again_without_a_receiver = matches!(
                 spec.lane,
-                WorkerLane::Collab | WorkerLane::Taste | WorkerLane::Highlight
+                WorkerLane::Collab
+                    | WorkerLane::Taste
+                    | WorkerLane::Highlight
+                    | WorkerLane::VideoFind
             );
             assert!(
                 !promises_reopen

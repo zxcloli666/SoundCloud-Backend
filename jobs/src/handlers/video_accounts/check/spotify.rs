@@ -39,31 +39,43 @@ struct Token {
 }
 
 pub(super) async fn check<F: Fetch>(fetch: &F, key: &SpotifyKey, sp_dc: &str) -> Verdict {
-    if sp_dc.is_empty() {
-        return Verdict::Rejected("sp_dc is empty".to_owned());
+    match access_token(fetch, key, sp_dc).await {
+        Ok(_) => Verdict::Valid,
+        Err(verdict) => verdict,
     }
-    let clock = match fetch_json::<ServerTime>(fetch, SERVER_TIME, "").await {
-        Ok(clock) => clock,
-        Err(verdict) => return verdict,
-    };
+}
+
+pub(crate) async fn access_token<F: Fetch>(
+    fetch: &F,
+    key: &SpotifyKey,
+    sp_dc: &str,
+) -> Result<String, Verdict> {
+    if sp_dc.is_empty() {
+        return Err(Verdict::Rejected("sp_dc is empty".to_owned()));
+    }
+    let clock = fetch_json::<ServerTime>(fetch, SERVER_TIME, "").await?;
     let Some(code) = totp::code(&key.secret, clock.seconds) else {
-        return Verdict::Unavailable("the Spotify TOTP key is unusable".to_owned());
+        return Err(Verdict::Unavailable(
+            "the Spotify TOTP key is unusable".to_owned(),
+        ));
     };
     let url = format!(
         "{TOKEN}?reason=init&productType=web-player&totp={code}&totpServer={code}&totpVer={}",
         key.version
     );
     let cookie = format!("sp_dc={sp_dc}");
-    match fetch_json::<Token>(fetch, &url, &cookie).await {
-        Ok(token) if token.access_token.is_empty() => {
-            Verdict::Unavailable("Spotify returned no access token".to_owned())
-        }
-        Ok(token) if token.anonymous => {
-            Verdict::Rejected("Spotify treats sp_dc as signed out".to_owned())
-        }
-        Ok(_) => Verdict::Valid,
-        Err(verdict) => verdict,
+    let token = fetch_json::<Token>(fetch, &url, &cookie).await?;
+    if token.access_token.is_empty() {
+        return Err(Verdict::Unavailable(
+            "Spotify returned no access token".to_owned(),
+        ));
     }
+    if token.anonymous {
+        return Err(Verdict::Rejected(
+            "Spotify treats sp_dc as signed out".to_owned(),
+        ));
+    }
+    Ok(token.access_token)
 }
 
 async fn fetch_json<T: serde::de::DeserializeOwned>(

@@ -18,10 +18,21 @@ if TYPE_CHECKING:
 ENV_PREFIX = "WORKER__"
 PROFILE_ENV = "WORKER_PROFILE"
 ENV_REF_PREFIX = "env:"
-SECRET_KEYS = frozenset({"password", "upload_token"})
+SECRET_KEYS = frozenset({"password", "upload_token", "proxy"})
 INTEGER = re.compile(r"[+-]?\d+")
 
-LANES = ("audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai", "speak", "highlight", "video-find")
+LANES = (
+    "audio",
+    "lyrics",
+    "transcribe",
+    "encode",
+    "collab",
+    "taste",
+    "ai",
+    "speak",
+    "highlight",
+    "video-find",
+)
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
 DEVICES = ("auto", "cuda", "cpu")
@@ -171,6 +182,8 @@ class VideoClassifierSettings:
 @dataclass(frozen=True)
 class VideoSection:
     upload_token: str
+    proxy: str
+    analysis_s: float
     search_results: int
     candidates_per_search: int
     max_verified: int

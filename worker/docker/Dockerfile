@@ -1,6 +1,7 @@
 ARG FLAVOR=cu126
 
 FROM ghcr.io/astral-sh/uv:0.12 AS uv
+FROM mirror.gcr.io/denoland/deno:bin-2.5.6 AS deno
 
 FROM mirror.gcr.io/library/python:3.12-bookworm AS builder
 ARG FLAVOR
@@ -26,6 +27,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --user-group --no-create-home --home-dir /tmp --shell /usr/sbin/nologin worker \
     && install -d -o worker -g worker /models /work /run/worker
+COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=builder /app/.venv /app/.venv
 COPY config /app/config
 COPY contract/worker-contract.json /app/contract/worker-contract.json

@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub(super) mod mock;
+pub(crate) mod mock;
 mod spotify;
 #[cfg(test)]
 mod tests;
@@ -16,9 +16,10 @@ use catalog_sources::{ExternalFetcher, SourceError, SourceResult};
 use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 
 pub use spotify::SpotifyKey;
+pub(crate) use spotify::access_token;
 
 const PAGE_LIMIT: usize = 4 * 1024 * 1024;
-const BROWSER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+pub(crate) const BROWSER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -32,6 +33,13 @@ pub trait Fetch: Send + Sync {
         &self,
         url: &str,
         headers: HeaderMap,
+    ) -> impl Future<Output = SourceResult<Bytes>> + Send;
+
+    fn post(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        body: Bytes,
     ) -> impl Future<Output = SourceResult<Bytes>> + Send;
 }
 
@@ -49,6 +57,12 @@ impl Fetch for Proxied {
     async fn get(&self, url: &str, headers: HeaderMap) -> SourceResult<Bytes> {
         self.fetcher
             .get_authenticated(url, headers, PAGE_LIMIT)
+            .await
+    }
+
+    async fn post(&self, url: &str, headers: HeaderMap, body: Bytes) -> SourceResult<Bytes> {
+        self.fetcher
+            .post_authenticated(url, headers, body, PAGE_LIMIT)
             .await
     }
 }
@@ -73,7 +87,7 @@ impl<F: Fetch> Checker<F> {
     }
 }
 
-fn headers(pairs: &[(&'static str, &str)]) -> Result<HeaderMap, Verdict> {
+pub(crate) fn headers(pairs: &[(&'static str, &str)]) -> Result<HeaderMap, Verdict> {
     let mut map = HeaderMap::new();
     for (name, value) in pairs {
         let value = HeaderValue::from_str(value).map_err(|_| {
