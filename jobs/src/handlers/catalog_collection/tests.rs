@@ -29,7 +29,11 @@ async fn setup(
         subject_id: "42".into(),
         owner: true,
     };
-    Ok((job, payload, CollectionWriter::new(pool.clone(), 420000)))
+    Ok((
+        job,
+        payload,
+        CollectionWriter::new(pool.clone(), 420000, 2_000),
+    ))
 }
 
 fn track(id: i64) -> Value {
@@ -1742,6 +1746,105 @@ async fn a_likers_page_writes_new_and_renamed_users_and_leaves_the_rest_alone(
     .fetch_one(&pool)
     .await?;
     assert_eq!(audience, 3);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, mut payload, _) = setup(&pool).await?;
+    let writer = CollectionWriter::new(pool.clone(), 420000, 3);
+    payload.collection = CatalogCollection::TrackFavoriters;
+    payload.owner = false;
+    sqlx::query(
+        "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at)
+         SELECT 'soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:' || n, now() - interval '1 day'
+         FROM generate_series(90, 95) AS n",
+    )
+    .execute(&pool)
+    .await?;
+    let first = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    assert!(
+        writer
+            .persist(
+                &job,
+                &payload,
+                &first,
+                fans(
+                    vec![fan(17, "A", 1), fan(18, "B", 1)],
+                    Some("v2:/tracks/42/likers?offset=2"),
+                ),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+    let second = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing continuation"))?;
+    assert!(
+        !writer
+            .persist(
+                &job,
+                &payload,
+                &second,
+                fans(
+                    vec![fan(19, "C", 1), fan(20, "D", 1)],
+                    Some("v2:/tracks/42/likers?offset=4"),
+                ),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+    let sync: (bool, i64, Option<String>) = sqlx::query_as(
+        "SELECT complete, item_count, next_cursor FROM catalog_collection_sync
+         WHERE subject_id = '42' AND collection = 'track-favoriters'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(sync, (true, 4, None));
+    let kept: Vec<String> = sqlx::query_scalar(
+        "SELECT user_urn FROM catalog_audience
+         WHERE subject_urn = 'soundcloud:tracks:42' AND relation = 'track-favoriters'
+         ORDER BY created_at DESC, user_urn DESC",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        kept,
+        [
+            "soundcloud:users:17",
+            "soundcloud:users:18",
+            "soundcloud:users:19",
+            "soundcloud:users:20"
+        ]
+    );
+
+    payload.collection = CatalogCollection::Followers;
+    let followers = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing followers snapshot"))?;
+    assert!(
+        writer
+            .persist(
+                &job,
+                &payload,
+                &followers,
+                fans(
+                    vec![
+                        fan(21, "E", 1),
+                        fan(22, "F", 1),
+                        fan(23, "G", 1),
+                        fan(24, "H", 1)
+                    ],
+                    Some("v2:/users/42/followers?offset=4"),
+                ),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
     Ok(())
 }
 

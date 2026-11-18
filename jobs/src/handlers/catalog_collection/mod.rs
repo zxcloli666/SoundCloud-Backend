@@ -50,6 +50,7 @@ impl CatalogCollectionHandler {
             writer: writer::CollectionWriter::new(
                 pool.clone(),
                 config.durations.max_track_duration_ms,
+                config.audience_max_items,
             ),
             pool,
             public,
