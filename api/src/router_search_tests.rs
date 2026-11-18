@@ -400,26 +400,6 @@ pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Rout
     ))
 }
 
-pub(super) async fn app_with(
-    pool: &PgPool,
-    config: AppConfig,
-    star: bool,
-) -> anyhow::Result<axum::Router> {
-    let mut st = state_with(pool, soundcloud_hits(), config).await?;
-    if !star {
-        st.subscriptions =
-            crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
-    }
-    Ok(crate::router::build(st))
-}
-
-pub(super) async fn app_without_star(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Router> {
-    let mut st = state(pool, soundcloud_hits(), redis).await?;
-    st.subscriptions =
-        crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
-    Ok(crate::router::build(st))
-}
-
 pub(crate) async fn app_with_handoff(
     pool: &PgPool,
     redis: &str,
