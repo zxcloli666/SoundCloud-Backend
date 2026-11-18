@@ -8,6 +8,8 @@ use serde_json::{Map, Value};
 
 pub use spec::ToolSpec;
 
+use super::answer::{SAY, WANTS_ACTION};
+
 const MAX_NAME_LEN: usize = 32;
 
 #[derive(Default)]
@@ -60,8 +62,12 @@ impl Tools {
         Self(self.0.into_iter().filter(|tool| !tool.returns).collect())
     }
 
+    pub fn plain_schema() -> Schema {
+        Schema::object([(WANTS_ACTION, Schema::Boolean), (SAY, Schema::String)])
+    }
+
     pub fn answer_schema(&self) -> Schema {
-        let say = ("say", Schema::String);
+        let say = (SAY, Schema::String);
         if self.is_empty() {
             return Schema::object([say]);
         }

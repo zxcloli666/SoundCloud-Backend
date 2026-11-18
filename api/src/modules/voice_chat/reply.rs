@@ -9,9 +9,9 @@ use axum::response::{IntoResponse, Response};
 use futures::stream::{self, StreamExt};
 use llm_ladder::{AnswerStream, Commit, Form, LadderError};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::answer::{Answer, Piece};
+use super::answer::{Answer, Piece, WANTS_ACTION};
 use super::readings::Readings;
 use super::tools::{Action, Tools};
 
@@ -83,7 +83,7 @@ impl Offered {
                 Piece::Name { .. } => true,
                 Piece::Action(raw) => self.tools.fit(raw).is_some(),
             }),
-            Form::Plain => only_speaks(pieces),
+            Form::Plain => answer.is_closed() && declines_action(held) && only_speaks(pieces),
         };
         if accepted {
             self.answered_plainly
@@ -102,6 +102,17 @@ impl Offered {
 
 fn blank(piece: &Piece) -> bool {
     matches!(piece, Piece::Say(text) if text.trim().is_empty())
+}
+
+fn declines_action(held: &str) -> bool {
+    let object = match (held.find('{'), held.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &held[start..=end],
+        _ => return false,
+    };
+    serde_json::from_str::<Value>(object)
+        .ok()
+        .and_then(|answer| answer.get(WANTS_ACTION).and_then(Value::as_bool))
+        == Some(false)
 }
 
 fn only_speaks(pieces: Vec<Piece>) -> bool {

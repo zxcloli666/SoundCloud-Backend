@@ -162,6 +162,7 @@ fn an_unknown_persona_and_a_bare_turn_use_the_default_voice_and_no_empty_section
     for absent in [
         "Tools:",
         "actions",
+        "wants_action",
         "language with the code",
         "asked you to remember",
         "App state",
@@ -258,7 +259,8 @@ fn the_plain_form_of_a_turn_is_the_same_turn_asked_without_its_tools() {
     assert_eq!(plain[2], whole[2]);
     let rules = &plain[0].text;
     assert!(rules.contains("Keep it short."));
-    assert!(rules.contains("{\"say\":\"<spoken reply>\"}"));
+    assert!(rules.contains("{\"wants_action\":<true|false>,\"say\":\"<spoken reply>\"}"));
+    assert!(rules.contains("\"wants_action\" comes first"));
     assert!(rules.contains("No tools are available"));
     assert!(rules.contains("Whose words count."));
     for absent in ["Tools:", "volume_set", "actions"] {

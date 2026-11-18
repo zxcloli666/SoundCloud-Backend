@@ -14,6 +14,11 @@ const LOUDER_ALOUD: &str = "{\"actions\":[{\"name\":\"volume_set\",\"args\":[{\"
 const UNKNOWN: &str = "{\"actions\":[{\"name\":\"erase_library\",\"args\":[]}],\"say\":\"\"}";
 const SPOKEN: &str = "{\"say\":\"Привет.\"}";
 const SPOKEN_WITH_NO_ACTIONS: &str = "{\"actions\":[],\"say\":\"Привет.\"}";
+const PLAINLY_SPOKEN: &str = "{\"wants_action\":false,\"say\":\"Привет.\"}";
+const PLAINLY_PROMISED: &str = "{\"wants_action\":true,\"say\":\"Поняла, громче.\"}";
+const PLAINLY_SO_FAR: &str = "{\"wants_action\":false,\"say\":\"Привет.\"";
+const PLAINLY_SILENT: &str = "{\"wants_action\":false,\"say\":\" \"}";
+const PLAINLY_A_NAME: &str = "{\"wants_action\":false,\"say\":\"[[Psychosis|Психосис]]\"}";
 const SILENT: &str = "{\"actions\":[],\"say\":\" \"}";
 const NOTHING: &str = "{\"actions\":[],\"say\":\"\"}";
 const NOTHING_SO_FAR: &str = "{\"actions\":[],\"say\":\"\"";
@@ -84,15 +89,30 @@ fn a_plain_answer_is_accepted_only_when_it_speaks_and_acts_on_nothing() {
     assert!(!offered.accepts(Form::Plain, LOUDER));
     assert!(!offered.accepts(Form::Plain, LOUDER_ALOUD));
     assert!(!offered.accepts(Form::Plain, UNKNOWN));
-    assert!(!offered.accepts(Form::Plain, SILENT));
-    assert!(offered.accepts(Form::Plain, SPOKEN));
-    assert!(offered.accepts(Form::Plain, SPOKEN_WITH_NO_ACTIONS));
+    assert!(!offered.accepts(Form::Plain, PLAINLY_SILENT));
+    assert!(offered.accepts(Form::Plain, PLAINLY_SPOKEN));
+}
+
+#[test]
+fn a_plain_answer_is_refused_when_the_phrase_asked_for_an_action() {
+    let offered = offered();
+    assert!(!offered.accepts(Form::Plain, PLAINLY_PROMISED));
+    assert!(offered.accepts(Form::Full, PLAINLY_PROMISED));
+}
+
+#[test]
+fn a_plain_answer_counts_only_whole_and_with_its_verdict() {
+    let offered = offered();
+    assert!(!offered.accepts(Form::Plain, PLAINLY_SO_FAR));
+    assert!(!offered.accepts(Form::Plain, SPOKEN));
+    assert!(!offered.accepts(Form::Plain, SPOKEN_WITH_NO_ACTIONS));
+    assert!(offered.accepts(Form::Plain, &format!("```json\n{PLAINLY_SPOKEN}\n```")));
 }
 
 #[test]
 fn no_action_fits_after_a_plain_answer_was_accepted() {
     let offered = offered();
-    assert!(offered.accepts(Form::Plain, SPOKEN));
+    assert!(offered.accepts(Form::Plain, PLAINLY_SPOKEN));
     assert!(offered.fit(louder()).is_none());
     assert!(!offered.accepts(Form::Plain, LOUDER_ALOUD));
     assert!(offered.fit(louder()).is_none());
@@ -121,7 +141,7 @@ fn a_whole_answer_that_does_and_says_nothing_is_accepted_only_where_silence_is_a
 fn a_reply_that_is_only_a_marked_name_counts_as_spoken() {
     let offered = offered();
     assert!(offered.accepts(Form::Full, ONLY_A_NAME));
-    assert!(offered.accepts(Form::Plain, ONLY_A_NAME));
+    assert!(offered.accepts(Form::Plain, PLAINLY_A_NAME));
     assert!(!offered.accepts(Form::Full, A_NAME_SO_FAR));
     assert!(!offered.accepts(Form::Plain, A_NAME_SO_FAR));
     assert!(overhearing().accepts(Form::Full, ONLY_A_NAME));

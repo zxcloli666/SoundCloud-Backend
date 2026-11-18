@@ -16,6 +16,9 @@ use crate::modules::voice_chat::testing::{Asked, Heard, Unwatched, hear, lane, l
 
 const NOTE: &str = "зови меня Саша";
 const SPEECH: &str = "{\"actions\":[],\"say\":\"Привет.\"}";
+const PLAIN_SPEECH: &str = "{\"wants_action\":false,\"say\":\"Привет.\"}";
+const PLAIN_PROMISE: &str =
+    "{\"wants_action\":true,\"say\":\"Поняла! Теперь громкость на максимум.\"}";
 const LOUDER: &str = "{\"actions\":[{\"name\":\"volume_set\",\"args\":[{\"name\":\"level\",\"value\":90}]}],\"say\":\"Громче.\"}";
 const NOTHING: &str = "{\"actions\":[],\"say\":\"\"}";
 const NO_WORD: &str = "{\"say\":\" \"}";
@@ -114,7 +117,7 @@ async fn a_chat_turn_reaches_the_worker_as_the_request_of_the_contract() {
 
 #[tokio::test]
 async fn a_plain_worker_is_asked_the_turn_without_tools() {
-    let talk = talk(SPEECH, PLAIN).await;
+    let talk = talk(PLAIN_SPEECH, PLAIN).await;
 
     assert_eq!(
         talk.heard.named(),
@@ -127,12 +130,25 @@ async fn a_plain_worker_is_asked_the_turn_without_tools() {
     assert!(!read.system.contains("volume_set"));
     assert!(read.system.contains("A cheerful voice named Loli."));
     assert!(read.system.contains(NOTE));
-    assert_eq!(talk.sent["schema"]["required"], json!(["say"]));
+    assert!(read.system.contains("\"wants_action\" comes first"));
+    assert_eq!(
+        talk.sent["schema"]["required"],
+        json!(["wants_action", "say"])
+    );
     assert_eq!(
         talk.sent["schema"]["properties"]
             .as_object()
             .map(|keys| keys.len()),
-        Some(1)
+        Some(2)
+    );
+}
+
+#[tokio::test]
+async fn a_plain_worker_that_heard_a_request_to_act_gives_no_reply() {
+    let plain = talk(PLAIN_PROMISE, PLAIN).await;
+    assert_eq!(
+        plain.heard.named(),
+        [("error", &json!({"code": "provider_failed"}))]
     );
 }
 
@@ -195,7 +211,7 @@ async fn a_plain_worker_is_not_let_to_stay_silent() {
                 .contains("Staying silent.")
         );
     }
-    let spoken = overheard(SPEECH, PLAIN).await;
+    let spoken = overheard(PLAIN_SPEECH, PLAIN).await;
     assert_eq!(events(&spoken.heard), ["say", "done"]);
 }
 

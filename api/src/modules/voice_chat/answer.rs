@@ -2,6 +2,7 @@ use serde_json::Value;
 
 const ACTIONS: &str = "actions";
 pub const SAY: &str = "say";
+pub const WANTS_ACTION: &str = "wants_action";
 const REPLACEMENT: char = '\u{fffd}';
 const UNICODE_DIGITS: usize = 4;
 const MARK_OPEN: char = '[';
