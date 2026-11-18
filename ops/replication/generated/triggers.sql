@@ -6105,6 +6105,75 @@ CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_videos FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_videos', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE FUNCTION public.scd_owner_track_videos()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id, 'kind', OLD.kind)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.sc_track_id, NEW.kind) IS DISTINCT FROM (OLD.sc_track_id, OLD.kind) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id, 'kind', OLD.kind)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id, 'kind', NEW.kind)) THEN
+                    INSERT INTO public.track_videos (created_at, duration_ms, kind, "loop", offset_ms, s3_key, sc_track_id, source, source_ref, verify) VALUES (NEW.created_at, NEW.duration_ms, NEW.kind, NEW."loop", NEW.offset_ms, NEW.s3_key, NEW.sc_track_id, NEW.source, NEW.source_ref, NEW.verify);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id, 'kind', NEW.kind)) THEN
+                DELETE FROM public.track_videos t WHERE (t.sc_track_id, t.kind) = (OLD.sc_track_id, OLD.kind);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id, 'kind', NEW.kind)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.track_videos t WHERE (t.sc_track_id, t.kind) = (NEW.sc_track_id, NEW.kind) FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id, 'kind', NEW.kind)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.track_videos t SET created_at = NEW.created_at, duration_ms = NEW.duration_ms, "loop" = NEW."loop", offset_ms = NEW.offset_ms, s3_key = NEW.s3_key, source = NEW.source, source_ref = NEW.source_ref, verify = NEW.verify WHERE (t.sc_track_id, t.kind) = (NEW.sc_track_id, NEW.kind);
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.track_videos (created_at, duration_ms, kind, "loop", offset_ms, s3_key, sc_track_id, source, source_ref, verify)
+        VALUES (NEW.created_at, NEW.duration_ms, NEW.kind, NEW."loop", NEW.offset_ms, NEW.s3_key, NEW.sc_track_id, NEW.source, NEW.source_ref, NEW.verify)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.track_videos still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_videos FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_videos();
+ALTER TABLE public.track_videos ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_videos FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.track_videos ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_keys FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_keys', 'cmd', 'migration', 'repl');
@@ -8460,6 +8529,8 @@ BEGIN
             ('track_sync_stamps', 'zzz_suppress'),
             ('track_video_dispatch', 'zz_guard'),
             ('track_videos', 'zz_guard'),
+            ('track_videos', 'zz_owner'),
+            ('track_videos', 'zzz_suppress'),
             ('track_work_aliases', 'zz_guard'),
             ('track_work_keys', 'zz_guard'),
             ('tracks', 'zz_guard'),

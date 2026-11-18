@@ -5,6 +5,7 @@ pub mod highlight;
 pub mod normalize;
 pub mod repository;
 pub mod service;
+pub mod video;
 
 pub use catalog_ingest::TrackPriority;
 pub use handlers::router;

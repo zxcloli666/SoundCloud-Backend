@@ -1147,7 +1147,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.created_at, t.duration_ms, t.kind, t.loop, t.offset_ms, t.s3_key, t.sc_track_id, t.source, t.source_ref, t.verify)::text) FROM public.track_videos t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text AND t.kind = (k ->> 'kind')::text
+SELECT md5(ROW(t.created_at, t.duration_ms, t.kind, t."loop", t.offset_ms, t.s3_key, t.sc_track_id, t.source, t.source_ref, t.verify)::text) FROM public.track_videos t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text AND t.kind = (k ->> 'kind')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_work_aliases(k jsonb)

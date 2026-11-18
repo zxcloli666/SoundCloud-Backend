@@ -86,6 +86,7 @@ tables:
   track_highlights: {class: C, note: "the moment of a track (start_ms, length_ms, score of its catchiest window) by highlight algorithm version; written on core only by the jobs highlight result consumer, read by the api track projection and the moments wave"}
   track_search: {class: C, note: "narrow copy of the searchable tracks rows (public, not deleted, not superseded) for the full-text search, written on core only by the track_search triggers on tracks and the admin track_search backfill"}
   track_sync_stamps: {class: C, note: "tracks.sc_synced_at in a narrow row, so a sync that changes nothing else stops rewriting the tracks row; written with the stamp by observe.tracks and the jobs playlist observe upsert (a sync that changes nothing moves only the stamp), filled by the admin track_sync_stamps backfill"}
+  track_videos: {class: C, note: "found or generated video of a track by kind (clip, loop, generated): s3 key, offset, loop flag and verification scores; written on core only by the jobs video sweep, read by the api track projection"}
   tracks:
     class: C
     id: {ns: tracks, from: [urn]}
@@ -161,7 +162,6 @@ tables:
   track_highlight_dispatch: {class: P, note: "core-private highlight lane state per track: queue order by popularity, attempt, failures and backoff; jobs fills it from a walk over the playable tracks and settles it from done.highlight"}
   track_storage_failures: {class: P, note: "core-private time of the last write that left a tracks row in storage_state failed, kept by track_storage_failures_sync; the failed-storage retry waits 24 h from it"}
   track_video_dispatch: {class: P, note: "core-private video lane state per track: stage, attempts, next_at and last_error; jobs fills and settles it"}
-  track_videos: {class: P, note: "core-private found or generated video of a track by kind (clip, loop, generated): s3 key, offset, loop flag and verification scores; becomes class C when the api serves the video"}
   video_accounts: {class: P, note: "core-private source accounts of the video lane with their secrets (cookies or tokens); never replicated, written only by the jobs admin video RPC and read back as a sha256 prefix"}
   video_flags: {class: P, note: "core-private admin flags (artist or account) that opt a catalog owner into video generation"}
   track_work_aliases: {class: P}

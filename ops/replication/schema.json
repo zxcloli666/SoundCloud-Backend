@@ -2492,7 +2492,9 @@
    "fks": [
    ],
    "triggers": [
-    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_track_videos", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id", "kind"], "expr": false, "keys": ["sc_track_id", "kind"], "name": "track_videos_pkey", "primary": true, "where": null}
