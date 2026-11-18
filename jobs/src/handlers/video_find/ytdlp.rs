@@ -1,12 +1,14 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use super::pool::ProxyPool;
 use super::sources::Failure;
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -69,32 +71,20 @@ pub(crate) trait Tube: Send + Sync {
 
 pub(crate) struct YtDlp {
     binary: PathBuf,
-    proxy: Option<String>,
-    proxy_ru: Option<String>,
+    pool: Arc<ProxyPool>,
     work_dir: PathBuf,
     download_timeout: Duration,
     max_file_mib: u64,
 }
 
 impl YtDlp {
-    pub(crate) fn new(config: &crate::config::VideoFindConfig) -> Self {
+    pub(crate) fn new(config: &crate::config::VideoFindConfig, pool: Arc<ProxyPool>) -> Self {
         Self {
             binary: config.ytdlp.clone(),
-            proxy: config.proxy_url.clone(),
-            proxy_ru: config
-                .proxy_ru_url
-                .clone()
-                .or_else(|| config.proxy_url.clone()),
+            pool,
             work_dir: config.work_dir.clone(),
             download_timeout: config.download_timeout,
             max_file_mib: config.max_file_mib,
-        }
-    }
-
-    fn proxy_for(&self, exit: Exit) -> Option<&str> {
-        match exit {
-            Exit::Anywhere => self.proxy.as_deref(),
-            Exit::Russia => self.proxy_ru.as_deref(),
         }
     }
 
@@ -149,11 +139,11 @@ impl YtDlp {
         exit: Exit,
         timeout: Duration,
     ) -> Result<Vec<u8>, Failure> {
-        let direct = self.run(args, cookies, None, timeout).await;
-        match (direct, self.proxy_for(exit)) {
-            (Err(_), Some(proxy)) => self.run(args, cookies, Some(proxy), timeout).await,
-            (other, _) => other,
-        }
+        self.pool
+            .routed(exit, |proxy| async move {
+                self.run(args, cookies, proxy.as_deref(), timeout).await
+            })
+            .await
     }
 }
 

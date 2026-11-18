@@ -67,30 +67,6 @@ impl Fetch for Proxied {
     }
 }
 
-pub struct DirectFirst {
-    fetcher: Arc<ExternalFetcher>,
-}
-
-impl DirectFirst {
-    pub fn new(fetcher: Arc<ExternalFetcher>) -> Self {
-        Self { fetcher }
-    }
-}
-
-impl Fetch for DirectFirst {
-    async fn get(&self, url: &str, headers: HeaderMap) -> SourceResult<Bytes> {
-        self.fetcher
-            .get_direct_first(url, headers, PAGE_LIMIT)
-            .await
-    }
-
-    async fn post(&self, url: &str, headers: HeaderMap, body: Bytes) -> SourceResult<Bytes> {
-        self.fetcher
-            .post_direct_first(url, headers, body, PAGE_LIMIT)
-            .await
-    }
-}
-
 pub struct Checker<F> {
     fetch: F,
     spotify: SpotifyKey,

@@ -53,8 +53,7 @@ pub struct VideoFindConfig {
     pub temp_ttl: Duration,
     pub sweep_every: Duration,
     pub ytdlp: PathBuf,
-    pub proxy_url: Option<String>,
-    pub proxy_ru_url: Option<String>,
+    pub proxy_list: Option<PathBuf>,
     pub work_dir: PathBuf,
     pub objects: Option<ObjectsConfig>,
 }
@@ -100,8 +99,7 @@ impl VideoFindConfig {
             temp_ttl: Duration::from_secs(env::positive_u64("VIDEO_TEMP_TTL_DAYS", 3)? * 86_400),
             sweep_every: Duration::from_secs(env::positive_u64("VIDEO_TEMP_SWEEP_SECONDS", 3_600)?),
             ytdlp: env::parse("VIDEO_YTDLP_PATH", "yt-dlp")?,
-            proxy_url: env::optional("VIDEO_PROXY_URL"),
-            proxy_ru_url: env::optional("VIDEO_PROXY_RU_URL"),
+            proxy_list: env::optional("VIDEO_PROXY_LIST").map(PathBuf::from),
             work_dir: env::parse("VIDEO_WORK_DIR", "/tmp/video")?,
             objects,
         })
