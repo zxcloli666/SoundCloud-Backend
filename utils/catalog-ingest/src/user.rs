@@ -6,7 +6,7 @@ use sqlx::{PgConnection, PgPool};
 use wt::{Mode, ObserveProfile, ObserveUsers};
 
 use crate::Observation;
-use crate::sc_payload::{parse_dt, string_field, without_nul};
+use crate::sc_payload::{parse_dt, permalink_field, string_field, without_nul};
 
 const REPLACED_WHEN_PRESENT: [&str; 13] = [
     "full_name",
@@ -209,7 +209,7 @@ impl ScUserFields {
         let first_name = string_field(payload, "first_name");
         let last_name = string_field(payload, "last_name");
         let permalink = string_field(payload, "permalink");
-        let permalink_url = string_field(payload, "permalink_url");
+        let permalink_url = permalink_field(payload, "permalink_url");
         let avatar_url = string_field(payload, "avatar_url");
         let banner_url = banner_url(payload);
         let country =

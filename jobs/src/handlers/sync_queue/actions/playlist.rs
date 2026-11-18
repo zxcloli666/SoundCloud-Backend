@@ -192,7 +192,9 @@ impl CreatedPlaylist {
                 .map(str::to_owned)
                 .collect(),
             artwork_url: string(value, "artwork_url").unwrap_or_default(),
-            permalink_url: string(value, "permalink_url").unwrap_or_default(),
+            permalink_url: string(value, "permalink_url")
+                .map(|url| catalog_ingest::clean_permalink(&url))
+                .unwrap_or_default(),
             owner_username: owner
                 .and_then(|owner| string(owner, "username"))
                 .unwrap_or_default(),

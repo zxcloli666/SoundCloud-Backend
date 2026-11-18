@@ -112,7 +112,7 @@ impl ScTrackFields {
         let needs_duration_resolve = duration_ms <= 0 || (duration_ms == 30000 && full.is_none());
 
         let artwork_url = string_field(payload, "artwork_url");
-        let permalink_url = string_field(payload, "permalink_url");
+        let permalink_url = permalink_field(payload, "permalink_url");
         let waveform_url = string_field(payload, "waveform_url");
         let language = string_field(payload, "language");
         let isrc = extract_isrc(payload);
@@ -174,7 +174,7 @@ impl ScTrackFields {
 
 use catalog_normalize::normalize_title;
 
-use crate::sc_payload::{parse_dt, string_field, without_nul};
+use crate::sc_payload::{parse_dt, permalink_field, string_field, without_nul};
 
 fn extract_isrc(payload: &Value) -> Option<String> {
     let candidates = [
