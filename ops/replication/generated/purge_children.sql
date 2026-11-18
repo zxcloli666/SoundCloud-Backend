@@ -1119,8 +1119,6 @@ BEGIN
     DELETE FROM public.track_highlights c WHERE c.track_id = p.id;
     DELETE FROM public.track_storage_failures c WHERE c.track_id = p.id;
     DELETE FROM public.track_sync_stamps c WHERE c.track_id = p.id;
-    DELETE FROM public.track_video_dispatch c WHERE c.sc_track_id = p.sc_track_id;
-    DELETE FROM public.track_videos c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.track_work_aliases c WHERE c.track_id = p.id;
     DELETE FROM public.track_work_keys c WHERE c.track_id = p.id;
     UPDATE public.tracks c SET superseded_by = NULL WHERE c.superseded_by = p.id;

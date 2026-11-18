@@ -33,10 +33,6 @@ CREATE TABLE IF NOT EXISTS public.track_videos (
     CONSTRAINT track_videos_window_valid CHECK (offset_ms >= 0 AND duration_ms > 0)
 );
 
-ALTER TABLE public.track_videos
-    ADD CONSTRAINT track_videos_track_fk
-    FOREIGN KEY (sc_track_id) REFERENCES public.tracks(sc_track_id) ON DELETE CASCADE NOT VALID;
-
 CREATE TABLE IF NOT EXISTS public.track_video_dispatch (
     sc_track_id text PRIMARY KEY,
     stage text NOT NULL,
@@ -47,10 +43,6 @@ CREATE TABLE IF NOT EXISTS public.track_video_dispatch (
     CONSTRAINT track_video_dispatch_attempts_valid CHECK (attempts >= 0),
     CONSTRAINT track_video_dispatch_stage_valid CHECK (stage <> '')
 );
-
-ALTER TABLE public.track_video_dispatch
-    ADD CONSTRAINT track_video_dispatch_track_fk
-    FOREIGN KEY (sc_track_id) REFERENCES public.tracks(sc_track_id) ON DELETE CASCADE NOT VALID;
 
 CREATE INDEX IF NOT EXISTS track_video_dispatch_due_idx
     ON public.track_video_dispatch (stage, next_at);

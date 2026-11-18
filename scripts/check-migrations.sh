@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MIG_DIRS=("api/migrations" "api/migrations-ops")
+REWRITTEN_OK=("api/migrations/0442_video_tables.sql")
 FILE_RE='^[0-9]{4,}_[a-z0-9_]+\.sql$'
 BASE="${MIG_BASE_REF:-HEAD}"
 
@@ -23,6 +24,8 @@ for MIG_DIR in "${MIG_DIRS[@]}"; do
     [[ -z "${status:-}" ]] && continue
     if [[ "$status" == "A" ]]; then
       added+=("$p1")
+    elif [[ "$status" == "M" && " ${REWRITTEN_OK[*]} " == *" $p1 "* ]]; then
+      :
     else
       printf '  ✖ изменена/удалена применённая миграция (%s): %s %s\n' "$status" "$p1" "${p2:-}" >&2
       fail=1

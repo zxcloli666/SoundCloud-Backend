@@ -2447,7 +2447,6 @@
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
    ],
    "fks": [
-    {"cols": ["sc_track_id"], "name": "track_video_dispatch_track_fk", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
    ],
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
@@ -2470,7 +2469,6 @@
     {"default": "'{}'::jsonb", "generated": false, "name": "verify", "notnull": true, "type": "jsonb"}
    ],
    "fks": [
-    {"cols": ["sc_track_id"], "name": "track_videos_track_fk", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
    ],
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
