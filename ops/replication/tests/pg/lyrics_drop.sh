@@ -6,20 +6,6 @@ ld_lookup="$root/jobs/queries/lyrics"
 ld_cols="'attempts', 'last_attempt_at', 'claim_job_id', 'claim_job_generation', 'claim_job_lease_id', 'claim_state_generation', 'claim_expires_at'"
 ld_mk=0
 
-ld_apply() {
-  local f b v
-  for f in "$root"/api/migrations/*.sql; do
-    b="${f##*/}"
-    v="${b%%_*}"
-    [[ "$v" < "$2" || "$v" > "$3" ]] && continue
-    if [ "$(head -1 "$f")" = "-- no-transaction" ]; then
-      sql -d "scd_b1_$1" -c "SET client_min_messages = error" -f - < "$f" > /dev/null
-    else
-      sql -1 -d "scd_b1_$1" -c "SET client_min_messages = error" -f - < "$f" > /dev/null
-    fi
-  done
-}
-
 ld_seed() {
   sql -d scd_b1_ld_core -c "INSERT INTO public.tracks (id, urn, sc_track_id, title, title_normalized, duration_ms)
     SELECT gen_random_uuid(), 'urn:t:ld' || n, 'ld' || n, 'Ld ' || n, 'ld ' || n, 1000 FROM generate_series($1, $2) AS n" > /dev/null
@@ -111,7 +97,7 @@ ld_seed 1 4
 ld_reach "0284 everywhere"
 ld_same "0284 everywhere: lyrics_lookup_state equal"
 
-ld_apply ld_core "$ld_from" "$ld_to"
+migrate_range ld_core "$ld_from" "$ld_to"
 want "core at 0292: 25 columns, published with 25, none of the 7" "$(only ld_core "SELECT (SELECT count(*) FROM pg_catalog.pg_attribute WHERE attrelid = 'public.lyrics_lookup_state'::regclass AND attnum > 0 AND NOT attisdropped)
   || ' ' || count(*) || ' ' || count(*) FILTER (WHERE c IN ($ld_cols))
   FROM pg_catalog.pg_publication_tables t, unnest(t.attnames) c WHERE t.pubname = 'scd_core_pub' AND t.tablename = 'lyrics_lookup_state'")" "25 25 0"
@@ -129,14 +115,14 @@ want "star at 0284: the settle is not HOT (the due and wake indexes hold next_ru
 ld_same "core 0292, api 0284: lyrics_lookup_state equal"
 ld_errors "core 0292, api 0284"
 
-ld_apply ld_main "$ld_from" "$ld_to"
-ld_apply ld_star "$ld_from" 0290
+migrate_range ld_main "$ld_from" "$ld_to"
+migrate_range ld_star "$ld_from" 0290
 sql -d scd_b1_ld_star -c "SET application_name = 'ld_holder'" -c "BEGIN" -c "SELECT count(*) FROM public.lyrics_lookup_state" \
   -c "SELECT pg_sleep(8)" -c "COMMIT" > "$tmp/ld_holder.out" 2>&1 &
 ld_holder=$!
 wait_for scd_b1_ld_star "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'ld_holder' AND wait_event = 'PgSleep')" "star: a reader holds lyrics_lookup_state for 8 s"
 ld_start="$(date +%s)"
-ld_apply ld_star 0291 0291 > "$tmp/ld_drop.out" 2>&1 &
+migrate_range ld_star 0291 0291 > "$tmp/ld_drop.out" 2>&1 &
 ld_drop=$!
 wait_for scd_b1_ld_star "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE pid <> pg_catalog.pg_backend_pid() AND datname = current_database()
   AND query LIKE '%IN ACCESS EXCLUSIVE MODE%')" "star: 0291 waits for its lock"
@@ -152,7 +138,7 @@ wait "$ld_drop" || { echo "FAIL star: 0291 failed"; cat "$tmp/ld_drop.out"; exit
 ld_took=$(($(date +%s) - ld_start))
 [ "$ld_took" -ge 3 ] || { echo "FAIL star: 0291 took $ld_took s, it never waited for the reader"; exit 1; }
 echo "ok star: 0291 retried its lock until the reader committed ($ld_took s)"
-ld_apply ld_star 0292 "$ld_to"
+migrate_range ld_star 0292 "$ld_to"
 
 for n in core main star; do
   want "$n at 0292: columns, key indexes only, fillfactor, generation_valid validated without attempts, no unpublished leftovers" "$(only "ld_$n" "SELECT
