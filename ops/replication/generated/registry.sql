@@ -50,6 +50,7 @@ SELECT v.cls FROM (VALUES
     ('artist_colike', 'C'),
     ('artist_coplay', 'C'),
     ('artist_interest', 'P'),
+    ('artist_playable_tracks', 'C'),
     ('artist_sc_accounts', 'C'),
     ('artist_socials', 'C'),
     ('artists', 'C'),
@@ -215,6 +216,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'artist_colike', jsonb_build_object('a_id', t.a_id, 'b_id', t.b_id) FROM public.artist_colike t ON CONFLICT DO NOTHING;
         WHEN 'artist_coplay' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'artist_coplay', jsonb_build_object('a_id', t.a_id, 'b_id', t.b_id) FROM public.artist_coplay t ON CONFLICT DO NOTHING;
+        WHEN 'artist_playable_tracks' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'artist_playable_tracks', jsonb_build_object('artist_id', t.artist_id, 'track_id', t.track_id) FROM public.artist_playable_tracks t ON CONFLICT DO NOTHING;
         WHEN 'artist_sc_accounts' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'artist_sc_accounts', jsonb_build_object('artist_id', t.artist_id, 'sc_user_id', t.sc_user_id) FROM public.artist_sc_accounts t ON CONFLICT DO NOTHING;
         WHEN 'artist_socials' THEN
@@ -382,6 +385,7 @@ BEGIN
         ('albums', 'C'),
         ('artist_attribution_revalidation', 'C'),
         ('artist_coplay', 'C'),
+        ('artist_playable_tracks', 'C'),
         ('artist_sc_accounts', 'C'),
         ('artist_socials', 'C'),
         ('artists', 'C'),

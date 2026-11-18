@@ -47,6 +47,7 @@ tables:
   artist_attribution_revalidation: {class: C, note: "singleton written by the artist flag trigger and the walker; trigger role-gated (R8)"}
   artist_colike: {class: C, hold: "replicated by scd_graph_pub until A6, then into scd_core_pub"}
   artist_coplay: {class: C}
+  artist_playable_tracks: {class: C, note: "primary track_artists rows whose track plays in the artist tops (public, not superseded, stored; ready_home: duration resolved, ready_wave: indexed), filled on core from tracks and track_artists"}
   artist_sc_accounts: {class: C, reassert: always, derived: {artist_sc_account_flag_trg: {writes: [artists.has_sc_account]}}}
   artist_socials: {class: C}
   artists: {class: C, reassert: always, note: "merges and external ids move unique values between artists"}

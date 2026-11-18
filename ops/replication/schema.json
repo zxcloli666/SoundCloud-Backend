@@ -226,6 +226,25 @@
     {"cols": ["artist_id"], "expr": false, "keys": ["artist_id"], "name": "artist_interest_pkey", "primary": true, "where": null}
    ]
   },
+  "artist_playable_tracks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "ready_home", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "ready_wave", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_playable_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["artist_id", "track_id"], "expr": false, "keys": ["artist_id", "track_id"], "name": "artist_playable_tracks_pkey", "primary": true, "where": null}
+   ]
+  },
   "artist_sc_accounts": {
    "columns": [
     {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},

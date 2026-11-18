@@ -167,6 +167,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_artist_playable_tracks(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.artist_id, t.track_id INTO p FROM public.artist_playable_tracks t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.track_id = (k ->> 'track_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.artist_playable_tracks t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.track_id = (k ->> 'track_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_artist_sc_accounts(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1399,6 +1414,8 @@ BEGIN
             PERFORM public.scd_purge_artist_coplay(k);
         WHEN 'artist_interest' THEN
             PERFORM public.scd_purge_artist_interest(k);
+        WHEN 'artist_playable_tracks' THEN
+            PERFORM public.scd_purge_artist_playable_tracks(k);
         WHEN 'artist_sc_accounts' THEN
             PERFORM public.scd_purge_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN

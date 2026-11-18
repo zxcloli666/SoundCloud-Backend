@@ -130,6 +130,18 @@ AS $f$
 SELECT md5(ROW(t.artist_id, t.score)::text) FROM public.artist_interest t WHERE t.artist_id = (k ->> 'artist_id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_artist_playable_tracks(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.artist_id, t.ready_home, t.ready_wave, t.sc_track_id, t.track_id)::text) FROM public.artist_playable_tracks t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_artist_sc_accounts(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1502,6 +1514,8 @@ BEGIN
             RETURN public.scd_row_hash_artist_coplay(k);
         WHEN 'artist_interest' THEN
             RETURN public.scd_row_hash_artist_interest(k);
+        WHEN 'artist_playable_tracks' THEN
+            RETURN public.scd_row_hash_artist_playable_tracks(k);
         WHEN 'artist_sc_accounts' THEN
             RETURN public.scd_row_hash_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN
