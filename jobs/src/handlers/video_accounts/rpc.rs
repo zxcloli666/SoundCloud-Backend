@@ -39,7 +39,7 @@ fn name_is_valid(name: &str) -> bool {
 async fn list<F: Fetch + 'static, N: Notify + 'static>(
     accounts: &VideoAccounts<F, N>,
 ) -> anyhow::Result<AdminVideoReply> {
-    let rows = store::list(&accounts.pool).await?;
+    let rows = store::list(&accounts.pool, &accounts.seal).await?;
     reply(200, json!({ "accounts": rows }))
 }
 
@@ -61,7 +61,15 @@ async fn save<F: Fetch + 'static, N: Notify + 'static>(
         Verdict::Rejected(error) => return refusal(422, &error),
         Verdict::Unavailable(error) => return refusal(503, &error),
     }
-    if !store::upsert(&accounts.pool, source.as_str(), name, secret).await? {
+    if !store::upsert(
+        &accounts.pool,
+        &accounts.seal,
+        source.as_str(),
+        name,
+        secret,
+    )
+    .await?
+    {
         return refusal(409, "this name belongs to another source");
     }
     account(accounts, name, 200).await
@@ -82,7 +90,7 @@ async fn account<F: Fetch + 'static, N: Notify + 'static>(
     name: &str,
     status: u16,
 ) -> anyhow::Result<AdminVideoReply> {
-    let row = store::list(&accounts.pool)
+    let row = store::list(&accounts.pool, &accounts.seal)
         .await?
         .into_iter()
         .find(|row| row.name == name);

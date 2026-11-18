@@ -73,27 +73,25 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "sc_track_id": "98765",
             "attempt": 2,
             "s3_url": "https://storage.example/audio/98765.opus",
-            "upload_url": "https://storage.example/video/98765-2.mp4",
             "artist": "Central Cee",
             "title": "Doja",
             "duration_ms": 96000,
             "candidates": [
                 {
+                    "index": 0,
                     "source": "youtube",
-                    "kind": "search",
-                    "value": "Central Cee Doja",
-                    "trusted": False,
+                    "kind": "video",
+                    "url": "https://storage.example/video-tmp/98765-2-0.mp4",
+                    "source_ref": "_VuJA-VQRcY",
                 },
                 {
+                    "index": 1,
                     "source": "spotify",
-                    "kind": "url",
-                    "value": "https://canvaz.scdn.co/upload/doja.mp4",
-                    "trusted": True,
+                    "kind": "canvas",
+                    "url": "https://storage.example/video-tmp/98765-2-1.mp4",
                     "source_ref": "spotify:track:1",
                 },
             ],
-            "youtube_account": "yt1",
-            "youtube_cookies": "# Netscape HTTP Cookie File\n",
         },
     }
 )
@@ -249,7 +247,6 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.AUDIO_TOO_LONG,
                 Reason.AUDIO_TOO_LARGE,
                 Reason.DOWNLOAD_FAILED,
-                Reason.OBJECT_STORE_UNAVAILABLE,
                 Reason.DEADLINE_EXCEEDED,
                 Reason.ENGINE_CRASHED,
                 Reason.OUT_OF_MEMORY,
@@ -257,8 +254,7 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.ENGINE_RESTARTED,
                 Reason.NO_VIDEO_FOUND,
                 Reason.STATIC_VIDEO,
-                Reason.SOURCE_RATE_LIMITED,
-                Reason.SOURCE_AUTH_FAILED,
+                Reason.INPUTS_GONE,
             }
         ),
         "highlight": frozenset(
@@ -345,14 +341,12 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
         case "video-find":
             if ok:
                 return {
-                    "kind": "clip",
+                    "kind": "loop",
                     "uncertain": False,
-                    "s3_key": "video/98765-2.mp4",
-                    "offset_ms": 3839,
-                    "duration_ms": 96000,
-                    "loop": False,
-                    "source": "youtube",
-                    "source_ref": "_VuJA-VQRcY",
+                    "candidate": 1,
+                    "offset_ms": 0,
+                    "duration_ms": 6000,
+                    "loop": True,
                     "scores": {"ber": 0.0211, "peak": 428.0},
                 }
             return {}

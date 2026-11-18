@@ -39,6 +39,7 @@ from worker.domain.outcome import (
     TransientFailure,
 )
 from worker.domain.ports import EngineUnavailable
+from worker.domain.video import publish
 from worker.settings import Settings
 
 LAST_MOMENT_S = 0.25
@@ -981,5 +982,52 @@ async def test_last_delivery_failure_built_by_the_bus_matches_the_lane_schema(
         [done] = done_bodies(harness)
         assert done["status"] == "failed" and done["reason"] == reason
         assert contract.validate(str(harness.lane.done_subject), done) == []
+    finally:
+        await harness.stop()
+
+
+async def test_a_clip_leaves_in_parts_that_each_fit_a_message_and_rebuild_the_file(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    harness = await build_harness(fake_nats, contract, settings, clock, "video-find")
+    part_bytes = contract.video_limits.part_bytes
+    blob = bytes(range(256)) * ((part_bytes * 2 >> 8) + 4)
+    parts = publish.split(blob, part_bytes)
+
+    async def clip(request: Mapping[str, object], deadline: Deadline) -> Outcome:
+        return Outcome.ok_in_parts(
+            parts,
+            kind="clip",
+            uncertain=False,
+            candidate=0,
+            offset_ms=1200,
+            duration_ms=96000,
+            loop=False,
+            scores={"ber": 0.02},
+            clip={"bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest(), "parts": 3},
+        )
+
+    harness.processor.behaviour = clip
+    harness.enqueue(samples.REQUESTS["video-find"])
+    [msg] = await harness.fetch()
+    try:
+        await harness.handle(msg)
+        sent = harness.done_published()
+        assert len(sent) == 3
+        assert [headers["Nats-Msg-Id"].rsplit(":", 2)[-2:] for _, _, headers in sent] == [
+            ["part", "0"],
+            ["part", "1"],
+            ["part", "2"],
+        ]
+        rebuilt = b""
+        for index, (_, body, _) in enumerate(sent):
+            assert len(body) <= contract.max_message_bytes
+            done = json.loads(body)
+            assert harness.contract.validate("done.video_find", done) == []
+            assert done["part"]["index"] == index
+            assert done["clip"]["parts"] == 3
+            rebuilt += base64.b64decode(done["part"]["data"])
+        assert rebuilt == blob
+        assert harness.bus.acks()[-1].kind == "ack_sync"
     finally:
         await harness.stop()

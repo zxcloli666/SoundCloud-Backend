@@ -222,6 +222,27 @@ impl ExternalFetcher {
             .await
     }
 
+    pub async fn get_direct_first(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        max_bytes: usize,
+    ) -> SourceResult<Bytes> {
+        self.send_direct_first(Method::GET, url, headers, None, max_bytes)
+            .await
+    }
+
+    pub async fn post_direct_first(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        body: Bytes,
+        max_bytes: usize,
+    ) -> SourceResult<Bytes> {
+        self.send_direct_first(Method::POST, url, headers, Some(body), max_bytes)
+            .await
+    }
+
     pub async fn post_authenticated(
         &self,
         url: &str,
@@ -274,6 +295,51 @@ impl ExternalFetcher {
             Err(SourceError::NotConfigured(_)) => Err(relay_error),
             Err(error) => Err(error),
         }
+    }
+
+    async fn send_direct_first(
+        &self,
+        method: Method,
+        url: &str,
+        headers: HeaderMap,
+        body: Option<Bytes>,
+        max_bytes: usize,
+    ) -> SourceResult<Bytes> {
+        let mut direct_headers = headers.clone();
+        direct_headers.remove(EGRESS_TAG);
+        let direct = self
+            .send_direct(method.clone(), url, direct_headers, body.clone(), max_bytes)
+            .await;
+        match direct {
+            Err(error) if self.has_proxy() && is_blocked_or_down(&error) => {
+                self.send_proxy(method, url, headers, body, max_bytes).await
+            }
+            other => other,
+        }
+    }
+
+    async fn send_direct(
+        &self,
+        method: Method,
+        url: &str,
+        headers: HeaderMap,
+        body: Option<Bytes>,
+        max_bytes: usize,
+    ) -> SourceResult<Bytes> {
+        let mut request = self.inner.http.request(method, url);
+        for (name, value) in headers {
+            if let Some(name) = name {
+                request = request.header(name, value);
+            }
+        }
+        if let Some(body) = body {
+            request = request.body(body);
+        }
+        let response = tokio::time::timeout(OPERATION_TIMEOUT, request.send())
+            .await
+            .map_err(|_| SourceError::Unreachable("direct request timed out".to_owned()))?
+            .map_err(|error| SourceError::Unreachable(error.to_string()))?;
+        response_bytes(response, max_bytes).await
     }
 
     async fn send_proxy(
@@ -423,6 +489,16 @@ fn body_preview(body: &[u8]) -> String {
     String::from_utf8_lossy(body).chars().take(200).collect()
 }
 
+const EGRESS_TAG: &str = "x-egress-tag";
+
+fn is_blocked_or_down(error: &SourceError) -> bool {
+    match error {
+        SourceError::Unreachable(_) => true,
+        SourceError::Status { status, .. } => matches!(status, 403 | 408 | 429) || *status >= 500,
+        _ => false,
+    }
+}
+
 fn parse_retry_after(value: &str) -> Option<u64> {
     if let Some(seconds) = value
         .trim()
@@ -519,6 +595,42 @@ mod tests {
         }
 
         assert!(started.elapsed() >= Duration::from_millis(380));
+    }
+
+    #[tokio::test]
+    async fn a_direct_first_call_answers_directly_and_falls_back_to_the_proxy_when_blocked() {
+        let direct = Router::new()
+            .route("/ok", any(|| async { "direct" }))
+            .route(
+                "/blocked",
+                any(|| async { (axum::http::StatusCode::FORBIDDEN, "no") }),
+            )
+            .route(
+                "/gone",
+                any(|| async { (axum::http::StatusCode::NOT_FOUND, "no") }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, direct).await.unwrap();
+        });
+        let proxy = Router::new().route("/", any(|| async { "proxied" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, proxy).await.unwrap();
+        });
+        let http = sc_fingerprint::builder(None).build().unwrap();
+        let fetcher = ExternalFetcher::new(http, format!("http://{proxy_address}/"), None);
+        let get = |path: &str| {
+            let url = format!("http://{address}{path}");
+            let fetcher = fetcher.clone();
+            async move { fetcher.get_direct_first(&url, HeaderMap::new(), 1024).await }
+        };
+
+        assert_eq!(get("/ok").await.unwrap(), Bytes::from("direct"));
+        assert_eq!(get("/blocked").await.unwrap(), Bytes::from("proxied"));
+        assert_eq!(get("/gone").await.unwrap_err().status_code(), Some(404));
     }
 
     #[tokio::test]

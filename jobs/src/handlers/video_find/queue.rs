@@ -3,6 +3,7 @@ use std::time::Duration;
 use sqlx::PgPool;
 use tracing::warn;
 
+use super::stage::Staged;
 use crate::queue::{JobError, JobResult};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,10 +45,10 @@ pub(super) async fn claim(pool: &PgPool, limit: i64) -> JobResult<Vec<Claimed>> 
         .map_err(JobError::retryable)
 }
 
-pub(super) async fn mark_account(pool: &PgPool, claim: &Claimed, account: &str) -> JobResult {
-    let payload = serde_json::json!({ "account": account });
-    sqlx::query_file!(
-        "queries/video_find/mark_account.sql",
+pub(super) async fn stage(pool: &PgPool, claim: &Claimed, staged: &Staged) -> JobResult<bool> {
+    let payload = serde_json::to_value(staged).map_err(JobError::permanent)?;
+    let marked = sqlx::query_file!(
+        "queries/video_find/stage.sql",
         &claim.sc_track_id,
         claim.attempt,
         payload
@@ -55,7 +56,17 @@ pub(super) async fn mark_account(pool: &PgPool, claim: &Claimed, account: &str) 
     .execute(pool)
     .await
     .map_err(JobError::retryable)?;
-    Ok(())
+    Ok(marked.rows_affected() == 1)
+}
+
+pub(super) async fn staged(pool: &PgPool, track: &str, attempt: i32) -> JobResult<Option<Staged>> {
+    let row = sqlx::query_file!("queries/video_find/staged.sql", track, attempt)
+        .fetch_optional(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(row
+        .and_then(|row| row.payload)
+        .and_then(|payload| serde_json::from_value(payload).ok()))
 }
 
 pub(super) async fn release(pool: &PgPool, claim: &Claimed, wait: Duration, why: &str) {

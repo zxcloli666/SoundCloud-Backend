@@ -5,11 +5,15 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
+aws-credential-types = "1"
+aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
 async-nats = "0.49"
 axum = "0.8"
 base64 = "0.22"
 bytes = "1"
 caseless = "0.2"
+chacha20poly1305 = "=0.10.1"
 sha2 = "0.10"
 hmac = "0.12"
 sha1 = "0.10"

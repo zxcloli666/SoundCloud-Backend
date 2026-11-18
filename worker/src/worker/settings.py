@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 ENV_PREFIX = "WORKER__"
 PROFILE_ENV = "WORKER_PROFILE"
 ENV_REF_PREFIX = "env:"
-SECRET_KEYS = frozenset({"password", "upload_token", "proxy"})
+SECRET_KEYS = frozenset({"password"})
 INTEGER = re.compile(r"[+-]?\d+")
 
 LANES = (
@@ -181,23 +181,11 @@ class VideoClassifierSettings:
 
 @dataclass(frozen=True)
 class VideoSection:
-    upload_token: str
-    proxy: str
     analysis_s: float
-    search_results: int
-    candidates_per_search: int
     max_verified: int
-    min_candidate_s: float
     max_candidate_s: float
-    duration_ratio_low: float
-    duration_ratio_high: float
-    duration_slack_s: float
     max_download_mib: int
     download_timeout_s: float
-    youtube_pause_min_s: float
-    youtube_pause_max_s: float
-    audio_format: str
-    video_format: str
     window_s: float
     window_stride_s: float
     ber_max: float
@@ -210,7 +198,6 @@ class VideoSection:
     encode_maxrate_kbps: int
     encode_fps: int
     max_upload_mib: int
-    upload_timeout_s: float
     classifier: VideoClassifierSettings
 
 
@@ -735,14 +722,10 @@ def validate_taste(settings: Settings) -> list[str]:
 def validate_video(settings: Settings) -> list[str]:
     video = settings.video
     problems = []
-    if VIDEO_LANE in settings.lanes.enabled and not video.upload_token:
-        problems.append("video.upload_token is empty while the video-find lane is enabled")
     if video.window_s <= 0 or video.window_stride_s <= 0 or not 0 < video.ber_max < 0.5:
         problems.append("video.window_s, window_stride_s must be > 0 and ber_max in (0, 0.5)")
-    if video.youtube_pause_min_s < 0 or video.youtube_pause_max_s < video.youtube_pause_min_s:
-        problems.append("video.youtube_pause_min_s <= youtube_pause_max_s, both >= 0")
-    if video.max_verified < 1 or video.candidates_per_search < 1 or video.search_results < 1:
-        problems.append("video.max_verified, candidates_per_search, search_results must be >= 1")
+    if video.max_verified < 1:
+        problems.append("video.max_verified must be >= 1")
     return problems
 
 

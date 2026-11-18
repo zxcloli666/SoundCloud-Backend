@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
-import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,29 +16,30 @@ from worker.domain.deadline import Deadline
 from worker.domain.fields import required_int, required_list, required_mapping, required_text
 from worker.domain.outcome import Outcome, PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import Engines, Float32Array
-from worker.domain.video import candidates, features, match, publish
+from worker.domain.video import features, match, publish
 from worker.domain.video.classify import Verdict, classify
-from worker.domain.video.ytdlp import CandidateUnavailable, Found, YtDlp, cookie_file
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import AudioSection, VideoSection
 
 LANE = "video-find"
-YOUTUBE = "youtube"
-SEARCH = "search"
-DIRECT_FORMAT = "best[height<=720]/best"
-SKIPPED = (CandidateUnavailable, PermanentFailure)
+CANVAS = "canvas"
+SKIPPED = (PermanentFailure,)
 MS = 1000.0
 
 log = logging.getLogger(__name__)
 
 
+class InputsGone(PermanentFailure):
+    def __init__(self, detail: str) -> None:
+        super().__init__(Reason.INPUTS_GONE, detail)
+
+
 @dataclass(frozen=True)
 class Candidate:
-    source: str
+    index: int
+    kind: str
     url: str
-    ref: str | None
-    trusted: bool
 
 
 @dataclass(frozen=True)
@@ -46,12 +47,7 @@ class Job:
     track_id: str
     attempt: int
     audio_url: str
-    upload_url: str
-    artist: str
-    title: str
-    duration_s: float | None
-    candidates: Sequence[Mapping[str, object]]
-    cookies: str | None
+    candidates: Sequence[Candidate]
 
 
 @dataclass(frozen=True)
@@ -83,22 +79,21 @@ class VideoFindLane:
         self,
         engines: Engines,
         track_source: AudioSource,
-        ytdlp: YtDlp,
-        uploader: publish.Uploader,
+        candidate_source: AudioSource,
         workspace: Workspace,
         audio: AudioSection,
         video: VideoSection,
+        part_bytes: int,
         counters: Counters,
     ) -> None:
         self._engines = engines
         self._track_source = track_source
-        self._ytdlp = ytdlp
-        self._uploader = uploader
+        self._candidate_source = candidate_source
         self._workspace = workspace
         self._audio = audio
         self._video = video
+        self._part_bytes = part_bytes
         self._counters = counters
-        self._paced = False
 
     async def process(self, request: Mapping[str, object], deadline: Deadline) -> Outcome:
         try:
@@ -107,17 +102,15 @@ class VideoFindLane:
             return embedding.outcome_of_error(error, LANE, self._counters)
 
     async def _find(self, job: Job, deadline: Deadline) -> Outcome:
-        self._paced = False
         with self._workspace.task(f"video-{job.track_id}-{job.attempt}") as folder:
             track = await self._track(job, folder, deadline)
             if isinstance(track, Outcome):
                 return track
-            with cookie_file(folder, job.cookies) as cookies:
-                best, verified = await self._search(job, track, folder, cookies, deadline)
+            best, verified = await self._search(job, track, folder, deadline)
             if best is None or (best.verdict.kind == "static" and not best.verdict.uncertain):
                 reason = Reason.STATIC_VIDEO if verified else Reason.NO_VIDEO_FOUND
                 return Outcome.of(reason, best.verdict.rule if best else None)
-            return await self._deliver(job, best, folder, deadline)
+            return await self._deliver(best, folder, deadline)
 
     async def _track(self, job: Job, folder: Path, deadline: Deadline) -> Track | Outcome:
         path = folder / "track"
@@ -142,20 +135,12 @@ class VideoFindLane:
         return match.parse_raw(text)
 
     async def _search(
-        self,
-        job: Job,
-        track: Track,
-        folder: Path,
-        cookies: Path | None,
-        deadline: Deadline,
+        self, job: Job, track: Track, folder: Path, deadline: Deadline
     ) -> tuple[Evaluated | None, int]:
-        wanted = job.duration_s or track.duration_s
         best: Evaluated | None = None
         verified = 0
-        index = 0
-        for candidate in await self._resolve(job, wanted, cookies, deadline):
-            index += 1
-            evaluated = await self._evaluate(candidate, index, track, folder, cookies, deadline)
+        for candidate in job.candidates:
+            evaluated = await self._evaluate(candidate, track, folder, deadline)
             if evaluated is None:
                 continue
             verified += 1
@@ -168,97 +153,56 @@ class VideoFindLane:
                 break
         return best, verified
 
-    async def _resolve(
-        self, job: Job, wanted_s: float, cookies: Path | None, deadline: Deadline
-    ) -> list[Candidate]:
-        resolved: list[Candidate] = []
-        for raw in job.candidates:
-            source = required_text(raw, "source")
-            value = required_text(raw, "value")
-            ref = raw.get("source_ref")
-            ref = ref if isinstance(ref, str) else None
-            if required_text(raw, "kind") == SEARCH:
-                if source == YOUTUBE:
-                    resolved += await self._searched(job, value, wanted_s, cookies, deadline)
-                continue
-            trusted = raw.get("trusted") is True
-            resolved.append(Candidate(source, value, ref, trusted))
-        return resolved
-
-    async def _searched(
-        self, job: Job, query: str, wanted_s: float, cookies: Path | None, deadline: Deadline
-    ) -> list[Candidate]:
-        await self._pause(deadline)
-        try:
-            found = await self._ytdlp.search(query, cookies, deadline)
-        except CandidateUnavailable as error:
-            self._counters.inc("video_search_failures_total")
-            log.warning("video search failed", extra={"error": str(error)})
-            return []
-        chosen: list[Found] = candidates.pick(found, job.artist, job.title, wanted_s, self._video)
-        return [Candidate(YOUTUBE, item.url, item.ref, False) for item in chosen]
-
     async def _evaluate(
-        self,
-        candidate: Candidate,
-        index: int,
-        track: Track,
-        folder: Path,
-        cookies: Path | None,
-        deadline: Deadline,
+        self, candidate: Candidate, track: Track, folder: Path, deadline: Deadline
     ) -> Evaluated | None:
         try:
-            checked = await self._fetch(candidate, index, track, folder, cookies, deadline)
+            path = await self._download(candidate, folder, deadline)
+            checked = await self._check(candidate, path, track, deadline)
             if checked is None:
+                drop_path(path)
                 return None
-            path, offset_ms, proof = checked
+            offset_ms, proof = checked
             info = await features.probe(path, deadline)
             measured = await features.measure(
                 path, info, self._engines, self._video.analysis_s, deadline
             )
+        except InputsGone:
+            raise
         except SKIPPED as error:
-            self._counters.inc("video_candidate_skipped_total", source=candidate.source)
+            self._counters.inc("video_candidate_skipped_total")
             log.warning(
                 "video candidate skipped",
-                extra={"source": candidate.source, "ref": candidate.ref, "error": str(error)},
+                extra={"index": candidate.index, "error": str(error)},
             )
             return None
         verdict = classify(measured, self._video.classifier)
         log.info(
             "video candidate measured",
-            extra={"ref": candidate.ref, "kind": verdict.kind, "rule": verdict.rule},
+            extra={"index": candidate.index, "kind": verdict.kind, "rule": verdict.rule},
         )
         return Evaluated(candidate, path, offset_ms, proof, measured, verdict)
 
-    async def _fetch(
-        self,
-        candidate: Candidate,
-        index: int,
-        track: Track,
-        folder: Path,
-        cookies: Path | None,
-        deadline: Deadline,
-    ) -> tuple[Path, int, Mapping[str, float]] | None:
-        youtube = candidate.source == YOUTUBE
-        if candidate.trusted:
-            return await self._download(candidate, folder / f"c{index}v", cookies, deadline), 0, {}
-        if youtube:
-            audio = await self._download(
-                candidate, folder / f"c{index}a", cookies, deadline, self._video.audio_format
-            )
-            found = await self._verify(audio, track, deadline)
-            if found is None:
-                return None
-            video = await self._download(
-                candidate, folder / f"c{index}v", cookies, deadline, self._video.video_format
-            )
-        else:
-            video = await self._download(candidate, folder / f"c{index}v", cookies, deadline)
-            found = await self._verify(video, track, deadline)
-            if found is None:
-                return None
+    async def _download(self, candidate: Candidate, folder: Path, deadline: Deadline) -> Path:
+        path = folder / f"c{candidate.index}.mp4"
+        try:
+            await self._candidate_source.fetch(candidate.url, path, deadline)
+        except PermanentFailure as failure:
+            if failure.reason in (Reason.AUDIO_NOT_FOUND, Reason.AUDIO_FORBIDDEN):
+                raise InputsGone(f"candidate={candidate.index} {failure.detail}") from failure
+            raise
+        return path
+
+    async def _check(
+        self, candidate: Candidate, path: Path, track: Track, deadline: Deadline
+    ) -> tuple[int, Mapping[str, float]] | None:
+        if candidate.kind == CANVAS:
+            return 0, {}
+        found = await self._verify(path, track, deadline)
+        if found is None:
+            return None
         if found.offset_ms < -self._video.max_pad_s * MS:
-            self._counters.inc("video_candidate_skipped_total", source=candidate.source)
+            self._counters.inc("video_candidate_skipped_total")
             return None
         proof = {
             "ber": found.ber,
@@ -266,25 +210,7 @@ class VideoFindLane:
             "overlap_s": found.overlap_s,
             "chroma": found.chroma,
         }
-        return video, found.offset_ms, proof
-
-    async def _download(
-        self,
-        candidate: Candidate,
-        stem: Path,
-        cookies: Path | None,
-        deadline: Deadline,
-        selector: str = DIRECT_FORMAT,
-    ) -> Path:
-        if candidate.source == YOUTUBE:
-            await self._pause(deadline)
-        return await self._ytdlp.download(
-            candidate.url,
-            stem,
-            selector,
-            cookies if candidate.source == YOUTUBE else None,
-            deadline,
-        )
+        return found.offset_ms, proof
 
     async def _verify(self, path: Path, track: Track, deadline: Deadline) -> match.Match | None:
         pcm = await decode.decode(
@@ -298,55 +224,75 @@ class VideoFindLane:
             match.verify, track.raw, raw, track.mono, signal, self._video
         )
 
-    async def _pause(self, deadline: Deadline) -> None:
-        if self._paced:
-            pause = random.uniform(self._video.youtube_pause_min_s, self._video.youtube_pause_max_s)
-            await asyncio.sleep(min(pause, deadline.remaining()))
-        self._paced = True
-
-    async def _deliver(
-        self, job: Job, best: Evaluated, folder: Path, deadline: Deadline
-    ) -> Outcome:
+    async def _deliver(self, best: Evaluated, folder: Path, deadline: Deadline) -> Outcome:
         kind = "loop" if best.verdict.kind == "loop" else "clip"
-        offset_ms = 0 if kind == "loop" else max(best.offset_ms, 0)
-        pad_s = max(-best.offset_ms, 0) / MS if kind == "clip" else 0.0
+        scores = {**best.measured.scores(), **best.proof}
+        held = best.verdict.uncertain
+        if kind == "loop" or held:
+            info = await features.probe(best.path, deadline)
+            return Outcome.ok(
+                kind=kind,
+                uncertain=held,
+                candidate=best.candidate.index,
+                offset_ms=0 if kind == "loop" else max(best.offset_ms, 0),
+                duration_ms=max(1, round(info.duration_s * MS)),
+                loop=kind == "loop",
+                scores=scores,
+            )
+        return await self._clip(best, folder, scores, deadline)
+
+    async def _clip(
+        self, best: Evaluated, folder: Path, scores: Mapping[str, float], deadline: Deadline
+    ) -> Outcome:
+        pad_s = max(-best.offset_ms, 0) / MS
         target = folder / "out.mp4"
         await publish.encode(
             best.path, target, pad_s=pad_s, settings=self._video, deadline=deadline
         )
         encoded = await features.probe(target, deadline)
-        key = await self._uploader.put(target, job.upload_url, deadline)
-        return Outcome.ok(
-            kind=kind,
-            uncertain=best.verdict.uncertain,
-            s3_key=key,
-            offset_ms=offset_ms,
+        blob = await asyncio.to_thread(target.read_bytes)
+        parts = publish.split(blob, self._part_bytes)
+        return Outcome.ok_in_parts(
+            parts,
+            kind="clip",
+            uncertain=False,
+            candidate=best.candidate.index,
+            offset_ms=max(best.offset_ms, 0),
             duration_ms=max(1, round(encoded.duration_s * MS)),
-            loop=kind == "loop",
-            source=best.candidate.source,
-            source_ref=best.candidate.ref,
-            scores={**best.measured.scores(), **best.proof},
+            loop=False,
+            scores=scores,
+            clip={
+                "bytes": len(blob),
+                "sha256": hashlib.sha256(blob).hexdigest(),
+                "parts": len(parts),
+            },
         )
 
 
 def drop(evaluated: Evaluated | None) -> None:
     if evaluated is not None:
-        evaluated.path.unlink(missing_ok=True)
+        drop_path(evaluated.path)
+
+
+def drop_path(path: Path) -> None:
+    path.unlink(missing_ok=True)
 
 
 def parse(request: Mapping[str, object]) -> Job:
-    duration = request.get("duration_ms")
-    cookies = request.get("youtube_cookies")
     return Job(
         track_id=required_text(request, "sc_track_id"),
         attempt=required_int(request, "attempt"),
         audio_url=required_text(request, "s3_url"),
-        upload_url=required_text(request, "upload_url"),
-        artist=required_text(request, "artist"),
-        title=required_text(request, "title"),
-        duration_s=duration / MS if isinstance(duration, int) and duration > 0 else None,
         candidates=[
-            required_mapping({"c": item}, "c") for item in required_list(request, "candidates")
+            candidate(required_mapping({"c": item}, "c"))
+            for item in required_list(request, "candidates")
         ],
-        cookies=cookies if isinstance(cookies, str) and cookies else None,
+    )
+
+
+def candidate(raw: Mapping[str, object]) -> Candidate:
+    return Candidate(
+        index=required_int(raw, "index"),
+        kind=required_text(raw, "kind"),
+        url=required_text(raw, "url"),
     )

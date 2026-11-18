@@ -413,7 +413,7 @@ class QueueHandler:
     async def _publish_and_ack(self, lease: Lease, outcome: Outcome, started: float) -> None:
         outcome, body = self._encode_within_limit(lease, outcome)
         try:
-            await self._publish_result(lease, outcome.status, body)
+            await self._publish_outcome(lease, outcome, body)
         except PublishTimedOut:
             await lease.release_transient(self.lane.nak_delay(lease.num_delivered))
             return
@@ -437,11 +437,23 @@ class QueueHandler:
             },
         )
 
-    async def _publish_result(self, lease: Lease, status: Status, body: bytes) -> None:
+    async def _publish_outcome(self, lease: Lease, outcome: Outcome, body: bytes) -> None:
+        if not outcome.parts:
+            await self._publish_result(lease, outcome.status, body)
+            return
+        done = outcome.to_done(self.lane.echo_fields(lease.payload), self._producer)
+        for index, part in enumerate(outcome.parts):
+            data = base64.b64encode(part).decode("ascii")
+            message = encode({**done, "part": {"index": index, "data": data}})
+            await self._publish_result(lease, outcome.status, message, f":part:{index}")
+
+    async def _publish_result(
+        self, lease: Lease, status: Status, body: bytes, id_suffix: str = ""
+    ) -> None:
         while True:
             give_up_after_s = None if lease.is_last_delivery else PUBLISH_GIVE_UP_S
             try:
-                await self._publish(lease, status, body, give_up_after_s)
+                await self._publish(lease, status, body, give_up_after_s, id_suffix)
             except PublishTimedOut as timeout:
                 if isinstance(timeout, ConnectionClosed) or not lease.is_last_delivery:
                     raise
@@ -451,14 +463,19 @@ class QueueHandler:
             return
 
     async def _publish(
-        self, lease: Lease, status: Status, body: bytes, give_up_after_s: float | None
+        self,
+        lease: Lease,
+        status: Status,
+        body: bytes,
+        give_up_after_s: float | None,
+        id_suffix: str = "",
     ) -> None:
         if self.lane.done_subject is None:
             raise ContractError(f"lane {self.lane.name} has no done subject")
         await self._outbox.publish(
             self.lane.done_subject,
             body,
-            self._outbox.headers(lease.done_msg_id(status), lease.num_delivered),
+            self._outbox.headers(lease.done_msg_id(status) + id_suffix, lease.num_delivered),
             self.lane.name,
             give_up_after_s,
         )

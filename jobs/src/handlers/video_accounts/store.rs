@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+
+use super::Seal;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub(super) struct AccountRow {
@@ -20,32 +23,72 @@ pub(super) struct Dead {
     pub last_error: Option<String>,
 }
 
-pub(super) async fn list(pool: &PgPool) -> Result<Vec<AccountRow>, sqlx::Error> {
-    sqlx::query_file_as!(AccountRow, "queries/video_accounts/list.sql")
+pub(super) async fn list(pool: &PgPool, seal: &Seal) -> anyhow::Result<Vec<AccountRow>> {
+    let rows = sqlx::query_file!("queries/video_accounts/list.sql")
         .fetch_all(pool)
-        .await
+        .await?;
+    rows.into_iter()
+        .map(|row| {
+            let secret = seal.open(&row.name, &row.secret)?;
+            Ok(AccountRow {
+                secret_sha256: hex_prefix(&secret),
+                name: row.name,
+                source: row.source,
+                status: row.status,
+                last_checked_at: row.last_checked_at,
+                last_error: row.last_error,
+            })
+        })
+        .collect()
+}
+
+fn hex_prefix(secret: &str) -> String {
+    let digest = Sha256::digest(secret.as_bytes());
+    digest
+        .iter()
+        .take(6)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub(super) async fn secret_of(
     pool: &PgPool,
+    seal: &Seal,
     name: &str,
-) -> Result<Option<(String, String)>, sqlx::Error> {
+) -> anyhow::Result<Option<(String, String)>> {
     let row = sqlx::query_file!("queries/video_accounts/get.sql", name)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|row| (row.source, row.secret)))
+    row.map(|row| Ok((row.source, seal.open(name, &row.secret)?)))
+        .transpose()
 }
 
 pub(super) async fn upsert(
     pool: &PgPool,
+    seal: &Seal,
     source: &str,
     name: &str,
     secret: &str,
-) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query_file!("queries/video_accounts/upsert.sql", source, name, secret)
+) -> anyhow::Result<bool> {
+    let sealed = seal.seal(name, secret)?;
+    let row = sqlx::query_file!("queries/video_accounts/upsert.sql", source, name, sealed)
         .fetch_optional(pool)
         .await?;
     Ok(row.is_some())
+}
+
+pub(crate) async fn seal_legacy(pool: &PgPool, seal: &Seal) -> anyhow::Result<u64> {
+    let rows = sqlx::query_file!("queries/video_accounts/unsealed.sql")
+        .fetch_all(pool)
+        .await?;
+    let count = rows.len() as u64;
+    for row in rows {
+        let sealed = seal.seal(&row.name, &row.secret)?;
+        sqlx::query_file!("queries/video_accounts/reseal.sql", row.name, sealed)
+            .execute(pool)
+            .await?;
+    }
+    Ok(count)
 }
 
 pub(super) async fn due(pool: &PgPool, every: Duration) -> Result<Vec<String>, sqlx::Error> {
@@ -89,12 +132,17 @@ pub(super) async fn release_alert(pool: &PgPool, name: &str) -> Result<(), sqlx:
 
 pub(crate) async fn lease(
     pool: &PgPool,
+    seal: &Seal,
     source: &str,
-) -> Result<Option<(String, String)>, sqlx::Error> {
+) -> anyhow::Result<Option<(String, String)>> {
     let row = sqlx::query_file!("queries/video_accounts/lease.sql", source)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|row| (row.name, row.secret)))
+    row.map(|row| {
+        let secret = seal.open(&row.name, &row.secret)?;
+        Ok((row.name, secret))
+    })
+    .transpose()
 }
 
 pub(crate) async fn pause(

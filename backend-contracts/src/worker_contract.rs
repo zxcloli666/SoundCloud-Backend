@@ -13,12 +13,13 @@ use crate::pipeline::{
     INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult,
     MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES,
     MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES,
-    MAX_SAY_TEXT_CHARS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS,
-    SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM,
-    TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest,
-    TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_FIND, VIDEO_FIND_STREAM,
-    VideoFindRequest, VideoFindResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT,
-    WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
+    MAX_SAY_TEXT_CHARS, MAX_VIDEO_PARTS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError,
+    SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB,
+    TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
+    TasteTrainRequest, TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_FIND,
+    VIDEO_FIND_STREAM, VIDEO_PART_BYTES, VideoFindRequest, VideoFindResult, WORKER_HEALTH_SUBJECT,
+    WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS,
+    collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -420,11 +421,7 @@ pub const VIDEO_FIND_LANE: WorkerLaneSpec = WorkerLaneSpec {
     done_subject: Some(DONE_VIDEO_FIND),
     correlation_prefix: "video_find",
     correlation: &["sc_track_id", "attempt"],
-    echo: &[
-        ("sc_track_id", "sc_track_id"),
-        ("attempt", "attempt"),
-        ("youtube_account", "account"),
-    ],
+    echo: &[("sc_track_id", "sc_track_id"), ("attempt", "attempt")],
     deadline_s: 600,
     ack_wait_s: 60,
     max_deliver: WORKER_MAX_DELIVER,
@@ -433,7 +430,7 @@ pub const VIDEO_FIND_LANE: WorkerLaneSpec = WorkerLaneSpec {
         base_s: 60,
         cap_s: 1800,
     }),
-    result_max_bytes: 8 * 1024,
+    result_max_bytes: 800_000,
     public: false,
     priority_group: None,
 };
@@ -531,6 +528,10 @@ pub fn worker_contract() -> Value {
             },
             "say": {
                 "text_chars": MAX_SAY_TEXT_CHARS,
+            },
+            "video": {
+                "part_bytes": VIDEO_PART_BYTES,
+                "max_parts": MAX_VIDEO_PARTS,
             },
         },
     })
@@ -803,11 +804,10 @@ fn required_on(lane: WorkerLane, status: WorkerStatus) -> Vec<&'static str> {
         (WorkerLane::VideoFind, WorkerStatus::Ok) => vec![
             "kind",
             "uncertain",
-            "s3_key",
+            "candidate",
             "offset_ms",
             "duration_ms",
             "loop",
-            "source",
             "scores",
         ],
         _ => Vec::new(),
@@ -1541,17 +1541,16 @@ mod tests {
         assert_eq!(lane["stream"], "VIDEO_FIND");
         assert_eq!(lane["durable"], "video-find-workers");
         assert_eq!(lane["public"], false);
-        assert_eq!(lane["echo"]["youtube_account"], "account");
+        assert_eq!(lane["result_max_bytes"], 800_000);
         assert_eq!(
             ok["required"],
             json!([
                 "kind",
                 "uncertain",
-                "s3_key",
+                "candidate",
                 "offset_ms",
                 "duration_ms",
                 "loop",
-                "source",
                 "scores"
             ])
         );
@@ -1559,10 +1558,10 @@ mod tests {
             rule_of(&schemas, DONE_VIDEO_FIND, "rejected"),
             &json!(false)
         );
-        assert!(
-            request["required"]
-                .as_array()
-                .is_some_and(|required| required.contains(&json!("upload_url")))
-        );
+        let required = request["required"].as_array().unwrap();
+        for secret in ["upload_url", "youtube_cookies", "youtube_account"] {
+            assert!(!required.contains(&json!(secret)));
+            assert!(request["properties"].get(secret).is_none());
+        }
     }
 }

@@ -38,8 +38,6 @@ from worker.domain.lyrics.transcribe import TranscribeLane
 from worker.domain.outcome import Producer
 from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
-from worker.domain.video.publish import Uploader
-from worker.domain.video.ytdlp import YtDlp
 from worker.domain.video_find import VideoFindLane
 from worker.domain.workspace import WorkRoot, Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
@@ -448,11 +446,17 @@ class Node:
             "video-find": lambda: VideoFindLane(
                 engines,
                 source,
-                YtDlp(settings.video, self.counters),
-                Uploader(audio_session, settings.video, self.counters),
+                AudioSource(
+                    audio_session,
+                    timeout_s=settings.video.download_timeout_s,
+                    idle_s=settings.audio.download_idle_s,
+                    max_bytes=settings.video.max_download_mib << 20,
+                    counters=self.counters,
+                ),
                 self.workspace,
                 settings.audio,
                 settings.video,
+                self.contract.video_limits.part_bytes,
                 self.counters,
             ),
         }

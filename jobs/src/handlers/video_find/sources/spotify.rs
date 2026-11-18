@@ -1,10 +1,10 @@
 use backend_contracts::admin_video::VideoSource;
-use backend_contracts::pipeline::{VideoCandidate, VideoCandidateKind};
+use backend_contracts::pipeline::VideoCandidateKind;
 use bytes::Bytes;
 use catalog_match::{DurationMatch, artist_score, duration_match, title_score};
 use serde_json::{Value, json};
 
-use super::{Failure, Wanted, failure_of};
+use super::{Failure, Lead, Wanted, failure_of};
 use crate::handlers::video_accounts::{BROWSER_AGENT, Fetch, SpotifyKey, access_token, headers};
 
 const SEARCH: &str = "https://api.spotify.com/v1/search";
@@ -18,17 +18,16 @@ pub(super) async fn canvas<F: Fetch>(
     key: &SpotifyKey,
     sp_dc: &str,
     wanted: &Wanted,
-) -> Result<Option<VideoCandidate>, Failure> {
+) -> Result<Option<Lead>, Failure> {
     let token = access_token(fetch, key, sp_dc).await?;
     let Some(uri) = find_track(fetch, &token, wanted).await? else {
         return Ok(None);
     };
     let reply = query_canvas(fetch, &token, &uri).await?;
-    Ok(canvas_url(&reply).map(|url| VideoCandidate {
+    Ok(canvas_url(&reply).map(|url| Lead {
         source: VideoSource::Spotify,
-        kind: VideoCandidateKind::Url,
-        value: url,
-        trusted: true,
+        kind: VideoCandidateKind::Canvas,
+        url,
         source_ref: Some(uri),
     }))
 }

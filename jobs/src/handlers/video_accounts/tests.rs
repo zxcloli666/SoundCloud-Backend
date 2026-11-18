@@ -6,7 +6,7 @@ use backend_contracts::admin_video::{AdminVideoCommand, VideoSource};
 use sqlx::PgPool;
 
 use super::check::mock::{Answer, Mock};
-use super::{Checker, Notify, SpotifyKey, VideoAccounts, rpc};
+use super::{Checker, Notify, Seal, SpotifyKey, VideoAccounts, rpc};
 
 const STATUS_URL: &str = "https://api.music.yandex.net/account/status";
 const ALIVE: &str = r#"{"result":{"account":{"uid":1}}}"#;
@@ -44,7 +44,13 @@ fn accounts(pool: PgPool) -> (Arc<Accounts>, Arc<Mock>, Arc<Recorder>) {
     let mock = Mock::new();
     let recorder = Arc::new(Recorder::default());
     let checker = Checker::new(mock.clone(), SpotifyKey::new(61, &[1, 2, 3]));
-    let accounts = VideoAccounts::new(pool, checker, recorder.clone(), Duration::from_secs(86_400));
+    let accounts = VideoAccounts::new(
+        pool,
+        checker,
+        recorder.clone(),
+        Seal::new(&[9; 32]),
+        Duration::from_secs(86_400),
+    );
     (Arc::new(accounts), mock, recorder)
 }
 
@@ -186,8 +192,9 @@ async fn the_daily_pass_checks_only_accounts_that_are_due(pool: PgPool) -> anyho
     save(&accounts, "yandex1", "tok").await?;
     sqlx::query(
         "INSERT INTO video_accounts (source, name, secret, last_checked_at)
-         VALUES ('yandex', 'yandex2', 'old', now() - interval '2 days')",
+         VALUES ('yandex', 'yandex2', $1, now() - interval '2 days')",
     )
+    .bind(accounts.seal.seal("yandex2", "old")?)
     .execute(&pool)
     .await?;
     let before = mock.requests().len();
@@ -198,5 +205,43 @@ async fn the_daily_pass_checks_only_accounts_that_are_due(pool: PgPool) -> anyho
 
     assert_eq!(mock.requests().len() - before, 1);
     assert_eq!(status(&pool, "yandex2").await?, "ok");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_saved_secret_rests_sealed_and_leases_back_plain(pool: PgPool) -> anyhow::Result<()> {
+    let (accounts, mock, _) = accounts(pool.clone());
+    mock.route(STATUS_URL, Answer::Body(ALIVE.to_owned()));
+    save(&accounts, "yandex1", "super-secret-token").await?;
+
+    let stored: String =
+        sqlx::query_scalar("SELECT secret FROM video_accounts WHERE name = 'yandex1'")
+            .fetch_one(&pool)
+            .await?;
+    let leased = super::store::lease(&pool, &accounts.seal, "yandex").await?;
+
+    assert!(stored.starts_with("v1:") && !stored.contains("super-secret-token"));
+    assert_eq!(
+        leased,
+        Some(("yandex1".to_owned(), "super-secret-token".to_owned()))
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn plain_rows_from_before_the_key_are_sealed_once(pool: PgPool) -> anyhow::Result<()> {
+    let (accounts, _, _) = accounts(pool.clone());
+    sqlx::query(
+        "INSERT INTO video_accounts (source, name, secret, status) VALUES ('yandex', 'old1', 'plain', 'ok')",
+    )
+    .execute(&pool)
+    .await?;
+
+    let first = super::store::seal_legacy(&pool, &accounts.seal).await?;
+    let second = super::store::seal_legacy(&pool, &accounts.seal).await?;
+    let leased = super::store::lease(&pool, &accounts.seal, "yandex").await?;
+
+    assert_eq!((first, second), (1, 0));
+    assert_eq!(leased, Some(("old1".to_owned(), "plain".to_owned())));
     Ok(())
 }

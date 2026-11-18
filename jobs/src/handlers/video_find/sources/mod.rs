@@ -1,10 +1,20 @@
 mod spotify;
 mod yandex;
 
-use backend_contracts::pipeline::VideoCandidate;
+use backend_contracts::admin_video::VideoSource;
+use backend_contracts::pipeline::VideoCandidateKind;
+use bytes::Bytes;
 use catalog_sources::SourceError;
 
 use crate::handlers::video_accounts::{Fetch, SpotifyKey, Verdict};
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Lead {
+    pub(super) source: VideoSource,
+    pub(super) kind: VideoCandidateKind,
+    pub(super) url: String,
+    pub(super) source_ref: Option<String>,
+}
 
 pub(super) struct Wanted {
     pub(super) artist: String,
@@ -14,7 +24,7 @@ pub(super) struct Wanted {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Failure {
+pub(crate) enum Failure {
     Paused(String),
     Rejected(String),
     Unavailable(String),
@@ -34,16 +44,19 @@ impl<F: Fetch> Sources<F> {
         &self,
         sp_dc: &str,
         wanted: &Wanted,
-    ) -> Result<Option<VideoCandidate>, Failure> {
+    ) -> Result<Option<Lead>, Failure> {
         spotify::canvas(&self.fetch, &self.spotify, sp_dc, wanted).await
     }
 
-    pub(super) async fn clips(
-        &self,
-        token: &str,
-        wanted: &Wanted,
-    ) -> Result<Vec<VideoCandidate>, Failure> {
+    pub(super) async fn clips(&self, token: &str, wanted: &Wanted) -> Result<Vec<Lead>, Failure> {
         yandex::clips(&self.fetch, token, wanted).await
+    }
+
+    pub(super) async fn file(&self, url: &str) -> Result<Bytes, Failure> {
+        self.fetch
+            .get(url, wreq::header::HeaderMap::new())
+            .await
+            .map_err(|error| failure_of("canvas", &error))
     }
 }
 

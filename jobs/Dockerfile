@@ -64,14 +64,35 @@ RUN find jobs api/queries -type f -not -path 'jobs/target/*' -exec touch {} + \
     && if [ -n "$APP_VERSION" ]; then sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" jobs/Cargo.toml; fi \
     && DATABASE_URL=postgres://scd:dev@127.0.0.1:5432/scd cargo build --release --manifest-path jobs/Cargo.toml
 
+FROM mirror.gcr.io/denoland/deno:bin-2.5.6 AS deno
+
+FROM mirror.gcr.io/library/debian:bookworm-slim AS ytdlp
+ARG YTDLP_VERSION=2026.10.26
+ARG YTDLP_SHA256_AMD64=767ba9dce7052aa196f8b12652f433d76de128ba168966fa84b6394d5e6c6795
+ARG YTDLP_SHA256_ARM64=e87e9533e89fe5889abaa21f5114dfe7756d6aa6219b83551add04d48b18e483
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "$(dpkg --print-architecture)" in \
+         amd64) asset=yt-dlp_linux; sha="$YTDLP_SHA256_AMD64" ;; \
+         arm64) asset=yt-dlp_linux_aarch64; sha="$YTDLP_SHA256_ARM64" ;; \
+         *) exit 1 ;; \
+       esac \
+    && curl -fsSL -o /yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/${asset}" \
+    && echo "${sha}  /yt-dlp" | sha256sum -c - \
+    && chmod 0755 /yt-dlp
+
 FROM mirror.gcr.io/library/debian:bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home jobs \
-    && install -d -o jobs -g jobs -m 0750 /snapshots
+    && install -d -o jobs -g jobs -m 0750 /snapshots \
+    && install -d -o jobs -g jobs -m 0700 /tmp/video
 
+COPY --from=ytdlp /yt-dlp /usr/local/bin/yt-dlp
+COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=app /build/jobs/target/release/jobs /usr/local/bin/jobs
 COPY --from=app /build/jobs/target/release/migrate /usr/local/bin/migrate
 

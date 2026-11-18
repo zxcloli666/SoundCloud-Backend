@@ -280,16 +280,24 @@ pub async fn run() -> anyhow::Result<()> {
         }),
     );
     supervisor.spawn("highlight sweep", highlights.sweep(cancellation.clone()));
-    let video_find = handlers.video_find(databases.main.bulk.clone(), video_bus, &config);
-    let video_receiver = video_find.clone();
-    supervisor.spawn(
-        "video result consumer",
-        video_results.run_raw(cancellation.clone(), move |result: VideoFindResult| {
-            let video_find = video_receiver.clone();
-            async move { video_find.finish(result).await }
-        }),
-    );
-    supervisor.spawn("video sweep", video_find.sweep(cancellation.clone()));
+    if let Some(video_find) = handlers
+        .video_find(databases.main.bulk.clone(), &config)
+        .await
+    {
+        let video_receiver = video_find.clone();
+        supervisor.spawn(
+            "video result consumer",
+            video_results.run_raw(cancellation.clone(), move |result: VideoFindResult| {
+                let video_find = video_receiver.clone();
+                async move { video_find.finish(result).await }
+            }),
+        );
+        supervisor.spawn(
+            "video sweep",
+            video_find.clone().sweep(video_bus, cancellation.clone()),
+        );
+        supervisor.spawn("video temp sweep", video_find.expire(cancellation.clone()));
+    }
     let lyrics_handlers = handlers.clone();
     supervisor.spawn(
         "lyrics embedding result consumer",

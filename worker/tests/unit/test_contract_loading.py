@@ -53,6 +53,14 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         max_tokens=1024,
     )
     assert contract.say_limits == c.SayLimits(text_chars=300)
+    assert contract.video_limits == c.VideoLimits(part_bytes=524_288, max_parts=256)
+
+
+def test_a_contract_without_video_limits_is_refused() -> None:
+    raw = json.loads(CONTRACT_PATH.read_text())
+    del raw["limits"]["video"]
+    with pytest.raises(c.ContractError, match="video"):
+        c.parse(raw)
 
 
 def test_a_contract_without_say_limits_is_refused() -> None:
