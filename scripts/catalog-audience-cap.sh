@@ -3,18 +3,28 @@ set -euo pipefail
 
 : "${PSQL:?PSQL must run psql on core, e.g. PSQL='docker exec -i core-db-1 psql -U scd -d scd'}"
 CAP="${CAP:-2000}"
-CHUNK="${CHUNK:-5000}"
-PAUSE="${PAUSE:-1}"
+CHUNK="${CHUNK:-2000}"
+PAUSE="${PAUSE:-2}"
 MAX_LAG_BYTES="${MAX_LAG_BYTES:-67108864}"
 APPLY="${APPLY:-0}"
+SUBJECTS_LIMIT="${SUBJECTS_LIMIT:-0}"
+QUIET_HOURS="${QUIET_HOURS:-00 01 02}"
 AUDIENCE="'track-favoriters', 'track-reposters', 'playlist-reposters'"
 
 sql() {
   $PSQL -AtqX -v ON_ERROR_STOP=1 -c "SET statement_timeout = '120s'; $1"
 }
 
+wait_for_quiet_hours() {
+  while [[ " $QUIET_HOURS " == *" $(date -u +%H) "* ]]; do
+    echo "$(date -u +%FT%TZ) quiet hour, waiting"
+    sleep 300
+  done
+}
+
 wait_for_subscribers() {
   local lag
+  wait_for_quiet_hours
   while :; do
     lag=$(sql "SELECT coalesce(max(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)), 0)::bigint
                FROM pg_replication_slots WHERE slot_type = 'logical' AND active")
@@ -41,7 +51,8 @@ sql "SELECT count(*) || ' subjects, ~' || coalesce(sum(item_count - $CAP), 0) ||
 
 subjects=$(sql "SELECT collection || ' ' || subject_id FROM catalog_collection_sync
                 WHERE collection IN ($AUDIENCE) AND scope = 'public' AND complete AND item_count > $CAP
-                ORDER BY item_count DESC")
+                ORDER BY item_count DESC
+                LIMIT nullif($SUBJECTS_LIMIT, 0)")
 
 done_subjects=0
 audience_rows=0
@@ -70,6 +81,7 @@ while read -r collection subject; do
     sleep "$PAUSE"
   done
   while :; do
+    wait_for_quiet_hours
     n=$(sql "WITH doomed AS (
                  SELECT seen.ctid FROM catalog_collection_seen AS seen
                  WHERE seen.subject_id = '$subject' AND seen.collection = '$collection' AND seen.scope = 'public'
