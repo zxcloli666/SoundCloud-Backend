@@ -59,6 +59,7 @@ pub struct GdriveConfig {
 pub struct Config {
     pub port: u16,
     pub admin_token: String,
+    pub video_upload_token: String,
     pub storage_path: String,
     /// Корень рабочего tmp. Внутри держим `source/` (сырые аплоады)
     /// и `result/` (выходы ffmpeg, ждущие отгрузки в backend).
@@ -220,6 +221,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3000),
             admin_token: env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN is required"),
+            video_upload_token: env::var("VIDEO_UPLOAD_TOKEN").unwrap_or_default(),
             storage_path: env::var("STORAGE_PATH").unwrap_or_else(|_| "/data/storage".into()),
             tmp_path,
             ffmpeg_bin: env::var("FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into()),
