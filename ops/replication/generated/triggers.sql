@@ -17,6 +17,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_attribution_revalidation;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_colike;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_coplay;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_interest;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_playable_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_sc_accounts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_socials;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artists;
@@ -686,6 +687,77 @@ CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR
 ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_interest FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_interest', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_playable_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_playable_tracks', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_owner_artist_playable_tracks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'track_id', OLD.track_id)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.artist_id, NEW.track_id) IS DISTINCT FROM (OLD.artist_id, OLD.track_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'track_id', OLD.track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'track_id', NEW.track_id)) THEN
+                    INSERT INTO public.artist_playable_tracks (artist_id, ready_home, ready_wave, sc_track_id, track_id) VALUES (NEW.artist_id, NEW.ready_home, NEW.ready_wave, NEW.sc_track_id, NEW.track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'track_id', NEW.track_id)) THEN
+                DELETE FROM public.artist_playable_tracks t WHERE (t.artist_id, t.track_id) = (OLD.artist_id, OLD.track_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'track_id', NEW.track_id)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artist_playable_tracks t WHERE (t.artist_id, t.track_id) = (NEW.artist_id, NEW.track_id) FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.artist_playable_tracks t SET ready_home = NEW.ready_home, ready_wave = NEW.ready_wave, sc_track_id = NEW.sc_track_id WHERE (t.artist_id, t.track_id) = (NEW.artist_id, NEW.track_id);
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.artist_playable_tracks (artist_id, ready_home, ready_wave, sc_track_id, track_id)
+        VALUES (NEW.artist_id, NEW.ready_home, NEW.ready_wave, NEW.sc_track_id, NEW.track_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.artist_playable_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_playable_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_playable_tracks();
+ALTER TABLE public.artist_playable_tracks ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_playable_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.artist_playable_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_sc_accounts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_sc_accounts', 'cmd', 'migration', 'repl');
 
@@ -8011,6 +8083,7 @@ FROM (VALUES
     ('guard', 'artist_colike', 'scd_guard_artist_colike'),
     ('guard', 'artist_coplay', 'scd_guard_artist_coplay'),
     ('guard', 'artist_interest', 'scd_guard_artist_interest'),
+    ('guard', 'artist_playable_tracks', 'scd_guard_artist_playable_tracks'),
     ('guard', 'artist_sc_accounts', 'scd_guard_artist_sc_accounts'),
     ('guard', 'artist_socials', 'scd_guard_artist_socials'),
     ('guard', 'artists', 'scd_guard_artists'),
@@ -8159,6 +8232,9 @@ BEGIN
             ('artist_coplay', 'zz_owner'),
             ('artist_coplay', 'zzz_suppress'),
             ('artist_interest', 'zz_guard'),
+            ('artist_playable_tracks', 'zz_guard'),
+            ('artist_playable_tracks', 'zz_owner'),
+            ('artist_playable_tracks', 'zzz_suppress'),
             ('artist_sc_accounts', 'zz_guard'),
             ('artist_sc_accounts', 'zz_owner'),
             ('artist_sc_accounts', 'zzz_suppress'),
