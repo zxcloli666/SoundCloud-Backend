@@ -53,7 +53,7 @@ async fn repair_one(
         .execute(&mut *tx)
         .await?;
     for drop in rewritten.drops {
-        sqlx::query(*drop).execute(&mut *tx).await?;
+        sqlx::query(drop).execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
         .bind(current.checksum.as_ref())
