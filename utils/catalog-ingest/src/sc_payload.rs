@@ -109,18 +109,18 @@ mod tests {
             format!("{clean}?utm_medium=api&utm_campaign=social_sharing&utm_source=id_339169");
         for url in [clean.to_owned(), shared] {
             let track = crate::ScTrackFields::from_sc(
-                &json!({"id": 1, "title": "Song", "permalink_url": url, "user": {"id": 2}}),
+                &json!({"urn": "soundcloud:tracks:1", "title": "Song", "permalink_url": url}),
             )
             .unwrap();
             assert_eq!(track.permalink_url.as_deref(), Some(clean));
             assert_eq!(track.sc_metadata["permalink"], "song");
             let user = crate::user::ScUserFields::from_sc(
-                &json!({"id": 2, "username": "artist", "permalink_url": url}),
+                &json!({"urn": "soundcloud:users:2", "username": "artist", "permalink_url": url}),
             )
             .unwrap();
             assert_eq!(user.permalink_url.as_deref(), Some(clean));
             let playlist = crate::playlist::ScPlaylistFields::from_sc(
-                &json!({"id": 3, "title": "Mix", "permalink_url": url}),
+                &json!({"urn": "soundcloud:playlists:3", "title": "Mix", "permalink_url": url}),
             )
             .unwrap();
             assert_eq!(playlist.permalink_url.as_deref(), Some(clean));
