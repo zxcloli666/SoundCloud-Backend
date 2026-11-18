@@ -14,6 +14,7 @@ mod health;
 mod llm;
 mod metrics;
 mod migration_app;
+mod objects;
 mod qdrant;
 #[cfg(test)]
 #[path = "query_surface_tests.rs"]

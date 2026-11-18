@@ -1,6 +1,7 @@
 mod alert;
 pub(crate) mod check;
 mod rpc;
+mod seal;
 pub(crate) mod store;
 #[cfg(test)]
 mod tests;
@@ -20,8 +21,9 @@ use crate::bus::Bus;
 
 pub(crate) use self::alert::{Notify, Telegram};
 pub(crate) use self::check::{
-    BROWSER_AGENT, Checker, Fetch, Proxied, SpotifyKey, Verdict, access_token, headers,
+    BROWSER_AGENT, Checker, DirectFirst, Fetch, Proxied, SpotifyKey, Verdict, access_token, headers,
 };
+pub(crate) use self::seal::Seal;
 
 const TICK: Duration = Duration::from_secs(3_600);
 const CONCURRENCY: usize = 4;
@@ -30,17 +32,37 @@ pub struct VideoAccounts<F, N> {
     pool: PgPool,
     checker: Checker<F>,
     notify: N,
+    seal: Seal,
     check_every: Duration,
 }
 
 impl<F: Fetch + 'static, N: Notify + 'static> VideoAccounts<F, N> {
-    pub fn new(pool: PgPool, checker: Checker<F>, notify: N, check_every: Duration) -> Self {
+    pub fn new(
+        pool: PgPool,
+        checker: Checker<F>,
+        notify: N,
+        seal: Seal,
+        check_every: Duration,
+    ) -> Self {
         Self {
             pool,
             checker,
             notify,
+            seal,
             check_every,
         }
+    }
+
+    pub(crate) fn seal(&self) -> Seal {
+        self.seal.clone()
+    }
+
+    pub async fn bootstrap(&self) -> anyhow::Result<()> {
+        let sealed = store::seal_legacy(&self.pool, &self.seal).await?;
+        if sealed > 0 {
+            info!(sealed, "video account secrets sealed");
+        }
+        Ok(())
     }
 
     pub async fn serve(
@@ -79,7 +101,7 @@ impl<F: Fetch + 'static, N: Notify + 'static> VideoAccounts<F, N> {
         }
     }
 
-    async fn check_due(&self, cancellation: &CancellationToken) -> Result<(), sqlx::Error> {
+    async fn check_due(&self, cancellation: &CancellationToken) -> anyhow::Result<()> {
         for name in store::due(&self.pool, self.check_every).await? {
             if cancellation.is_cancelled() {
                 break;
@@ -89,8 +111,8 @@ impl<F: Fetch + 'static, N: Notify + 'static> VideoAccounts<F, N> {
         self.send_dead_alerts().await
     }
 
-    async fn check_account(&self, name: &str) -> Result<Option<Verdict>, sqlx::Error> {
-        let Some((source, secret)) = store::secret_of(&self.pool, name).await? else {
+    async fn check_account(&self, name: &str) -> anyhow::Result<Option<Verdict>> {
+        let Some((source, secret)) = store::secret_of(&self.pool, &self.seal, name).await? else {
             return Ok(None);
         };
         let Some(source) = VideoSource::parse(&source) else {
@@ -110,7 +132,7 @@ impl<F: Fetch + 'static, N: Notify + 'static> VideoAccounts<F, N> {
         Ok(Some(verdict))
     }
 
-    async fn send_dead_alerts(&self) -> Result<(), sqlx::Error> {
+    async fn send_dead_alerts(&self) -> anyhow::Result<()> {
         for dead in store::claim_alerts(&self.pool).await? {
             let text = alert::dead_text(&dead.name, &dead.source, dead.last_error.as_deref());
             if let Err(error) = self.notify.send(&text).await {

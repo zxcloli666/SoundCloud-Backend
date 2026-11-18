@@ -76,14 +76,6 @@ impl Backend {
         }
     }
 
-    pub async fn put_file(&self, key: &str, src_tmp: &Path) -> Result<(), BackendError> {
-        match self {
-            Backend::Local(b) => b.put_file(key, src_tmp).await,
-            Backend::S3(b) => b.put_file(key, src_tmp).await,
-            Backend::Gdrive(b) => b.put_file(key, src_tmp).await,
-        }
-    }
-
     pub async fn delete_file(&self, key: &str) -> Result<bool, BackendError> {
         match self {
             Backend::Local(b) => b.delete_file(key).await,

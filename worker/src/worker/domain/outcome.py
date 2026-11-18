@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -53,8 +53,7 @@ class Reason(StrEnum):
     SEPARATION_SKIPPED = "separation_skipped"
     NO_VIDEO_FOUND = "no_video_found"
     STATIC_VIDEO = "static_video"
-    SOURCE_RATE_LIMITED = "source_rate_limited"
-    SOURCE_AUTH_FAILED = "source_auth_failed"
+    INPUTS_GONE = "inputs_gone"
 
 
 EMPTY_REASONS = frozenset(
@@ -70,7 +69,7 @@ EMPTY_REASONS = frozenset(
     }
 )
 MISSING_REASONS = frozenset(
-    {Reason.AUDIO_NOT_FOUND, Reason.AUDIO_FORBIDDEN, Reason.OBJECT_NOT_FOUND}
+    {Reason.AUDIO_NOT_FOUND, Reason.AUDIO_FORBIDDEN, Reason.OBJECT_NOT_FOUND, Reason.INPUTS_GONE}
 )
 REJECTED_REASONS = frozenset(
     {
@@ -102,8 +101,6 @@ TRANSIENT_FAILURES = frozenset(
         Reason.OUT_OF_MEMORY,
         Reason.DOWNLOAD_FAILED,
         Reason.OBJECT_STORE_UNAVAILABLE,
-        Reason.SOURCE_RATE_LIMITED,
-        Reason.SOURCE_AUTH_FAILED,
         Reason.INTERNAL_ERROR,
     }
 )
@@ -157,6 +154,7 @@ class Outcome:
     reason: Reason | None = None
     detail: str | None = None
     fields: Mapping[str, object] = field(default_factory=dict)
+    parts: Sequence[memoryview] = ()
 
     def __post_init__(self) -> None:
         if self.status is Status.OK:
@@ -171,6 +169,10 @@ class Outcome:
     @classmethod
     def ok(cls, **fields: object) -> Outcome:
         return cls(Status.OK, fields=fields)
+
+    @classmethod
+    def ok_in_parts(cls, parts: Sequence[memoryview], **fields: object) -> Outcome:
+        return cls(Status.OK, fields=fields, parts=parts)
 
     @classmethod
     def of(cls, reason: Reason, detail: str | None = None, **fields: object) -> Outcome:

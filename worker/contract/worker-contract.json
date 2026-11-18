@@ -558,8 +558,7 @@
       "durable": "video-find-workers",
       "echo": {
         "attempt": "attempt",
-        "sc_track_id": "sc_track_id",
-        "youtube_account": "account"
+        "sc_track_id": "sc_track_id"
       },
       "filter_subject": "video.find.new",
       "heartbeat_s": 12,
@@ -581,20 +580,18 @@
         "engine_crashed",
         "out_of_memory",
         "download_failed",
-        "object_store_unavailable",
         "internal_error",
         "engine_restarted",
         "worker_lost",
         "no_video_found",
         "static_video",
-        "source_rate_limited",
-        "source_auth_failed"
+        "inputs_gone"
       ],
       "reopenable": [
         "engine_restarted",
         "worker_lost"
       ],
-      "result_max_bytes": 8192,
+      "result_max_bytes": 800000,
       "result_object_template": null,
       "rpc": false,
       "stream": "VIDEO_FIND",
@@ -610,13 +607,11 @@
         "engine_crashed",
         "out_of_memory",
         "download_failed",
-        "object_store_unavailable",
         "internal_error",
         "engine_restarted",
         "no_video_found",
         "static_video",
-        "source_rate_limited",
-        "source_auth_failed"
+        "inputs_gone"
       ]
     }
   },
@@ -632,6 +627,10 @@
     "max_message_bytes": 900000,
     "say": {
       "text_chars": 300
+    },
+    "video": {
+      "max_parts": 256,
+      "part_bytes": 524288
     }
   },
   "object_stores": {
@@ -667,9 +666,7 @@
       "out_of_memory",
       "download_failed",
       "object_store_unavailable",
-      "internal_error",
-      "source_rate_limited",
-      "source_auth_failed"
+      "internal_error"
     ]
   },
   "reasons": {
@@ -700,14 +697,13 @@
       "engine_restarted",
       "worker_lost",
       "public_node_timeout",
-      "separation_skipped",
-      "source_rate_limited",
-      "source_auth_failed"
+      "separation_skipped"
     ],
     "missing": [
       "audio_not_found",
       "audio_forbidden",
-      "object_not_found"
+      "object_not_found",
+      "inputs_gone"
     ],
     "ok": [],
     "rejected": [
@@ -946,8 +942,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -1182,8 +1177,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -1452,8 +1446,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -1735,8 +1728,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -1998,8 +1990,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -2333,8 +2324,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -2635,8 +2625,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -2926,6 +2915,31 @@
           ],
           "type": "object"
         },
+        "VideoClip": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "parts": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bytes",
+            "sha256",
+            "parts"
+          ],
+          "type": "object"
+        },
         "VideoKind": {
           "enum": [
             "clip",
@@ -2933,13 +2947,25 @@
           ],
           "type": "string"
         },
-        "VideoSource": {
-          "enum": [
-            "youtube",
-            "spotify",
-            "yandex"
+        "VideoPart": {
+          "properties": {
+            "data": {
+              "maxLength": 699052,
+              "minLength": 1,
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "index",
+            "data"
           ],
-          "type": "string"
+          "type": "object"
         },
         "WorkerReason": {
           "enum": [
@@ -2979,8 +3005,7 @@
             "separation_skipped",
             "no_video_found",
             "static_video",
-            "source_rate_limited",
-            "source_auth_failed"
+            "inputs_gone"
           ],
           "type": "string"
         },
@@ -3014,11 +3039,10 @@
             "required": [
               "kind",
               "uncertain",
-              "s3_key",
+              "candidate",
               "offset_ms",
               "duration_ms",
               "loop",
-              "source",
               "scores"
             ]
           }
@@ -3059,7 +3083,8 @@
               "reason": {
                 "enum": [
                   "audio_not_found",
-                  "audio_forbidden"
+                  "audio_forbidden",
+                  "inputs_gone"
                 ]
               }
             },
@@ -3098,12 +3123,9 @@
                   "engine_crashed",
                   "out_of_memory",
                   "download_failed",
-                  "object_store_unavailable",
                   "internal_error",
                   "engine_restarted",
-                  "worker_lost",
-                  "source_rate_limited",
-                  "source_auth_failed"
+                  "worker_lost"
                 ]
               }
             },
@@ -3114,14 +3136,18 @@
         }
       ],
       "properties": {
-        "account": {
-          "maxLength": 256,
-          "type": "string"
-        },
         "attempt": {
           "format": "int64",
           "minimum": 1,
           "type": "integer"
+        },
+        "candidate": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "clip": {
+          "$ref": "#/$defs/VideoClip"
         },
         "detail": {
           "maxLength": 256,
@@ -3143,16 +3169,14 @@
           "minimum": 0,
           "type": "integer"
         },
+        "part": {
+          "$ref": "#/$defs/VideoPart"
+        },
         "producer": {
           "$ref": "#/$defs/Producer"
         },
         "reason": {
           "$ref": "#/$defs/WorkerReason"
-        },
-        "s3_key": {
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string"
         },
         "sc_track_id": {
           "pattern": "^[1-9][0-9]{0,18}$",
@@ -3165,13 +3189,6 @@
           },
           "type": "object"
         },
-        "source": {
-          "$ref": "#/$defs/VideoSource"
-        },
-        "source_ref": {
-          "maxLength": 256,
-          "type": "string"
-        },
         "status": {
           "$ref": "#/$defs/WorkerStatus"
         },
@@ -3183,8 +3200,7 @@
         "sc_track_id",
         "attempt",
         "status",
-        "producer",
-        "account"
+        "producer"
       ],
       "title": "done.video_find",
       "type": "object"
@@ -3665,6 +3681,11 @@
       "$defs": {
         "VideoCandidate": {
           "properties": {
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
             "kind": {
               "$ref": "#/$defs/VideoCandidateKind"
             },
@@ -3675,27 +3696,24 @@
               "maxLength": 256,
               "type": "string"
             },
-            "trusted": {
-              "type": "boolean"
-            },
-            "value": {
+            "url": {
               "maxLength": 4096,
-              "minLength": 1,
+              "pattern": "^https?://",
               "type": "string"
             }
           },
           "required": [
+            "index",
             "source",
             "kind",
-            "value",
-            "trusted"
+            "url"
           ],
           "type": "object"
         },
         "VideoCandidateKind": {
           "enum": [
-            "search",
-            "url"
+            "canvas",
+            "video"
           ],
           "type": "string"
         },
@@ -3732,10 +3750,6 @@
           "minimum": 1,
           "type": "integer"
         },
-        "isrc": {
-          "maxLength": 256,
-          "type": "string"
-        },
         "s3_url": {
           "maxLength": 4096,
           "pattern": "^https?://",
@@ -3748,26 +3762,12 @@
         "title": {
           "maxLength": 256,
           "type": "string"
-        },
-        "upload_url": {
-          "maxLength": 4096,
-          "pattern": "^https?://",
-          "type": "string"
-        },
-        "youtube_account": {
-          "maxLength": 256,
-          "type": "string"
-        },
-        "youtube_cookies": {
-          "maxLength": 262144,
-          "type": "string"
         }
       },
       "required": [
         "sc_track_id",
         "attempt",
         "s3_url",
-        "upload_url",
         "artist",
         "title",
         "candidates"

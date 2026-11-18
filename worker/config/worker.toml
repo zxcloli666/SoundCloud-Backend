@@ -135,23 +135,11 @@ silence_dbfs = -60.0
 fingerprint_s = 120
 
 [video]
-upload_token = "env:VIDEO_UPLOAD_TOKEN"
-proxy = "env:VIDEO_PROXY"
 analysis_s = 180.0
-search_results = 5
-candidates_per_search = 3
 max_verified = 2
-min_candidate_s = 20.0
 max_candidate_s = 600.0
-duration_ratio_low = 0.7
-duration_ratio_high = 1.8
-duration_slack_s = 30.0
 max_download_mib = 96
 download_timeout_s = 240
-youtube_pause_min_s = 5.0
-youtube_pause_max_s = 10.0
-audio_format = "bestaudio[abr<=160]/bestaudio/worst"
-video_format = "bestvideo[height<=480]/bestvideo[height<=720]/bestvideo"
 window_s = 5.0
 window_stride_s = 2.5
 ber_max = 0.15
@@ -164,7 +152,6 @@ encode_crf = 27
 encode_maxrate_kbps = 1400
 encode_fps = 30
 max_upload_mib = 64
-upload_timeout_s = 120
 
 [video.classifier]
 still_motion_med = 0.01

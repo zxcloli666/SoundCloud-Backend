@@ -6,7 +6,7 @@ use std::time::Instant;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::Method;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, post};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
@@ -171,10 +171,6 @@ async fn main() {
         .route(
             "/upload",
             post(routes::upload::upload).layer(DefaultBodyLimit::disable()),
-        )
-        .route(
-            "/video/{name}",
-            put(routes::video::put).layer(DefaultBodyLimit::disable()),
         )
         .route("/files/{filename}", delete(routes::files::delete))
         .route("/redirect/{*path}", get(routes::files::redirect))

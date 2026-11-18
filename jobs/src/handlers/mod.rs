@@ -94,9 +94,13 @@ use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
 use self::sync_queue::SyncQueueHandler;
 use self::telemetry::TelemetryHandler;
-use self::video_accounts::{Checker, Proxied, SpotifyKey, Telegram, VideoAccounts};
+use self::video_accounts::{
+    Checker, DirectFirst, Proxied, Seal, SpotifyKey, Telegram, VideoAccounts,
+};
 use self::video_find::VideoFind;
+use self::video_find::ytdlp::YtDlp;
 use self::wanted::{AiMatcherClient, WantedHandler};
+use crate::objects::Objects;
 
 pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::AuthCleanupLinkRequests,
@@ -403,6 +407,7 @@ impl JobHandlers {
                     ),
                 ),
                 Telegram::new(config.video_accounts.tg_webhook.clone())?,
+                Seal::new(config.video_accounts.key.expose()),
                 config.video_accounts.check_every,
             )),
             video_fetcher: sources.fetcher.clone(),
@@ -413,27 +418,33 @@ impl JobHandlers {
         self.video_accounts.clone()
     }
 
-    pub fn video_find(
+    pub async fn video_find(
         &self,
         pool: sqlx::PgPool,
-        bus: crate::bus::Bus,
         config: &JobsConfig,
-    ) -> Arc<VideoFind<Proxied>> {
-        Arc::new(VideoFind::new(
+    ) -> Option<Arc<VideoFind<DirectFirst, Objects, YtDlp>>> {
+        let objects = Objects::connect(config.video_find.objects.as_ref()?).await;
+        Some(Arc::new(VideoFind::new(
             pool,
-            bus,
             config.sync_queue.storage_url.clone(),
             config.video_find.clone(),
-            Proxied::new(self.video_fetcher.clone()),
+            DirectFirst::new(self.video_fetcher.clone()),
             SpotifyKey::new(
                 config.video_accounts.spotify_totp_version,
                 &config.video_accounts.spotify_totp_cipher,
             ),
-        ))
+            objects,
+            YtDlp::new(&config.video_find),
+            self.video_accounts.seal(),
+        )))
     }
 
     pub async fn bootstrap(&self) -> JobResult {
         self.oauth_apps.bootstrap().await?;
+        self.video_accounts
+            .bootstrap()
+            .await
+            .map_err(JobError::retryable)?;
         self.subscriptions.bootstrap().await
     }
 

@@ -95,12 +95,11 @@ pub enum WorkerReason {
     SeparationSkipped,
     NoVideoFound,
     StaticVideo,
-    SourceRateLimited,
-    SourceAuthFailed,
+    InputsGone,
 }
 
 impl WorkerReason {
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 37] = [
         Self::EmptyText,
         Self::EmptyReferenceText,
         Self::SilentAudio,
@@ -137,8 +136,7 @@ impl WorkerReason {
         Self::SeparationSkipped,
         Self::NoVideoFound,
         Self::StaticVideo,
-        Self::SourceRateLimited,
-        Self::SourceAuthFailed,
+        Self::InputsGone,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -179,8 +177,7 @@ impl WorkerReason {
             Self::SeparationSkipped => "separation_skipped",
             Self::NoVideoFound => "no_video_found",
             Self::StaticVideo => "static_video",
-            Self::SourceRateLimited => "source_rate_limited",
-            Self::SourceAuthFailed => "source_auth_failed",
+            Self::InputsGone => "inputs_gone",
         }
     }
 
@@ -194,9 +191,10 @@ impl WorkerReason {
             | Self::TooFewUsers
             | Self::NoVideoFound
             | Self::StaticVideo => WorkerStatus::Empty,
-            Self::AudioNotFound | Self::AudioForbidden | Self::ObjectNotFound => {
-                WorkerStatus::Missing
-            }
+            Self::AudioNotFound
+            | Self::AudioForbidden
+            | Self::ObjectNotFound
+            | Self::InputsGone => WorkerStatus::Missing,
             Self::LowConfidence
             | Self::TooFewLinesPlaced
             | Self::NoVocalDetected
@@ -223,8 +221,6 @@ impl WorkerReason {
             | Self::OutOfMemory
             | Self::DownloadFailed
             | Self::ObjectStoreUnavailable
-            | Self::SourceRateLimited
-            | Self::SourceAuthFailed
             | Self::InternalError => Some(FailureClass::Transient),
             Self::EngineRestarted
             | Self::WorkerLost
@@ -377,14 +373,12 @@ impl WorkerLane {
                 WorkerReason::EngineCrashed,
                 WorkerReason::OutOfMemory,
                 WorkerReason::DownloadFailed,
-                WorkerReason::ObjectStoreUnavailable,
                 WorkerReason::InternalError,
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
                 WorkerReason::NoVideoFound,
                 WorkerReason::StaticVideo,
-                WorkerReason::SourceRateLimited,
-                WorkerReason::SourceAuthFailed,
+                WorkerReason::InputsGone,
             ],
             Self::Ai | Self::Speak => &[],
         }

@@ -3,6 +3,7 @@ pub(crate) mod database;
 mod env;
 mod oauth;
 mod scd;
+mod video;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use database::{maintenance_pool_from_env, queue_pool_from_env, read_database_fro
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
 pub use scd::ScdNode;
+pub use video::{ObjectsConfig, VideoAccountsConfig, VideoFindConfig};
 
 const DURATION_MAX_BATCH_SIZE: i64 = 500;
 const DURATION_MAX_CONCURRENCY: usize = 32;
@@ -357,82 +359,6 @@ impl HighlightConfig {
                 "HIGHLIGHT_MAX_FAILURES",
                 env::parse("HIGHLIGHT_MAX_FAILURES", "5")?,
             )?,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct VideoFindConfig {
-    pub in_flight: i64,
-    pub tick: Duration,
-    pub timeout: Duration,
-    pub upload_url: url::Url,
-    pub account_pause: Duration,
-    pub source_gap: Duration,
-    pub retry_base: Duration,
-    pub max_attempts: u32,
-    pub none_recheck: Duration,
-    pub static_recheck: Duration,
-}
-
-impl VideoFindConfig {
-    fn from_env() -> Result<Self, ConfigError> {
-        let upload = match env::optional("VIDEO_UPLOAD_URL") {
-            Some(value) => value,
-            None => env::required("STORAGE_URL")?,
-        };
-        Ok(Self {
-            in_flight: env::parse("VIDEO_FIND_IN_FLIGHT", "0")?,
-            tick: Duration::from_secs(env::positive_u64("VIDEO_FIND_TICK_SECONDS", 30)?),
-            timeout: Duration::from_secs(env::positive_u64("VIDEO_FIND_TIMEOUT_SECONDS", 4_200)?),
-            upload_url: http_url("VIDEO_UPLOAD_URL", upload)?,
-            account_pause: Duration::from_secs(env::positive_u64(
-                "VIDEO_ACCOUNT_PAUSE_SECONDS",
-                3_600,
-            )?),
-            source_gap: Duration::from_millis(env::positive_u64("VIDEO_SOURCE_GAP_MS", 1_500)?),
-            retry_base: Duration::from_secs(env::positive_u64("VIDEO_RETRY_BASE_SECONDS", 900)?),
-            max_attempts: positive("VIDEO_MAX_ATTEMPTS", env::parse("VIDEO_MAX_ATTEMPTS", "5")?)?,
-            none_recheck: Duration::from_secs(
-                env::positive_u64("VIDEO_NONE_RECHECK_DAYS", 30)? * 86_400,
-            ),
-            static_recheck: Duration::from_secs(
-                env::positive_u64("VIDEO_STATIC_RECHECK_DAYS", 90)? * 86_400,
-            ),
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct VideoAccountsConfig {
-    pub check_every: Duration,
-    pub spotify_totp_version: u32,
-    pub spotify_totp_cipher: Vec<u8>,
-    pub tg_webhook: redact::Secret<String>,
-}
-
-impl VideoAccountsConfig {
-    fn from_env() -> Result<Self, ConfigError> {
-        let cipher = env::parse::<String>(
-            "VIDEO_SPOTIFY_TOTP_CIPHER",
-            "44,55,47,42,70,40,34,114,76,74,50,111,120,97,75,76,94,102,43,69,49,120,118,80,64,78",
-        )?;
-        let spotify_totp_cipher = cipher
-            .split(',')
-            .map(|byte| byte.trim().parse::<u8>())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| ConfigError::Invalid {
-                key: "VIDEO_SPOTIFY_TOTP_CIPHER".to_owned(),
-                reason: error.to_string(),
-            })?;
-        Ok(Self {
-            check_every: Duration::from_secs(env::positive_u64(
-                "VIDEO_ACCOUNTS_CHECK_SECONDS",
-                86_400,
-            )?),
-            spotify_totp_version: env::parse("VIDEO_SPOTIFY_TOTP_VERSION", "61")?,
-            spotify_totp_cipher,
-            tg_webhook: env::optional("TG_WEBHOOK").unwrap_or_default().into(),
         })
     }
 }

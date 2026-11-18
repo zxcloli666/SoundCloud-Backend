@@ -1,9 +1,9 @@
 use backend_contracts::admin_video::VideoSource;
-use backend_contracts::pipeline::{VideoCandidate, VideoCandidateKind};
+use backend_contracts::pipeline::VideoCandidateKind;
 use catalog_match::{DurationMatch, artist_score, duration_match, title_score};
 use serde_json::Value;
 
-use super::{Failure, Wanted, failure_of};
+use super::{Failure, Lead, Wanted, failure_of};
 use crate::handlers::video_accounts::{Fetch, headers};
 
 const API: &str = "https://api.music.yandex.net";
@@ -16,7 +16,7 @@ pub(super) async fn clips<F: Fetch>(
     fetch: &F,
     token: &str,
     wanted: &Wanted,
-) -> Result<Vec<VideoCandidate>, Failure> {
+) -> Result<Vec<Lead>, Failure> {
     let query = format!("{} {}", wanted.artist, wanted.title);
     let url = format!(
         "{API}/search?type=track&page=0&text={}",
@@ -69,7 +69,7 @@ fn pick(reply: &Value, wanted: &Wanted) -> Option<String> {
     })
 }
 
-fn videos(reply: &Value, track: &str) -> Vec<VideoCandidate> {
+fn videos(reply: &Value, track: &str) -> Vec<Lead> {
     let Some(items) = reply["result"]["videos"].as_array() else {
         return Vec::new();
     };
@@ -82,11 +82,10 @@ fn videos(reply: &Value, track: &str) -> Vec<VideoCandidate> {
                 .filter(|url| url.starts_with("https://"))
         })
         .take(MAX_CLIPS)
-        .map(|url| VideoCandidate {
+        .map(|url| Lead {
             source: VideoSource::Yandex,
-            kind: VideoCandidateKind::Url,
-            value: url.to_owned(),
-            trusted: false,
+            kind: VideoCandidateKind::Video,
+            url: url.to_owned(),
             source_ref: Some(track.to_owned()),
         })
         .collect()
@@ -99,7 +98,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supplement_videos_become_untrusted_candidates_of_the_track() {
+    fn supplement_videos_become_leads_of_the_track() {
         let reply = json!({"result": {"videos": [
             {"url": "https://example.test/v/1"},
             {"embedUrl": "https://example.test/e/2"},
@@ -109,8 +108,12 @@ mod tests {
         let found = videos(&reply, "77");
 
         assert_eq!(found.len(), 2);
-        assert!(found.iter().all(|clip| !clip.trusted));
-        assert_eq!(found[1].value, "https://example.test/e/2");
+        assert!(
+            found
+                .iter()
+                .all(|lead| lead.kind == VideoCandidateKind::Video)
+        );
+        assert_eq!(found[1].url, "https://example.test/e/2");
         assert_eq!(found[0].source_ref.as_deref(), Some("77"));
     }
 }

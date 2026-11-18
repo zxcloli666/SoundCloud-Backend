@@ -33,7 +33,6 @@ dependencies = [
     "unidecode>=1.4",
     "open-clip-torch>=3.0",
     "opencv-python-headless>=4.10",
-    "yt-dlp[default]>=2026.1",
 ]
 
 [dependency-groups]

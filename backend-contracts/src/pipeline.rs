@@ -36,9 +36,10 @@ pub const COLLAB_DATASET_VERSION: u32 = 2;
 pub const TASTE_DATASET_VERSION: u32 = 1;
 pub const MAX_MOMENT_HINTS: u32 = 64;
 pub const MAX_VIDEO_CANDIDATES: u32 = 8;
-pub const MAX_VIDEO_COOKIES_CHARS: u32 = 262_144;
+pub const VIDEO_PART_BYTES: u32 = 512 * 1024;
+pub const MAX_VIDEO_PART_CHARS: u32 = VIDEO_PART_BYTES.div_ceil(3) * 4;
+pub const MAX_VIDEO_PARTS: u32 = 256;
 pub const MAX_VIDEO_NAME_CHARS: u32 = 256;
-pub const MAX_VIDEO_KEY_CHARS: u32 = 512;
 pub const MAX_VIDEO_SCORES: u32 = 32;
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -668,8 +669,8 @@ pub struct ObjectStoreSpec {
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCandidateKind {
-    Search,
-    Url,
+    Canvas,
+    Video,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
@@ -690,17 +691,18 @@ impl VideoKind {
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
 pub struct VideoCandidate {
+    #[schemars(range(min = 0))]
+    pub index: u32,
     pub source: VideoSource,
     pub kind: VideoCandidateKind,
-    #[schemars(length(min = 1, max = MAX_URL_CHARS))]
-    pub value: String,
-    pub trusted: bool,
+    #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
+    pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
     pub source_ref: Option<String>,
 }
 
-#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
 pub struct VideoFindRequest {
     #[schemars(pattern(SC_TRACK_ID_PATTERN))]
     pub sc_track_id: String,
@@ -708,42 +710,33 @@ pub struct VideoFindRequest {
     pub attempt: i64,
     #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
     pub s3_url: String,
-    #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
-    pub upload_url: String,
     #[schemars(length(max = MAX_VIDEO_NAME_CHARS))]
     pub artist: String,
     #[schemars(length(max = MAX_VIDEO_NAME_CHARS))]
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
-    pub isrc: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i32", range(min = 1))]
     pub duration_ms: Option<i32>,
     #[schemars(length(min = 1, max = MAX_VIDEO_CANDIDATES))]
     pub candidates: Vec<VideoCandidate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
-    pub youtube_account: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String", length(max = MAX_VIDEO_COOKIES_CHARS))]
-    pub youtube_cookies: Option<String>,
 }
 
-impl std::fmt::Debug for VideoFindRequest {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("VideoFindRequest")
-            .field("sc_track_id", &self.sc_track_id)
-            .field("attempt", &self.attempt)
-            .field("candidates", &self.candidates.len())
-            .field("youtube_account", &self.youtube_account)
-            .field(
-                "youtube_cookies",
-                &self.youtube_cookies.as_ref().map(|_| "[redacted]"),
-            )
-            .finish_non_exhaustive()
-    }
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+pub struct VideoClip {
+    #[schemars(range(min = 1))]
+    pub bytes: u64,
+    #[schemars(pattern("^[0-9a-f]{64}$"))]
+    pub sha256: String,
+    #[schemars(range(min = 1, max = MAX_VIDEO_PARTS))]
+    pub parts: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+pub struct VideoPart {
+    #[schemars(range(min = 0, max = MAX_VIDEO_PARTS))]
+    pub index: u32,
+    #[schemars(length(min = 1, max = MAX_VIDEO_PART_CHARS))]
+    pub data: String,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -760,8 +753,6 @@ pub struct VideoFindResult {
     #[schemars(with = "String", length(max = MAX_DETAIL_CHARS))]
     pub detail: Option<String>,
     pub producer: Producer,
-    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
-    pub account: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "VideoKind")]
     pub kind: Option<VideoKind>,
@@ -769,8 +760,8 @@ pub struct VideoFindResult {
     #[schemars(with = "bool")]
     pub uncertain: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String", length(min = 1, max = MAX_VIDEO_KEY_CHARS))]
-    pub s3_key: Option<String>,
+    #[schemars(with = "u32", range(min = 0))]
+    pub candidate: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i32", range(min = 0))]
     pub offset_ms: Option<i32>,
@@ -781,14 +772,14 @@ pub struct VideoFindResult {
     #[schemars(with = "bool")]
     pub looped: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "VideoSource")]
-    pub source: Option<VideoSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
-    pub source_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "BTreeMap<String, f32>", length(max = MAX_VIDEO_SCORES))]
     pub scores: Option<BTreeMap<String, f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoClip")]
+    pub clip: Option<VideoClip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoPart")]
+    pub part: Option<VideoPart>,
 }
 
 pub const MSG_ID_HEADER: &str = "Nats-Msg-Id";

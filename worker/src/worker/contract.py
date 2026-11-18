@@ -150,6 +150,12 @@ class SayLimits:
 
 
 @dataclass(frozen=True)
+class VideoLimits:
+    part_bytes: int
+    max_parts: int
+
+
+@dataclass(frozen=True)
 class Contract:
     version: int
     streams: Mapping[str, StreamSpec]
@@ -166,6 +172,7 @@ class Contract:
     max_message_bytes: int
     complete_limits: CompleteLimits
     say_limits: SayLimits
+    video_limits: VideoLimits
 
     def lane(self, name: str) -> LaneSpec:
         try:
@@ -247,6 +254,7 @@ def parse(raw: Mapping[str, Any]) -> Contract:
         max_message_bytes=int(limits["max_message_bytes"]),
         complete_limits=parse_complete_limits(table(limits, "complete")),
         say_limits=parse_say_limits(table(limits, "say")),
+        video_limits=parse_video_limits(table(limits, "video")),
     )
 
 
@@ -356,6 +364,13 @@ def parse_say_limits(limits: Mapping[str, Any]) -> SayLimits:
         return SayLimits(text_chars=int(limits["text_chars"]))
     except (KeyError, TypeError, ValueError) as error:
         raise ContractError(f"limits.say: {error!r}") from error
+
+
+def parse_video_limits(limits: Mapping[str, Any]) -> VideoLimits:
+    try:
+        return VideoLimits(part_bytes=int(limits["part_bytes"]), max_parts=int(limits["max_parts"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ContractError(f"limits.video: {error!r}") from error
 
 
 def table(raw: Mapping[str, Any], key: str) -> Mapping[str, Any]:
