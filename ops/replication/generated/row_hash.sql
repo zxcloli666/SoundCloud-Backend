@@ -1123,7 +1123,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.attempts, t.last_error, t.next_at, t.sc_track_id, t.stage, t.updated_at)::text) FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+SELECT md5(ROW(t.attempts, t.last_error, t.next_at, t.payload, t.sc_track_id, t.stage, t.updated_at)::text) FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_videos(k jsonb)
@@ -1411,7 +1411,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.alerted_at, t.created_at, t.id, t.last_checked_at, t.last_error, t.name, t.secret, t.source, t.status, t.updated_at)::text) FROM public.video_accounts t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.alerted_at, t.created_at, t.id, t.last_checked_at, t.last_error, t.last_leased_at, t.name, t.paused_until, t.secret, t.source, t.status, t.updated_at)::text) FROM public.video_accounts t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_video_flags(k jsonb)

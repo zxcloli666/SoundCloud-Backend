@@ -1,0 +1,66 @@
+mod spotify;
+mod yandex;
+
+use backend_contracts::pipeline::VideoCandidate;
+use catalog_sources::SourceError;
+
+use crate::handlers::video_accounts::{Fetch, SpotifyKey, Verdict};
+
+pub(super) struct Wanted {
+    pub(super) artist: String,
+    pub(super) title: String,
+    pub(super) isrc: Option<String>,
+    pub(super) duration_ms: Option<i32>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Failure {
+    Paused(String),
+    Rejected(String),
+    Unavailable(String),
+}
+
+pub(super) struct Sources<F> {
+    fetch: F,
+    spotify: SpotifyKey,
+}
+
+impl<F: Fetch> Sources<F> {
+    pub(super) fn new(fetch: F, spotify: SpotifyKey) -> Self {
+        Self { fetch, spotify }
+    }
+
+    pub(super) async fn canvas(
+        &self,
+        sp_dc: &str,
+        wanted: &Wanted,
+    ) -> Result<Option<VideoCandidate>, Failure> {
+        spotify::canvas(&self.fetch, &self.spotify, sp_dc, wanted).await
+    }
+
+    pub(super) async fn clips(
+        &self,
+        token: &str,
+        wanted: &Wanted,
+    ) -> Result<Vec<VideoCandidate>, Failure> {
+        yandex::clips(&self.fetch, token, wanted).await
+    }
+}
+
+impl From<Verdict> for Failure {
+    fn from(verdict: Verdict) -> Self {
+        match verdict {
+            Verdict::Rejected(error) => Self::Rejected(error),
+            Verdict::Unavailable(error) => Self::Unavailable(error),
+            Verdict::Valid => Self::Unavailable("the account answered as valid".to_owned()),
+        }
+    }
+}
+
+fn failure_of(source: &str, error: &SourceError) -> Failure {
+    match error.status_code() {
+        Some(429) => Failure::Paused(format!("{source} answered 429")),
+        Some(status @ (401 | 403)) => Failure::Rejected(format!("{source} answered {status}")),
+        _ => Failure::Unavailable(format!("{source}: {error}")),
+    }
+}

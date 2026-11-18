@@ -69,6 +69,32 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "version": 2,
             "hints": {"chorus_ms": [61000], "comment_ms": [], "replay_ms": [60500]},
         },
+        "video-find": {
+            "sc_track_id": "98765",
+            "attempt": 2,
+            "s3_url": "https://storage.example/audio/98765.opus",
+            "upload_url": "https://storage.example/video/98765-2.mp4",
+            "artist": "Central Cee",
+            "title": "Doja",
+            "duration_ms": 96000,
+            "candidates": [
+                {
+                    "source": "youtube",
+                    "kind": "search",
+                    "value": "Central Cee Doja",
+                    "trusted": False,
+                },
+                {
+                    "source": "spotify",
+                    "kind": "url",
+                    "value": "https://canvaz.scdn.co/upload/doja.mp4",
+                    "trusted": True,
+                    "source_ref": "spotify:track:1",
+                },
+            ],
+            "youtube_account": "yt1",
+            "youtube_cookies": "# Netscape HTTP Cookie File\n",
+        },
     }
 )
 
@@ -213,6 +239,28 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.ENGINE_RESTARTED,
             }
         ),
+        "video-find": frozenset(
+            {
+                Reason.AUDIO_NOT_FOUND,
+                Reason.AUDIO_FORBIDDEN,
+                Reason.SILENT_AUDIO,
+                Reason.INVALID_REQUEST,
+                Reason.UNDECODABLE_AUDIO,
+                Reason.AUDIO_TOO_LONG,
+                Reason.AUDIO_TOO_LARGE,
+                Reason.DOWNLOAD_FAILED,
+                Reason.OBJECT_STORE_UNAVAILABLE,
+                Reason.DEADLINE_EXCEEDED,
+                Reason.ENGINE_CRASHED,
+                Reason.OUT_OF_MEMORY,
+                Reason.INTERNAL_ERROR,
+                Reason.ENGINE_RESTARTED,
+                Reason.NO_VIDEO_FOUND,
+                Reason.STATIC_VIDEO,
+                Reason.SOURCE_RATE_LIMITED,
+                Reason.SOURCE_AUTH_FAILED,
+            }
+        ),
         "highlight": frozenset(
             {
                 Reason.AUDIO_NOT_FOUND,
@@ -293,6 +341,20 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
         case "highlight":
             if ok:
                 return {"version": 2, "start_ms": 52500, "length_ms": 30000, "score": 0.83}
+            return {}
+        case "video-find":
+            if ok:
+                return {
+                    "kind": "clip",
+                    "uncertain": False,
+                    "s3_key": "video/98765-2.mp4",
+                    "offset_ms": 3839,
+                    "duration_ms": 96000,
+                    "loop": False,
+                    "source": "youtube",
+                    "source_ref": "_VuJA-VQRcY",
+                    "scores": {"ber": 0.0211, "peak": 428.0},
+                }
             return {}
     raise AssertionError(f"no fields for lane {lane}")
 

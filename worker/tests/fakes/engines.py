@@ -22,6 +22,7 @@ from worker.domain.ports import (
     Speech,
     TextKind,
     TokenSpan,
+    Uint8Array,
 )
 
 MERT_DIM = 1024
@@ -196,6 +197,15 @@ class FakeEngines:
         if forced is not None:
             return forced
         return self.fingerprint_value
+
+    async def embed_frames(self, frames: Uint8Array, deadline: Deadline) -> Float32Array:
+        deadline.check("embed_frames")
+        forced = self._record("embed_frames", frames=int(frames.shape[0]))
+        if forced is not None:
+            return forced
+        vectors = np.zeros((frames.shape[0], 8), dtype=np.float32)
+        vectors[np.arange(frames.shape[0]), np.arange(frames.shape[0]) % 8] = 1.0
+        return vectors
 
     async def train_collab(
         self,

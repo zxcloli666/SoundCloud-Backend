@@ -13,6 +13,7 @@ from worker.domain.outcome import Reason, TransientFailure
 
 Float32Array = NDArray[np.float32]
 Int16Array = NDArray[np.int16]
+Uint8Array = NDArray[np.uint8]
 
 TextKind = Literal["document", "query"]
 ChatRole = Literal["user", "assistant"]
@@ -182,6 +183,8 @@ class Engines(Protocol):
         channels: int,
         deadline: Deadline,
     ) -> str | None: ...
+
+    async def embed_frames(self, frames: Uint8Array, deadline: Deadline) -> Float32Array: ...
 
     async def train_collab(
         self,

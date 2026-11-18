@@ -1,12 +1,13 @@
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const ADMIN_VIDEO_SUBJECT: &str = "admin.video.v1";
 pub const ADMIN_VIDEO_QUEUE: &str = "jobs-admin-video-v1";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VideoSource {
     Youtube,

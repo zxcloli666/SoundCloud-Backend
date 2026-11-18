@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, ensure};
 use backend_contracts::pipeline::{
     AudioIndexResult, EncodeResult, HighlightResult, LyricsEmbeddingResult, StorageTrackRejected,
-    StorageTrackUploaded, TranscriptionResult,
+    StorageTrackUploaded, TranscriptionResult, VideoFindResult,
 };
 use backend_contracts::{ImpressionBatch, JobCommand};
 use chrono::{DateTime, Utc};
@@ -92,6 +92,7 @@ pub async fn run() -> anyhow::Result<()> {
     } = bus.provision(&config.nats).await?;
     let taste_results = bus.taste_results(&config.nats).await?;
     let highlight_results = bus.highlight_results(&config.nats).await?;
+    let video_results = bus.video_find_results(&config.nats).await?;
     let highlights = Arc::new(HighlightHandler::new(
         databases.main.bulk.clone(),
         bus.clone(),
@@ -224,6 +225,7 @@ pub async fn run() -> anyhow::Result<()> {
         Arc::new(AdminCatalogRpc::new(databases.main.fast.clone()))
             .serve(bus.clone(), cancellation.clone()),
     );
+    let video_bus = bus.clone();
     let video_accounts = handlers.video_accounts();
     supervisor.spawn(
         "admin video RPC",
@@ -278,6 +280,16 @@ pub async fn run() -> anyhow::Result<()> {
         }),
     );
     supervisor.spawn("highlight sweep", highlights.sweep(cancellation.clone()));
+    let video_find = handlers.video_find(databases.main.bulk.clone(), video_bus, &config);
+    let video_receiver = video_find.clone();
+    supervisor.spawn(
+        "video result consumer",
+        video_results.run_raw(cancellation.clone(), move |result: VideoFindResult| {
+            let video_find = video_receiver.clone();
+            async move { video_find.finish(result).await }
+        }),
+    );
+    supervisor.spawn("video sweep", video_find.sweep(cancellation.clone()));
     let lyrics_handlers = handlers.clone();
     supervisor.spawn(
         "lyrics embedding result consumer",

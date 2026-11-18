@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
+use crate::admin_video::VideoSource;
 use crate::reasons::{WorkerReason, WorkerStatus};
 use crate::vector_store::{
     QUERY_VEC_LYRICS_DIMENSIONS, QUERY_VEC_MULAN_DIMENSIONS, TRACKS_CLAP_DIMENSIONS,
@@ -34,6 +35,11 @@ pub const MAX_UTF8_BYTES_KEYWORD: &str = "x-max-utf8-bytes";
 pub const COLLAB_DATASET_VERSION: u32 = 2;
 pub const TASTE_DATASET_VERSION: u32 = 1;
 pub const MAX_MOMENT_HINTS: u32 = 64;
+pub const MAX_VIDEO_CANDIDATES: u32 = 8;
+pub const MAX_VIDEO_COOKIES_CHARS: u32 = 262_144;
+pub const MAX_VIDEO_NAME_CHARS: u32 = 256;
+pub const MAX_VIDEO_KEY_CHARS: u32 = 512;
+pub const MAX_VIDEO_SCORES: u32 = 32;
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct Producer {
@@ -659,6 +665,132 @@ pub struct ObjectStoreSpec {
     pub max_age_seconds: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoCandidateKind {
+    Search,
+    Url,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoKind {
+    Clip,
+    Loop,
+}
+
+impl VideoKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clip => "clip",
+            Self::Loop => "loop",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+pub struct VideoCandidate {
+    pub source: VideoSource,
+    pub kind: VideoCandidateKind,
+    #[schemars(length(min = 1, max = MAX_URL_CHARS))]
+    pub value: String,
+    pub trusted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
+    pub source_ref: Option<String>,
+}
+
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+pub struct VideoFindRequest {
+    #[schemars(pattern(SC_TRACK_ID_PATTERN))]
+    pub sc_track_id: String,
+    #[schemars(range(min = 1))]
+    pub attempt: i64,
+    #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
+    pub s3_url: String,
+    #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
+    pub upload_url: String,
+    #[schemars(length(max = MAX_VIDEO_NAME_CHARS))]
+    pub artist: String,
+    #[schemars(length(max = MAX_VIDEO_NAME_CHARS))]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
+    pub isrc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 1))]
+    pub duration_ms: Option<i32>,
+    #[schemars(length(min = 1, max = MAX_VIDEO_CANDIDATES))]
+    pub candidates: Vec<VideoCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
+    pub youtube_account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_VIDEO_COOKIES_CHARS))]
+    pub youtube_cookies: Option<String>,
+}
+
+impl std::fmt::Debug for VideoFindRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VideoFindRequest")
+            .field("sc_track_id", &self.sc_track_id)
+            .field("attempt", &self.attempt)
+            .field("candidates", &self.candidates.len())
+            .field("youtube_account", &self.youtube_account)
+            .field(
+                "youtube_cookies",
+                &self.youtube_cookies.as_ref().map(|_| "[redacted]"),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct VideoFindResult {
+    #[schemars(pattern(SC_TRACK_ID_PATTERN))]
+    pub sc_track_id: String,
+    #[schemars(range(min = 1))]
+    pub attempt: i64,
+    pub status: WorkerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "WorkerReason")]
+    pub reason: Option<WorkerReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_DETAIL_CHARS))]
+    pub detail: Option<String>,
+    pub producer: Producer,
+    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
+    pub account: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoKind")]
+    pub kind: Option<VideoKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub uncertain: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(min = 1, max = MAX_VIDEO_KEY_CHARS))]
+    pub s3_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 0))]
+    pub offset_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 1))]
+    pub duration_ms: Option<i32>,
+    #[serde(default, rename = "loop", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub looped: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoSource")]
+    pub source: Option<VideoSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
+    pub source_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "BTreeMap<String, f32>", length(max = MAX_VIDEO_SCORES))]
+    pub scores: Option<BTreeMap<String, f32>>,
+}
+
 pub const MSG_ID_HEADER: &str = "Nats-Msg-Id";
 pub const REPLY_TO_HEADER: &str = "X-Reply-To";
 pub const DEADLINE_HEADER: &str = "X-Deadline";
@@ -691,6 +823,7 @@ pub const ENCODE_TEXT_NEW: &str = "encode.text.new";
 pub const TRAIN_COLLAB: &str = "train.collab.new";
 pub const TRAIN_TASTE: &str = "train.taste.new";
 pub const HIGHLIGHT_TRACK: &str = "highlight.track.new";
+pub const VIDEO_FIND: &str = "video.find.new";
 
 pub const DONE_INDEX_AUDIO: &str = "done.index_audio";
 pub const DONE_EMBED_LYRICS: &str = "done.embed_lyrics";
@@ -699,6 +832,7 @@ pub const DONE_TRAIN_COLLAB: &str = "done.train_collab";
 pub const DONE_TRAIN_TASTE: &str = "done.train_taste";
 pub const DONE_ENCODE: &str = "done.encode";
 pub const DONE_HIGHLIGHT: &str = "done.highlight";
+pub const DONE_VIDEO_FIND: &str = "done.video_find";
 pub const HIGHLIGHT_VERSION: i16 = 2;
 
 pub const WORKER_INVALID_SUBJECT: &str = "worker.invalid.<lane>";
@@ -765,6 +899,8 @@ pub const TRAIN_TASTE_STREAM: PipelineStreamSpec =
     work_stream("TRAIN_TASTE", &["train.taste.>"], DAY, HOUR);
 pub const HIGHLIGHT_STREAM: PipelineStreamSpec =
     work_stream("HIGHLIGHT", &["highlight.>"], DAY, DAY);
+pub const VIDEO_FIND_STREAM: PipelineStreamSpec =
+    work_stream("VIDEO_FIND", &["video.find.>"], DAY, DAY);
 pub const WORKER_INVALID_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     name: "WORKER_INVALID",
     subjects: &["worker.invalid.>"],
@@ -800,7 +936,7 @@ pub const STORAGE_EVENTS_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     allow_direct: false,
 };
 
-pub const WORKER_STREAMS: [PipelineStreamSpec; 12] = [
+pub const WORKER_STREAMS: [PipelineStreamSpec; 13] = [
     INDEX_AUDIO_STREAM,
     EMBED_LYRICS_STREAM,
     TRANSCRIBE_STREAM,
@@ -808,6 +944,7 @@ pub const WORKER_STREAMS: [PipelineStreamSpec; 12] = [
     TRAIN_COLLAB_STREAM,
     TRAIN_TASTE_STREAM,
     HIGHLIGHT_STREAM,
+    VIDEO_FIND_STREAM,
     AI_RPC_STREAM,
     SPEAK_RPC_STREAM,
     SPEAK_REPLY_STREAM,
@@ -826,6 +963,7 @@ pub const PIPELINE_STREAMS: &[PipelineStreamSpec] = &[
     TRAIN_COLLAB_STREAM,
     TRAIN_TASTE_STREAM,
     HIGHLIGHT_STREAM,
+    VIDEO_FIND_STREAM,
     WORKER_INVALID_STREAM,
     DONE_STREAM,
     STORAGE_EVENTS_STREAM,

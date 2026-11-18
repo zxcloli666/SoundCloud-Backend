@@ -17,6 +17,7 @@ taste       TRAIN_TASTE   train.taste.new      7200 300  60   1 300 1800 39900  
 ai          AI_RPC        ai.rpc.>               30  30   6 128   -    -     -    - private
 speak       SPEAK_RPC     speak.rpc.>            90  30   6   8   -    -     -    - public
 highlight   HIGHLIGHT     highlight.track.new   120  60  12  64  30  600  1050    - private
+video-find  VIDEO_FIND     video.find.new       600  60  12  16  60 1800  3900    - private
 """
 STREAM_TABLE = """
 INDEX_AUDIO     index.audio.>     work_queue   86400  86400
@@ -26,6 +27,7 @@ ENCODE          encode.>          work_queue   86400    900
 TRAIN_COLLAB    train.collab.>    work_queue   21600   3600
 TRAIN_TASTE     train.taste.>     work_queue   86400   3600
 HIGHLIGHT       highlight.>       work_queue   86400  86400
+VIDEO_FIND      video.find.>      work_queue   86400  86400
 AI_RPC          ai.rpc.>          work_queue     120    120
 SPEAK_RPC       speak.rpc.>       work_queue     120    120
 SPEAK_REPLY     speak.reply.>,speak.keep.>  limits  600  120
@@ -42,6 +44,7 @@ DONE_SUBJECTS = {
     "ai": None,
     "speak": None,
     "highlight": "done.highlight",
+    "video-find": "done.video_find",
 }
 OBJECT_STORES = {"COLLAB_DATA": 86400, "TASTE_DATA": 86400, "TASTE_MODELS": None}
 

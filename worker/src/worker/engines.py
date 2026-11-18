@@ -29,6 +29,7 @@ from worker.domain.ports import (
     Speech,
     TextKind,
     TokenSpan,
+    Uint8Array,
 )
 from worker.domain.taste import BASELINES as TASTE_BASELINES
 from worker.domain.taste import TasteComparison, TasteScores, TasteTraining
@@ -337,6 +338,12 @@ class RuntimeEngines:
         if value is not None and not isinstance(value, str):
             raise invalid("fingerprint", f"fingerprint is {type(value).__name__}")
         return value
+
+    async def embed_frames(self, frames: Uint8Array, deadline: Deadline) -> Float32Array:
+        arrays, _ = await self._slots.direct(
+            "clip", "embed_frames", {"frames": frames}, {}, deadline
+        )
+        return float32(arrays, "vectors", "clip")
 
     async def train_collab(
         self,

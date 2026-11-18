@@ -33,6 +33,7 @@ pub struct JobsConfig {
     pub taste: TasteConfig,
     pub highlights: HighlightConfig,
     pub video_accounts: VideoAccountsConfig,
+    pub video_find: VideoFindConfig,
     pub durations: DurationConfig,
     pub indexing: IndexingConfig,
     pub sync_queue: SyncQueueConfig,
@@ -361,6 +362,48 @@ impl HighlightConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct VideoFindConfig {
+    pub in_flight: i64,
+    pub tick: Duration,
+    pub timeout: Duration,
+    pub upload_url: url::Url,
+    pub account_pause: Duration,
+    pub source_gap: Duration,
+    pub retry_base: Duration,
+    pub max_attempts: u32,
+    pub none_recheck: Duration,
+    pub static_recheck: Duration,
+}
+
+impl VideoFindConfig {
+    fn from_env() -> Result<Self, ConfigError> {
+        let upload = match env::optional("VIDEO_UPLOAD_URL") {
+            Some(value) => value,
+            None => env::required("STORAGE_URL")?,
+        };
+        Ok(Self {
+            in_flight: env::parse("VIDEO_FIND_IN_FLIGHT", "0")?,
+            tick: Duration::from_secs(env::positive_u64("VIDEO_FIND_TICK_SECONDS", 30)?),
+            timeout: Duration::from_secs(env::positive_u64("VIDEO_FIND_TIMEOUT_SECONDS", 4_200)?),
+            upload_url: http_url("VIDEO_UPLOAD_URL", upload)?,
+            account_pause: Duration::from_secs(env::positive_u64(
+                "VIDEO_ACCOUNT_PAUSE_SECONDS",
+                3_600,
+            )?),
+            source_gap: Duration::from_millis(env::positive_u64("VIDEO_SOURCE_GAP_MS", 1_500)?),
+            retry_base: Duration::from_secs(env::positive_u64("VIDEO_RETRY_BASE_SECONDS", 900)?),
+            max_attempts: positive("VIDEO_MAX_ATTEMPTS", env::parse("VIDEO_MAX_ATTEMPTS", "5")?)?,
+            none_recheck: Duration::from_secs(
+                env::positive_u64("VIDEO_NONE_RECHECK_DAYS", 30)? * 86_400,
+            ),
+            static_recheck: Duration::from_secs(
+                env::positive_u64("VIDEO_STATIC_RECHECK_DAYS", 90)? * 86_400,
+            ),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct VideoAccountsConfig {
     pub check_every: Duration,
     pub spotify_totp_version: u32,
@@ -548,6 +591,7 @@ impl JobsConfig {
             collab: CollabConfig::from_env()?,
             taste: TasteConfig::from_env()?,
             highlights: HighlightConfig::from_env()?,
+            video_find: VideoFindConfig::from_env()?,
             video_accounts: VideoAccountsConfig::from_env()?,
             durations: DurationConfig::from_env()?,
             indexing: IndexingConfig::from_env()?,

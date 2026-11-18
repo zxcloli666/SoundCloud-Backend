@@ -222,6 +222,17 @@ impl ExternalFetcher {
             .await
     }
 
+    pub async fn post_authenticated(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        body: Bytes,
+        max_bytes: usize,
+    ) -> SourceResult<Bytes> {
+        self.send_proxy(Method::POST, url, headers, Some(body), max_bytes)
+            .await
+    }
+
     pub async fn get_scrape(
         &self,
         url: &str,
@@ -508,6 +519,44 @@ mod tests {
         }
 
         assert!(started.elapsed() >= Duration::from_millis(380));
+    }
+
+    #[tokio::test]
+    async fn a_post_reaches_the_proxy_with_its_body_and_target() {
+        let app = Router::new().route(
+            "/",
+            any(
+                |method: axum::http::Method, headers: axum::http::HeaderMap, body: Bytes| async move {
+                    let target = headers
+                        .get("x-target")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    format!("{method} {target} {}", String::from_utf8_lossy(&body))
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let http = sc_fingerprint::builder(None).build().unwrap();
+        let fetcher = ExternalFetcher::new(http, format!("http://{address}/"), None);
+
+        let reply = fetcher
+            .post_authenticated(
+                "https://example.test/query",
+                HeaderMap::new(),
+                Bytes::from_static(b"{\"a\":1}"),
+                1024,
+            )
+            .await
+            .unwrap();
+
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode("https://example.test/query");
+        assert_eq!(reply, Bytes::from(format!("POST {encoded} {{\"a\":1}}")));
     }
 
     async fn holding_proxy(

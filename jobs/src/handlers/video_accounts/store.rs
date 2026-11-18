@@ -54,7 +54,7 @@ pub(super) async fn due(pool: &PgPool, every: Duration) -> Result<Vec<String>, s
         .await
 }
 
-pub(super) async fn record(
+pub(crate) async fn record(
     pool: &PgPool,
     name: &str,
     status: Option<&str>,
@@ -85,4 +85,35 @@ pub(super) async fn release_alert(pool: &PgPool, name: &str) -> Result<(), sqlx:
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub(crate) async fn lease(
+    pool: &PgPool,
+    source: &str,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    let row = sqlx::query_file!("queries/video_accounts/lease.sql", source)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|row| (row.name, row.secret)))
+}
+
+pub(crate) async fn pause(
+    pool: &PgPool,
+    name: &str,
+    pause: Duration,
+    error: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query_file!(
+        "queries/video_accounts/pause.sql",
+        name,
+        pause.as_secs_f64(),
+        error
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn kill(pool: &PgPool, name: &str, error: &str) -> Result<(), sqlx::Error> {
+    record(pool, name, Some("dead"), Some(error)).await
 }

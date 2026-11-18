@@ -7,17 +7,18 @@ use crate::pipeline::{
     AI_COMPLETE, AI_RPC_STREAM, AudioIndexRequest, AudioIndexResult,
     COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest, CollabTrainResult,
     CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT,
-    DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, EMBED_LYRICS,
-    EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest, EncodeResult,
-    HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult, INDEX_AUDIO,
-    INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult, MAX_COMPLETE_MESSAGE_BYTES,
-    MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
-    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
-    PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY,
-    SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM,
-    TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest, TasteTrainResult, TranscriptionRequest,
-    TranscriptionResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES,
-    WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
+    DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, DONE_VIDEO_FIND,
+    EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest,
+    EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult,
+    INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult,
+    MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES,
+    MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES,
+    MAX_SAY_TEXT_CHARS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS,
+    SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM,
+    TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest,
+    TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_FIND, VIDEO_FIND_STREAM,
+    VideoFindRequest, VideoFindResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT,
+    WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -55,10 +56,11 @@ pub enum WorkerLane {
     Ai,
     Speak,
     Highlight,
+    VideoFind,
 }
 
 impl WorkerLane {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Audio,
         Self::Lyrics,
         Self::Transcribe,
@@ -68,6 +70,7 @@ impl WorkerLane {
         Self::Ai,
         Self::Speak,
         Self::Highlight,
+        Self::VideoFind,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -81,6 +84,7 @@ impl WorkerLane {
             Self::Ai => "ai",
             Self::Speak => "speak",
             Self::Highlight => "highlight",
+            Self::VideoFind => "video-find",
         }
     }
 
@@ -95,6 +99,7 @@ impl WorkerLane {
             Self::Ai => &AI_LANE,
             Self::Speak => &SPEAK_LANE,
             Self::Highlight => &HIGHLIGHT_LANE,
+            Self::VideoFind => &VIDEO_FIND_LANE,
         }
     }
 }
@@ -407,7 +412,33 @@ pub const HIGHLIGHT_LANE: WorkerLaneSpec = WorkerLaneSpec {
     priority_group: None,
 };
 
-pub const WORKER_LANES: [WorkerLaneSpec; 9] = [
+pub const VIDEO_FIND_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::VideoFind,
+    stream: VIDEO_FIND_STREAM,
+    durable: "video-find-workers",
+    filter_subject: VIDEO_FIND,
+    done_subject: Some(DONE_VIDEO_FIND),
+    correlation_prefix: "video_find",
+    correlation: &["sc_track_id", "attempt"],
+    echo: &[
+        ("sc_track_id", "sc_track_id"),
+        ("attempt", "attempt"),
+        ("youtube_account", "account"),
+    ],
+    deadline_s: 600,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 16,
+    nak: Some(NakBackoff {
+        base_s: 60,
+        cap_s: 1800,
+    }),
+    result_max_bytes: 8 * 1024,
+    public: false,
+    priority_group: None,
+};
+
+pub const WORKER_LANES: [WorkerLaneSpec; 10] = [
     AUDIO_LANE,
     LYRICS_LANE,
     TRANSCRIBE_LANE,
@@ -417,6 +448,7 @@ pub const WORKER_LANES: [WorkerLaneSpec; 9] = [
     AI_LANE,
     SPEAK_LANE,
     HIGHLIGHT_LANE,
+    VIDEO_FIND_LANE,
 ];
 
 pub const fn done_duplicate_window_seconds() -> u64 {
@@ -655,6 +687,8 @@ pub fn schemas() -> BTreeMap<String, Value> {
         rpc_reply::<SayData>(SPEAK_SAY),
         request::<HighlightRequest>(HIGHLIGHT_TRACK),
         done::<HighlightResult>(WorkerLane::Highlight),
+        request::<VideoFindRequest>(VIDEO_FIND),
+        done::<VideoFindResult>(WorkerLane::VideoFind),
     ])
 }
 
@@ -766,6 +800,16 @@ fn required_on(lane: WorkerLane, status: WorkerStatus) -> Vec<&'static str> {
         (WorkerLane::Highlight, WorkerStatus::Ok) => {
             vec!["version", "start_ms", "length_ms", "score"]
         }
+        (WorkerLane::VideoFind, WorkerStatus::Ok) => vec![
+            "kind",
+            "uncertain",
+            "s3_key",
+            "offset_ms",
+            "duration_ms",
+            "loop",
+            "source",
+            "scores",
+        ],
         _ => Vec::new(),
     }
 }
@@ -840,6 +884,7 @@ mod tests {
             (WorkerLane::Collab, 60, 19_800, 41_400, None),
             (WorkerLane::Taste, 60, 39_900, 126_300, None),
             (WorkerLane::Highlight, 12, 1050, 87_450, None),
+            (WorkerLane::VideoFind, 12, 3900, 90_300, None),
         ];
         for (lane, heartbeat, window, quarantine, bridge) in table {
             let spec = lane.spec();
@@ -1482,6 +1527,42 @@ mod tests {
         assert_eq!(
             request["required"],
             json!(["sc_track_id", "s3_url", "attempt", "version"])
+        );
+    }
+
+    #[test]
+    fn the_video_find_lane_is_private_and_an_ok_video_carries_its_window() {
+        let schemas = schemas();
+        let exported = contract();
+        let lane = &exported["lanes"]["video-find"];
+        let ok = rule_of(&schemas, DONE_VIDEO_FIND, "ok");
+        let request = &schemas[VIDEO_FIND];
+
+        assert_eq!(lane["stream"], "VIDEO_FIND");
+        assert_eq!(lane["durable"], "video-find-workers");
+        assert_eq!(lane["public"], false);
+        assert_eq!(lane["echo"]["youtube_account"], "account");
+        assert_eq!(
+            ok["required"],
+            json!([
+                "kind",
+                "uncertain",
+                "s3_key",
+                "offset_ms",
+                "duration_ms",
+                "loop",
+                "source",
+                "scores"
+            ])
+        );
+        assert_eq!(
+            rule_of(&schemas, DONE_VIDEO_FIND, "rejected"),
+            &json!(false)
+        );
+        assert!(
+            request["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("upload_url")))
         );
     }
 }

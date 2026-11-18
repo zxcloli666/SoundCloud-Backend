@@ -93,10 +93,14 @@ pub enum WorkerReason {
     WorkerLost,
     PublicNodeTimeout,
     SeparationSkipped,
+    NoVideoFound,
+    StaticVideo,
+    SourceRateLimited,
+    SourceAuthFailed,
 }
 
 impl WorkerReason {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 38] = [
         Self::EmptyText,
         Self::EmptyReferenceText,
         Self::SilentAudio,
@@ -131,6 +135,10 @@ impl WorkerReason {
         Self::WorkerLost,
         Self::PublicNodeTimeout,
         Self::SeparationSkipped,
+        Self::NoVideoFound,
+        Self::StaticVideo,
+        Self::SourceRateLimited,
+        Self::SourceAuthFailed,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -169,6 +177,10 @@ impl WorkerReason {
             Self::WorkerLost => "worker_lost",
             Self::PublicNodeTimeout => "public_node_timeout",
             Self::SeparationSkipped => "separation_skipped",
+            Self::NoVideoFound => "no_video_found",
+            Self::StaticVideo => "static_video",
+            Self::SourceRateLimited => "source_rate_limited",
+            Self::SourceAuthFailed => "source_auth_failed",
         }
     }
 
@@ -179,7 +191,9 @@ impl WorkerReason {
             | Self::SilentAudio
             | Self::AudioTooShort
             | Self::EmptyVocab
-            | Self::TooFewUsers => WorkerStatus::Empty,
+            | Self::TooFewUsers
+            | Self::NoVideoFound
+            | Self::StaticVideo => WorkerStatus::Empty,
             Self::AudioNotFound | Self::AudioForbidden | Self::ObjectNotFound => {
                 WorkerStatus::Missing
             }
@@ -209,6 +223,8 @@ impl WorkerReason {
             | Self::OutOfMemory
             | Self::DownloadFailed
             | Self::ObjectStoreUnavailable
+            | Self::SourceRateLimited
+            | Self::SourceAuthFailed
             | Self::InternalError => Some(FailureClass::Transient),
             Self::EngineRestarted
             | Self::WorkerLost
@@ -349,6 +365,27 @@ impl WorkerLane {
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
             ],
+            Self::VideoFind => &[
+                WorkerReason::SilentAudio,
+                WorkerReason::AudioNotFound,
+                WorkerReason::AudioForbidden,
+                WorkerReason::InvalidRequest,
+                WorkerReason::UndecodableAudio,
+                WorkerReason::AudioTooLong,
+                WorkerReason::AudioTooLarge,
+                WorkerReason::DeadlineExceeded,
+                WorkerReason::EngineCrashed,
+                WorkerReason::OutOfMemory,
+                WorkerReason::DownloadFailed,
+                WorkerReason::ObjectStoreUnavailable,
+                WorkerReason::InternalError,
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::NoVideoFound,
+                WorkerReason::StaticVideo,
+                WorkerReason::SourceRateLimited,
+                WorkerReason::SourceAuthFailed,
+            ],
             Self::Ai | Self::Speak => &[],
         }
     }
@@ -373,7 +410,7 @@ impl WorkerLane {
                 WorkerReason::PublicNodeTimeout,
                 WorkerReason::SeparationSkipped,
             ],
-            Self::Lyrics | Self::Collab | Self::Taste | Self::Highlight => {
+            Self::Lyrics | Self::Collab | Self::Taste | Self::Highlight | Self::VideoFind => {
                 &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost]
             }
             Self::Encode | Self::Ai | Self::Speak => &[],
