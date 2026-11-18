@@ -189,7 +189,7 @@ pub(crate) fn metadata_from_sc(value: &Value) -> Value {
                     value
                         .get("permalink_url")
                         .and_then(Value::as_str)
-                        .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
+                        .and_then(crate::sc_payload::permalink_slug)
                 })
                 .flatten()
         });

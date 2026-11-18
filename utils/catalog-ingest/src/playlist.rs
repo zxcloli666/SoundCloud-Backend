@@ -5,7 +5,7 @@ use wt::{Mode, ObservePlaylists};
 
 use crate::Observation;
 use crate::release_date;
-use crate::sc_payload::{parse_dt, string_field, without_nul};
+use crate::sc_payload::{parse_dt, permalink_field, string_field, without_nul};
 use catalog_normalize::normalize_title;
 
 pub async fn upsert_playlist_from_sc(
@@ -141,7 +141,7 @@ impl ScPlaylistFields {
             .collect();
 
         let artwork_url = string_field(payload, "artwork_url");
-        let permalink_url = string_field(payload, "permalink_url");
+        let permalink_url = permalink_field(payload, "permalink_url");
 
         let owner = payload.get("user");
         let owner_ref = owner.and_then(crate::sc_ids::user_ref);

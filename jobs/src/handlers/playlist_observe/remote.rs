@@ -396,7 +396,8 @@ fn hydrate_track(value: &Value, track_id: &str) -> Option<HydratedTrack> {
             .collect(),
         duration_ms: duration,
         artwork_url: non_empty_string(value, "artwork_url"),
-        permalink_url: non_empty_string(value, "permalink_url"),
+        permalink_url: non_empty_string(value, "permalink_url")
+            .map(|url| catalog_ingest::clean_permalink(&url)),
         waveform_url: non_empty_string(value, "waveform_url"),
         language: non_empty_string(value, "language"),
         isrc: publisher.and_then(|metadata| non_empty_string(metadata, "isrc")),
@@ -604,6 +605,33 @@ mod tests {
 
         assert_eq!(page.hydrated_tracks.len(), 1);
         assert_eq!(page.hydrated_tracks[0].title_normalized, "moon");
+    }
+
+    #[test]
+    fn a_share_tail_on_the_permalink_hydrates_the_same_track() {
+        let page = |permalink_url: &str| {
+            TrackPage::parse(&json!({
+                "collection": [{
+                    "id": 7,
+                    "title": "Song",
+                    "duration": 123456,
+                    "permalink_url": permalink_url,
+                    "user": { "id": 42, "username": "artist" }
+                }],
+                "next_href": null
+            }))
+            .unwrap()
+            .hydrated_tracks
+        };
+        let clean = page("https://soundcloud.com/artist/song");
+        let shared = page(
+            "https://soundcloud.com/artist/song?utm_medium=api&utm_campaign=social_sharing&utm_source=id_339169",
+        );
+        assert_eq!(shared, clean);
+        assert_eq!(
+            clean[0].permalink_url.as_deref(),
+            Some("https://soundcloud.com/artist/song")
+        );
     }
 
     #[test]
