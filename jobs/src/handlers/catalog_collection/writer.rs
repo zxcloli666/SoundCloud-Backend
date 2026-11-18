@@ -13,14 +13,30 @@ use std::collections::HashSet;
 pub(super) struct CollectionWriter {
     pool: PgPool,
     entities: CatalogWriter,
+    audience_max_items: i64,
 }
 
 impl CollectionWriter {
-    pub(super) fn new(pool: PgPool, max_track_duration_ms: i32) -> Self {
+    pub(super) fn new(pool: PgPool, max_track_duration_ms: i32, audience_max_items: i64) -> Self {
         Self {
             entities: CatalogWriter::new(pool.clone(), max_track_duration_ms),
             pool,
+            audience_max_items,
         }
+    }
+
+    fn audience_is_full(
+        &self,
+        payload: &CatalogCollectionPayload,
+        snapshot: &state::Snapshot,
+        items: usize,
+    ) -> bool {
+        matches!(
+            payload.collection,
+            CatalogCollection::TrackFavoriters
+                | CatalogCollection::TrackReposters
+                | CatalogCollection::PlaylistReposters
+        ) && snapshot.item_count + items as i64 >= self.audience_max_items
     }
 
     pub(super) async fn persist(
@@ -136,15 +152,11 @@ impl CollectionWriter {
             .map_err(JobError::retryable)?;
         }
         let owner_api = payload.owner && !page.apiv2;
-        more = state::advance(
-            &mut tx,
-            payload,
-            snapshot,
-            &keys,
-            page.next.as_deref(),
-            owner_api,
-        )
-        .await?;
+        let next = page
+            .next
+            .as_deref()
+            .filter(|_| !self.audience_is_full(payload, snapshot, keys.len()));
+        more = state::advance(&mut tx, payload, snapshot, &keys, next, owner_api).await?;
         if !more && payload.owner && page.apiv2 {
             more = mirror::owner_api_is_due(&mut tx, payload, snapshot).await?;
             if more {
