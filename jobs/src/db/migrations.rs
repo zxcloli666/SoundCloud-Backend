@@ -272,9 +272,9 @@ pub enum MigrationError {
     SplitNotReady { problems: String },
 }
 
-mod rewritten;
 #[cfg(test)]
 mod api_index_tests;
+mod rewritten;
 #[cfg(test)]
 mod rewritten_tests;
 #[cfg(test)]
