@@ -68,6 +68,10 @@ pub fn router() -> Router<AppState> {
             post(maintenance::track_enrich_queue),
         )
         .route(
+            "/admin/maintenance/artist-playable-tracks",
+            post(maintenance::artist_playable_tracks),
+        )
+        .route(
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
         )

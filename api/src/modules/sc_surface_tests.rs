@@ -122,7 +122,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 92] = [
+const CLASSIFIED_ROUTES: [&str; 93] = [
     "/admin/activity",
     "/admin/albums",
     "/admin/artists",
@@ -147,6 +147,7 @@ const CLASSIFIED_ROUTES: [&str; 92] = [
     "/admin/maintenance/track-sync-stamps",
     "/admin/maintenance/track-work-keys",
     "/admin/maintenance/track-enrich-queue",
+    "/admin/maintenance/artist-playable-tracks",
     "/admin/maintenance/status",
     "/admin/maintenance/wanted-aliases",
     "/admin/metrics",
