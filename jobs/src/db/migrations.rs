@@ -47,6 +47,7 @@ pub(crate) async fn run_core_up_to(
             .map_err(MigrationError::Migration)?;
         preflight_oauth_app_identities(&mut connection).await?;
         migrate_environment_connections(&mut connection, bootstrap_app).await?;
+        rewritten::repair(&mut connection).await?;
         bounded
             .as_ref()
             .unwrap_or(&CORE)
@@ -271,8 +272,11 @@ pub enum MigrationError {
     SplitNotReady { problems: String },
 }
 
+mod rewritten;
 #[cfg(test)]
 mod api_index_tests;
+#[cfg(test)]
+mod rewritten_tests;
 #[cfg(test)]
 mod target_tests;
 #[cfg(test)]
