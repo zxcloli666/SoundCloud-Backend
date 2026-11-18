@@ -114,6 +114,7 @@ pub enum JobKind {
     AdminTrackSyncStamps,
     AdminTrackWorkKeys,
     AdminTrackEnrichQueue,
+    AdminArtistPlayableTracks,
     AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
@@ -179,6 +180,7 @@ impl JobKind {
         Self::AdminTrackSyncStamps,
         Self::AdminTrackWorkKeys,
         Self::AdminTrackEnrichQueue,
+        Self::AdminArtistPlayableTracks,
         Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
@@ -244,6 +246,7 @@ impl JobKind {
             Self::AdminTrackSyncStamps => "admin.track_sync_stamps",
             Self::AdminTrackWorkKeys => "admin.track_work_keys",
             Self::AdminTrackEnrichQueue => "admin.track_enrich_queue",
+            Self::AdminArtistPlayableTracks => "admin.artist_playable_tracks",
             Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
@@ -354,6 +357,7 @@ impl JobKind {
             | Self::AdminTrackSyncStamps
             | Self::AdminTrackWorkKeys
             | Self::AdminTrackEnrichQueue
+            | Self::AdminArtistPlayableTracks
             | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
@@ -385,6 +389,7 @@ impl FromStr for JobKind {
             "admin.track_sync_stamps" => Self::AdminTrackSyncStamps,
             "admin.track_work_keys" => Self::AdminTrackWorkKeys,
             "admin.track_enrich_queue" => Self::AdminTrackEnrichQueue,
+            "admin.artist_playable_tracks" => Self::AdminArtistPlayableTracks,
             "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,

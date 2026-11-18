@@ -147,6 +147,7 @@ const CLASSIFIED_ROUTES: [&str; 92] = [
     "/admin/maintenance/track-sync-stamps",
     "/admin/maintenance/track-work-keys",
     "/admin/maintenance/track-enrich-queue",
+    "/admin/maintenance/artist-playable-tracks",
     "/admin/maintenance/status",
     "/admin/maintenance/wanted-aliases",
     "/admin/metrics",
