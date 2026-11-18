@@ -43,8 +43,7 @@ fn config() -> VideoFindConfig {
         temp_ttl: Duration::from_secs(3 * 86_400),
         sweep_every: Duration::from_secs(3_600),
         ytdlp: "yt-dlp".into(),
-        proxy_url: None,
-        proxy_ru_url: None,
+        proxy_list: None,
         work_dir: std::env::temp_dir().join("video-find-tests"),
         objects: None,
     }

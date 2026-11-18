@@ -1,6 +1,8 @@
+mod fetch;
 mod leads;
 mod parts;
 mod pick;
+mod pool;
 mod queue;
 mod result;
 mod sources;
@@ -28,7 +30,9 @@ use crate::handlers::video_accounts::{Fetch, Seal, SpotifyKey};
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
 
+pub(crate) use self::fetch::Pooled;
 use self::parts::Parts;
+pub(crate) use self::pool::ProxyPool;
 use self::queue::Claimed;
 use self::sources::{Sources, Wanted};
 use self::ytdlp::Tube;

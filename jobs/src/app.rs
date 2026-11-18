@@ -282,7 +282,7 @@ pub async fn run() -> anyhow::Result<()> {
     supervisor.spawn("highlight sweep", highlights.sweep(cancellation.clone()));
     if let Some(video_find) = handlers
         .video_find(databases.main.bulk.clone(), &config)
-        .await
+        .await?
     {
         let video_receiver = video_find.clone();
         supervisor.spawn(

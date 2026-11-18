@@ -94,11 +94,9 @@ use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
 use self::sync_queue::SyncQueueHandler;
 use self::telemetry::TelemetryHandler;
-use self::video_accounts::{
-    Checker, DirectFirst, Proxied, Seal, SpotifyKey, Telegram, VideoAccounts,
-};
-use self::video_find::VideoFind;
+use self::video_accounts::{Checker, Proxied, Seal, SpotifyKey, Telegram, VideoAccounts};
 use self::video_find::ytdlp::YtDlp;
+use self::video_find::{Pooled, ProxyPool, VideoFind};
 use self::wanted::{AiMatcherClient, WantedHandler};
 use crate::objects::Objects;
 
@@ -245,7 +243,6 @@ pub struct JobHandlers {
     telemetry: TelemetryHandler,
     wanted: Arc<WantedHandler>,
     video_accounts: Arc<VideoAccounts<Proxied, Telegram>>,
-    video_fetcher: Arc<catalog_sources::ExternalFetcher>,
 }
 
 impl JobHandlers {
@@ -412,7 +409,6 @@ impl JobHandlers {
                 Seal::new(config.video_accounts.key.expose()),
                 config.video_accounts.check_every,
             )),
-            video_fetcher: sources.fetcher.clone(),
         })
     }
 
@@ -424,21 +420,25 @@ impl JobHandlers {
         &self,
         pool: sqlx::PgPool,
         config: &JobsConfig,
-    ) -> Option<Arc<VideoFind<DirectFirst, Objects, YtDlp>>> {
-        let objects = Objects::connect(config.video_find.objects.as_ref()?).await;
-        Some(Arc::new(VideoFind::new(
+    ) -> Result<Option<Arc<VideoFind<Pooled, Objects, YtDlp>>>, crate::ClientBuildError> {
+        let Some(objects) = config.video_find.objects.as_ref() else {
+            return Ok(None);
+        };
+        let objects = Objects::connect(objects).await;
+        let proxies = Arc::new(ProxyPool::new(config.video_find.proxy_list.clone()));
+        Ok(Some(Arc::new(VideoFind::new(
             pool,
             config.sync_queue.storage_url.clone(),
             config.video_find.clone(),
-            DirectFirst::new(self.video_fetcher.clone()),
+            Pooled::new(proxies.clone())?,
             SpotifyKey::new(
                 config.video_accounts.spotify_totp_version,
                 &config.video_accounts.spotify_totp_cipher,
             ),
             objects,
-            YtDlp::new(&config.video_find),
+            YtDlp::new(&config.video_find, proxies),
             self.video_accounts.seal(),
-        )))
+        ))))
     }
 
     pub async fn bootstrap(&self) -> JobResult {

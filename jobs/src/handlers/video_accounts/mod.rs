@@ -21,7 +21,7 @@ use crate::bus::Bus;
 
 pub(crate) use self::alert::{Notify, Telegram};
 pub(crate) use self::check::{
-    BROWSER_AGENT, Checker, DirectFirst, Fetch, Proxied, SpotifyKey, Verdict, access_token, headers,
+    BROWSER_AGENT, Checker, Fetch, Proxied, SpotifyKey, Verdict, access_token, headers,
 };
 pub(crate) use self::seal::Seal;
 
