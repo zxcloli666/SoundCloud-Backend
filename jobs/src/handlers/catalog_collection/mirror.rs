@@ -249,9 +249,9 @@ fn unseen(key: &str, wanted: bool) -> String {
     format!(
         "m.user_id = ANY($1) {wanted_filter} AND {served}
         AND m.synced_at < $2 - interval '5 minutes' AND m.created_at < $2 - interval '5 minutes'
-        AND NOT EXISTS (SELECT 1 FROM catalog_collection_seen s
-            WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner'
-              AND s.snapshot_id = $5 AND s.entity_key = m.{key})
+        AND (SELECT s.snapshot_id FROM catalog_collection_seen s
+            WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner' AND s.entity_key = m.{key})
+            IS DISTINCT FROM $5
         AND NOT EXISTS (SELECT 1 FROM sync_queue q WHERE q.user_id = ANY($1)
             AND (q.target_urn = m.{key} OR q.target_urn = 'soundcloud:tracks:' || m.{key}))"
     )
