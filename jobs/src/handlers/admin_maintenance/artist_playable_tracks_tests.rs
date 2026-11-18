@@ -435,12 +435,7 @@ async fn execute_for(pool: &PgPool, id: Uuid, sql: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn execute_credit(
-    pool: &PgPool,
-    track: Uuid,
-    artist: Uuid,
-    sql: &str,
-) -> anyhow::Result<()> {
+async fn execute_credit(pool: &PgPool, track: Uuid, artist: Uuid, sql: &str) -> anyhow::Result<()> {
     sqlx::query(sql)
         .bind(track)
         .bind(artist)
