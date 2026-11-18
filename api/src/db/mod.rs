@@ -45,6 +45,24 @@ pub(crate) async fn replicate_track_search(pool: &PgPool) -> anyhow::Result<()> 
     .await
 }
 
+#[cfg(test)]
+pub(crate) async fn replicate_artist_playable_tracks(pool: &PgPool) -> anyhow::Result<()> {
+    insert_replicated(
+        pool,
+        "INSERT INTO artist_playable_tracks (artist_id, track_id, sc_track_id, ready_home, ready_wave)
+         SELECT ta.artist_id, t.id, t.sc_track_id,
+                t.needs_duration_resolve = false, t.index_state = 'indexed'
+         FROM tracks t
+         JOIN track_artists ta ON ta.track_id = t.id AND ta.role = 'primary'
+         WHERE t.sharing = 'public'
+           AND t.superseded_by IS NULL
+           AND t.storage_state = 'ok'
+           AND (t.needs_duration_resolve = false OR t.index_state = 'indexed')
+         ON CONFLICT (artist_id, track_id) DO NOTHING",
+    )
+    .await
+}
+
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {

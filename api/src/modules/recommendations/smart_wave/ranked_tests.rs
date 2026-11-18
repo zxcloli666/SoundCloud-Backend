@@ -155,7 +155,8 @@ async fn seed(pool: &PgPool) -> anyhow::Result<HashMap<String, i64>> {
     .bind(HUB)
     .execute(pool)
     .await?;
-    sqlx::query("VACUUM ANALYZE tracks, track_artists, sc_track_counters")
+    crate::db::replicate_artist_playable_tracks(pool).await?;
+    sqlx::query("VACUUM ANALYZE tracks, track_artists, sc_track_counters, artist_playable_tracks")
         .execute(pool)
         .await?;
     let plays: Vec<(String, i64)> =

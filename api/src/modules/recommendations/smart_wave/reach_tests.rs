@@ -383,6 +383,7 @@ async fn library(pool: &PgPool) -> anyhow::Result<Library> {
         ),
     )
     .await?;
+    crate::db::replicate_artist_playable_tracks(pool).await?;
 
     let mut from = Vec::new();
     let mut to = Vec::new();
