@@ -237,6 +237,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_playable_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["artist_id", "track_id"], "expr": false, "keys": ["artist_id", "track_id"], "name": "artist_playable_tracks_pkey", "primary": true, "where": null}
