@@ -81,7 +81,7 @@ fn done(id: &str, attempt: i64, reason: Option<WorkerReason>) -> VideoFindResult
             models: BTreeMap::new(),
             sync_version: None,
         },
-        account: Some("yt1".to_owned()),
+        account: "yt1".to_owned(),
         kind: found.then_some(VideoKind::Clip),
         uncertain: found.then_some(false),
         s3_key: found.then(|| format!("video/{id}-{attempt}.mp4")),

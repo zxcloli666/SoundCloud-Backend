@@ -196,6 +196,7 @@ def test_cpu_profile_runs_encode_in_its_own_engine_and_lanes_in_parallel_process
         "llm-local": ("llm-local",),
         "encode": ("text", "mulan"),
         "cpu-tools": ("vad", "lid", "fingerprint"),
+        "clip": ("clip",),
     }
     assert sorted(name for name, plan in plans.items() if plan.reserved) == ["encode", "llm-local"]
     assert {name: plan.threads for name, plan in plans.items() if plan.threads} == {

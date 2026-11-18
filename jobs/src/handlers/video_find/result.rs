@@ -191,9 +191,7 @@ async fn account_effect(
     result: &VideoFindResult,
     reason: WorkerReason,
 ) -> JobResult {
-    let Some(account) = result.account.as_deref() else {
-        return Ok(());
-    };
+    let account = result.account.as_str();
     let outcome = match reason {
         WorkerReason::SourceRateLimited => {
             store::pause(pool, account, pacing.account_pause, reason.as_str()).await

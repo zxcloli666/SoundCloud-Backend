@@ -557,9 +557,9 @@
       "done_subject": "done.video_find",
       "durable": "video-find-workers",
       "echo": {
-        "account": "youtube_account",
         "attempt": "attempt",
-        "sc_track_id": "sc_track_id"
+        "sc_track_id": "sc_track_id",
+        "youtube_account": "account"
       },
       "filter_subject": "video.find.new",
       "heartbeat_s": 12,
@@ -3183,7 +3183,8 @@
         "sc_track_id",
         "attempt",
         "status",
-        "producer"
+        "producer",
+        "account"
       ],
       "title": "done.video_find",
       "type": "object"

@@ -423,7 +423,7 @@ pub const VIDEO_FIND_LANE: WorkerLaneSpec = WorkerLaneSpec {
     echo: &[
         ("sc_track_id", "sc_track_id"),
         ("attempt", "attempt"),
-        ("account", "youtube_account"),
+        ("youtube_account", "account"),
     ],
     deadline_s: 600,
     ack_wait_s: 60,
@@ -1541,7 +1541,7 @@ mod tests {
         assert_eq!(lane["stream"], "VIDEO_FIND");
         assert_eq!(lane["durable"], "video-find-workers");
         assert_eq!(lane["public"], false);
-        assert_eq!(lane["echo"]["account"], "youtube_account");
+        assert_eq!(lane["echo"]["youtube_account"], "account");
         assert_eq!(
             ok["required"],
             json!([

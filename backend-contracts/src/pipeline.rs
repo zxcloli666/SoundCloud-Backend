@@ -760,9 +760,8 @@ pub struct VideoFindResult {
     #[schemars(with = "String", length(max = MAX_DETAIL_CHARS))]
     pub detail: Option<String>,
     pub producer: Producer,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
-    pub account: Option<String>,
+    pub account: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "VideoKind")]
     pub kind: Option<VideoKind>,
