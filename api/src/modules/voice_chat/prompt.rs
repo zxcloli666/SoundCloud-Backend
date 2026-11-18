@@ -24,12 +24,12 @@ const EARLIER_ACTIONS: &str =
     "- Earlier replies in this conversation are shown without the actions they ran.";
 
 const FORMAT_WITH_TOOLS: &[&str] = &[
-    "Reply format. Answer with exactly one JSON object and nothing else, no markdown and no text around it:",
+    REPLY_FORMAT,
     "{\"actions\":[{\"name\":\"<tool>\",\"args\":[{\"name\":\"<argument>\",\"value\":<value>}]}],\"say\":\"<spoken reply>\"}",
     "- \"actions\" comes first: the tools to run now, in order. Use [] when nothing has to be done in the app.",
     "- Each argument is one {\"name\":...,\"value\":...} pair. The value is a JSON string, number or boolean, as the tool list says. Leave out arguments marked with \"?\" unless you need them.",
     "- Use only the tools listed below, with their exact names and argument names. Never invent a tool.",
-    "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.",
+    SAY_IS_HEARD,
     NAME_READINGS,
     NAMES_IN_ACTIONS,
     "- A tool marked \"returns a result\" gives you data in the next message. When you call one, keep \"say\" short or empty until you have the result.",
@@ -37,13 +37,33 @@ const FORMAT_WITH_TOOLS: &[&str] = &[
     EARLIER_ACTIONS,
 ];
 
+const REPLY_FORMAT: &str = "Reply format. Answer with exactly one JSON object and nothing else, no markdown and no text around it:";
+
+const SAY_IS_HEARD: &str =
+    "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.";
+
+const NOTHING_CAN_BE_DONE: &str = "- No tools are available for this reply, so nothing can be done in the app right now. When the user asks for something to be done, do not say that you are doing it: say that it did not work this time and ask them to say it again.";
+
+const RESULTS_TO_ANSWER_FROM: &str = "- A user message can end with a <tool_results> block: the tools you already called for that message and what each returned. Answer from the results.";
+
 const FORMAT_WITHOUT_TOOLS: &[&str] = &[
-    "Reply format. Answer with exactly one JSON object and nothing else, no markdown and no text around it:",
+    REPLY_FORMAT,
     "{\"say\":\"<spoken reply>\"}",
-    "- \"say\" is what the user hears: plain speech without markdown, lists, emoji or JSON.",
+    SAY_IS_HEARD,
     NAME_READINGS,
-    "- No tools are available for this reply, so nothing can be done in the app right now. When the user asks for something to be done, do not say that you are doing it: say that it did not work this time and ask them to say it again.",
-    "- A user message can end with a <tool_results> block: the tools you already called for that message and what each returned. Answer from the results.",
+    NOTHING_CAN_BE_DONE,
+    RESULTS_TO_ANSWER_FROM,
+];
+
+const FORMAT_PLAIN: &[&str] = &[
+    REPLY_FORMAT,
+    "{\"wants_action\":<true|false>,\"say\":\"<spoken reply>\"}",
+    "- \"wants_action\" comes first: true when the latest message asks you to do something in the app (play, pause, skip, seek, change the volume, like, add to a playlist and the like), false when it is talk, a question or a request for advice. Then write \"say\".",
+    "- For example, \"поставь на паузу\", \"сделай тише\" and \"skip this one\" are true; \"что это за песня?\" and \"как дела?\" are false.",
+    SAY_IS_HEARD,
+    NAME_READINGS,
+    NOTHING_CAN_BE_DONE,
+    RESULTS_TO_ANSWER_FROM,
 ];
 
 const SILENCE: &str = "Staying silent. The latest message was picked up by a microphone, so it may not be meant for you. When all of it was clearly said to someone else (another person, a child, a pet, someone on the phone) or it is speech from a TV, a radio, a video or a navigator, do not answer at all: reply with no actions and an empty \"say\". This is the one case where an empty reply is right, whatever the other rules say about always saying something. Do not stay silent when the user speaks to you, asks you for anything, even something you cannot do, or names music: answer those as usual. When only a part of the message is for someone else and the rest asks you for something, do what is asked.";
@@ -87,11 +107,15 @@ const APP_STATE: &str = "app_state";
 const TOOL_RESULTS: &str = "tool_results";
 
 pub fn system(chat: &VoiceChatCfg, turn: &Turn) -> System {
-    system_with(chat, turn, &turn.tools, turn.quiet)
+    let format = match turn.tools.is_empty() {
+        true => FORMAT_WITHOUT_TOOLS,
+        false => FORMAT_WITH_TOOLS,
+    };
+    system_with(chat, turn, format, &turn.tools, turn.quiet)
 }
 
 pub fn plain_system(chat: &VoiceChatCfg, turn: &Turn) -> System {
-    system_with(chat, turn, &Tools::default(), false)
+    system_with(chat, turn, FORMAT_PLAIN, &Tools::default(), false)
 }
 
 pub fn messages(turn: &Turn) -> Vec<Message> {
@@ -102,10 +126,16 @@ pub fn plain_messages(turn: &Turn) -> Vec<Message> {
     messages_with(turn, &Tools::default())
 }
 
-fn system_with(chat: &VoiceChatCfg, turn: &Turn, tools: &Tools, quiet: bool) -> System {
+fn system_with(
+    chat: &VoiceChatCfg,
+    turn: &Turn,
+    format: &[&str],
+    tools: &Tools,
+    quiet: bool,
+) -> System {
     System {
         sections: vec![
-            Section::shared(joined(rules(chat, tools, quiet))),
+            Section::shared(joined(rules(chat, format, tools, quiet))),
             Section::shared(joined(character(chat, turn))),
             Section::own(joined(state(turn))),
         ],
@@ -136,11 +166,7 @@ fn messages_with(turn: &Turn, tools: &Tools) -> Vec<Message> {
     messages
 }
 
-fn rules(chat: &VoiceChatCfg, tools: &Tools, quiet: bool) -> Vec<String> {
-    let format = match tools.is_empty() {
-        true => FORMAT_WITHOUT_TOOLS,
-        false => FORMAT_WITH_TOOLS,
-    };
+fn rules(chat: &VoiceChatCfg, format: &[&str], tools: &Tools, quiet: bool) -> Vec<String> {
     let mut sections = vec![
         SETTING.to_owned(),
         chat.instructions.trim().to_owned(),

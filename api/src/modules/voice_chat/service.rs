@@ -100,7 +100,7 @@ impl Live {
         (!turn.tools.is_empty() || turn.quiet).then(|| Plain {
             system: prompt::plain_system(&self.limits, turn),
             messages: prompt::plain_messages(turn),
-            schema: Tools::default().answer_schema(),
+            schema: Tools::plain_schema(),
         })
     }
 }
