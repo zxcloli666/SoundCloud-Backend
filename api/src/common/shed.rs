@@ -46,8 +46,7 @@ pub fn skips_core(method: &Method, path: &str) -> bool {
 }
 
 fn is_voice_hold(method: &Method, path: &str) -> bool {
-    (method == Method::GET && (path == "/remote/wait" || is_speak_poll(path)))
-        || path.starts_with("/skills/")
+    method == Method::GET && is_speak_poll(path)
 }
 
 fn is_speak_poll(path: &str) -> bool {

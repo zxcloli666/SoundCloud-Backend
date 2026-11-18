@@ -320,16 +320,6 @@ async fn main() {
     let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
-    let remote = crate::modules::remote::RemoteHub::new(Some(nats.clone()), "remote");
-    if !remote.prepare().await {
-        tracing::warn!("remote store is not ready yet, voice opens it on first use");
-    }
-    let links = crate::modules::remote::LinksService::new(pg.clone());
-    let confirm = std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
-        redis_pool.clone(),
-        "voice",
-    ));
-
     let voice_chat = crate::modules::voice_chat::VoiceChat::start(&config.llm, Some(&nats))
         .unwrap_or_else(|error| panic!("LLM_CONFIG is refused: {error}"));
     crate::metrics::record_llm_budgets(&config.llm.ladders);
@@ -375,9 +365,6 @@ async fn main() {
         discover,
         sync_queue: sync_queue.clone(),
         rooms,
-        remote,
-        links,
-        confirm,
         voice_chat,
         voice_speak,
     };

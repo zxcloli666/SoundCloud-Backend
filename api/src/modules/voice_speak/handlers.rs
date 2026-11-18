@@ -13,8 +13,8 @@ use super::request::{BODY_LIMIT, SpeakBody, names_a_subject};
 use super::service::{Busy, Fetched, Said};
 use crate::common::admission::Endpoint;
 use crate::common::session::SessionCtx;
+use crate::common::voice_access::{admission_error, require_star};
 use crate::error::{AppError, AppResult};
-use crate::modules::remote::handlers::{admission_error, require_star};
 use crate::state::AppState;
 
 pub const REVISION_HEADER: &str = "x-voice-revision";

@@ -9,8 +9,8 @@ use super::VoiceChat;
 use super::request::{ChatBody, body_limit};
 use crate::common::admission::Endpoint;
 use crate::common::session::SessionCtx;
+use crate::common::voice_access::{admission_error, require_star};
 use crate::error::{AppError, AppResult};
-use crate::modules::remote::handlers::{admission_error, require_star};
 use crate::router::MAX_BODY_BYTES;
 use crate::state::AppState;
 

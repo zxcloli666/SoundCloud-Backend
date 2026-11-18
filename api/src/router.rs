@@ -88,9 +88,6 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::discover::admin::router())
         .merge(modules::search::router())
         .merge(modules::rooms::router())
-        .merge(modules::remote::router())
-        .merge(modules::oauth::router())
-        .merge(modules::skills::router())
         .merge(modules::voice_chat::router(&state.voice_chat))
         .merge(modules::voice_speak::router());
 
@@ -151,11 +148,7 @@ fn hands_out_capability(headers: &HeaderMap) -> bool {
 
 fn is_sensitive_path(path: &str) -> bool {
     let path = path.trim_end_matches('/');
-    if path == "/auth"
-        || path.starts_with("/auth/")
-        || path.starts_with("/oauth/")
-        || path.starts_with("/admin/diag/")
-    {
+    if path == "/auth" || path.starts_with("/auth/") || path.starts_with("/admin/diag/") {
         return true;
     }
     path.starts_with("/tracks/") && path.ends_with("/stream")

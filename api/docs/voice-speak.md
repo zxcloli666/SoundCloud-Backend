@@ -65,7 +65,7 @@ Header `x-session-id`. No Star check, no rate limit. The request holds up to 20 
 
 The 200 carries `X-Voice-Revision` too. No other answer of either route has it.
 
-A ticket belongs to the user who posted it: a poll by anyone else finds nothing and gets 204. The poll does not take a core permit of the load shedder, like `GET /remote/wait`.
+A ticket belongs to the user who posted it: a poll by anyone else finds nothing and gets 204. The poll does not take a core permit of the load shedder.
 
 The clip is an Ogg Opus file, mono.
 

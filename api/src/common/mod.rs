@@ -12,4 +12,5 @@ pub mod sc_payload;
 pub mod session;
 pub mod shed;
 pub mod uuid;
+pub mod voice_access;
 pub mod windows;

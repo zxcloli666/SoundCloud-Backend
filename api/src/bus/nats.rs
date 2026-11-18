@@ -117,10 +117,12 @@ impl NatsService {
         &self.js
     }
 
+    #[cfg(test)]
     pub fn connected(&self) -> bool {
         self.js.client().connection_state() == async_nats::connection::State::Connected
     }
 
+    #[cfg(test)]
     pub async fn wait_connected(&self, budget: Duration) -> bool {
         let flushed = tokio::time::timeout(budget, self.js.client().flush()).await;
         flushed.is_ok_and(|flushed| flushed.is_ok()) && self.connected()

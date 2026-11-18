@@ -32,19 +32,6 @@ pub(super) fn nats_url() -> String {
     std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned())
 }
 
-pub(super) async fn remote_hub(
-    prefix: &str,
-) -> anyhow::Result<Arc<crate::modules::remote::RemoteHub>> {
-    let nats =
-        NatsService::connect(&nats_url(), tokio_util::sync::CancellationToken::new()).await?;
-    nats.wait_connected(Duration::from_secs(2)).await;
-    Ok(crate::modules::remote::RemoteHub::new(Some(nats), prefix))
-}
-
-pub(super) fn remote_prefix() -> String {
-    format!("remote_test_{}", Uuid::now_v7().simple())
-}
-
 pub(super) fn config(redis: &str) -> AppConfig {
     let limit = AdmissionLimitCfg {
         per_client: 1_000,
@@ -108,18 +95,9 @@ pub(super) fn config(redis: &str) -> AppConfig {
             room_list: limit,
             room_create: limit,
             room_join: limit,
-            voice_link_code: limit,
-            voice_remote: limit,
-            voice_remote_wait: limit,
-            voice_page_ip: limit,
-            voice_page_client: limit,
-            voice_salut_sub: limit,
-            voice_utterance: limit,
             voice_resolve: limit,
             voice_chat: limit,
             voice_speak: limit,
-            voice_alice_ip: limit,
-            voice_salut_ip: limit,
             diag_bundle: limit,
             diag_events: limit,
             diag_bytes: AdmissionLimitCfg {
@@ -140,25 +118,6 @@ pub(super) fn config(redis: &str) -> AppConfig {
         storage: StorageCfg { url: String::new() },
         subscriptions: SubscriptionsCfg {
             always_premium: true,
-        },
-        voice: crate::config::VoiceCfg {
-            assistant_name: "Лоля".to_owned(),
-            skill_name: "Лоля".to_owned(),
-            alice_skill_id: "skill-1".to_owned(),
-            salut_token: "salut-token".to_owned().into(),
-            salut_project_id: String::new(),
-            review_code: "12345678".to_owned().into(),
-            alice_wait: Duration::from_millis(800),
-            salut_wait: Duration::from_millis(800),
-            oauth_clients: vec![crate::config::OAuthClient {
-                id: "yandex".to_owned(),
-                provider: backend_contracts::remote::LinkProvider::Alice,
-                secret_sha256: <sha2::Sha256 as sha2::Digest>::digest(b"s3cret").to_vec(),
-                redirect_uris: vec!["https://social.yandex.net/broker/redirect".to_owned()],
-            }],
-            enabled: true,
-            confirm_per_user_day: 20,
-            code_retry: Duration::from_millis(200),
         },
         llm: crate::config::LlmCfg::default(),
         soundwave: SoundwaveCfg {
@@ -364,12 +323,6 @@ pub(super) async fn state_with(
         recommendations,
         sync_queue,
         rooms,
-        remote: remote_hub(&remote_prefix()).await?,
-        links: crate::modules::remote::LinksService::new(pg.clone()),
-        confirm: std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
-            redis_pool.clone(),
-            format!("voice-test-{}", Uuid::now_v7()),
-        )),
         voice_chat: crate::modules::voice_chat::VoiceChat::off(),
         voice_speak: crate::modules::voice_speak::VoiceSpeak::off(),
         pg,
@@ -445,26 +398,6 @@ pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Rout
     Ok(crate::router::build(
         state(pool, soundcloud_hits(), redis).await?,
     ))
-}
-
-pub(super) async fn app_with(
-    pool: &PgPool,
-    config: AppConfig,
-    star: bool,
-) -> anyhow::Result<axum::Router> {
-    let mut st = state_with(pool, soundcloud_hits(), config).await?;
-    if !star {
-        st.subscriptions =
-            crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
-    }
-    Ok(crate::router::build(st))
-}
-
-pub(super) async fn app_without_star(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Router> {
-    let mut st = state(pool, soundcloud_hits(), redis).await?;
-    st.subscriptions =
-        crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
-    Ok(crate::router::build(st))
 }
 
 pub(crate) async fn app_with_handoff(

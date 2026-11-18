@@ -43,9 +43,6 @@ fn is_open_path(path: &str) -> bool {
         || path == "/me/subscription"
         || path == "/admin/metrics"
         || path.starts_with("/auth/")
-        || path.starts_with("/oauth/")
-        || path.starts_with("/skills/")
-        || path.starts_with("/remote/")
         || path == "/voice/chat"
         || path == "/voice/speak"
         || path.starts_with("/voice/speak/")
@@ -61,14 +58,9 @@ mod tests {
     #[test]
     fn voice_paths_check_star_in_their_own_handlers() {
         for path in [
-            "/remote/wait",
-            "/remote/links",
-            "/remote/links/1",
             "/voice/chat",
             "/voice/speak",
             "/voice/speak/0190f0c2-7a4e-7c1d-9b3e-5f2a8c6d4e1b",
-            "/skills/salut/token",
-            "/oauth/authorize/status",
         ] {
             assert!(is_open_path(path), "{path}");
         }
