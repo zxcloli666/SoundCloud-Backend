@@ -51,13 +51,22 @@ pub async fn put(
 }
 
 fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
+    if state.config.video_upload_token.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "video upload token is not configured".into(),
+        ));
+    }
+    check_bearer(headers, &state.config.video_upload_token)
+}
+
+fn check_bearer(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode, String)> {
     let token = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or((StatusCode::UNAUTHORIZED, "missing token".into()))?;
-    let expected = state.config.admin_token.as_bytes();
-    if expected.is_empty() || token.as_bytes().ct_eq(expected).unwrap_u8() != 1 {
+    if token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
         return Err((StatusCode::FORBIDDEN, "invalid token".into()));
     }
     Ok(())
@@ -103,7 +112,38 @@ async fn receive(body: Body, tmp: &std::path::Path) -> Result<u64, (StatusCode, 
 
 #[cfg(test)]
 mod tests {
-    use super::valid_name;
+    use axum::http::{HeaderMap, StatusCode};
+
+    use super::{check_bearer, valid_name};
+
+    fn bearer(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn the_video_token_opens_a_video_put() {
+        assert!(check_bearer(&bearer("video-secret"), "video-secret").is_ok());
+    }
+
+    #[test]
+    fn a_wrong_token_is_refused() {
+        let error = check_bearer(&bearer("other"), "video-secret").unwrap_err();
+        assert_eq!(error.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn the_admin_token_is_not_the_video_token() {
+        let error = check_bearer(&bearer("admin-secret"), "video-secret").unwrap_err();
+        assert_eq!(error.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn a_missing_header_is_unauthorized() {
+        let error = check_bearer(&HeaderMap::new(), "video-secret").unwrap_err();
+        assert_eq!(error.0, StatusCode::UNAUTHORIZED);
+    }
 
     #[test]
     fn a_name_is_track_dash_attempt_dot_mp4() {
