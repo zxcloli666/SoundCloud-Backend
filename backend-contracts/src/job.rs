@@ -119,7 +119,6 @@ pub enum JobKind {
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
     AuthCleanupLoginRequests,
-    AuthCleanupRemoteLinks,
     CollabBootstrap,
     CollabTrain,
     CatalogCreditReview,
@@ -185,7 +184,6 @@ impl JobKind {
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
         Self::AuthCleanupLoginRequests,
-        Self::AuthCleanupRemoteLinks,
         Self::CollabBootstrap,
         Self::CollabTrain,
         Self::CatalogCreditReview,
@@ -251,7 +249,6 @@ impl JobKind {
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
             Self::AuthCleanupLoginRequests => "auth.cleanup_login_requests",
-            Self::AuthCleanupRemoteLinks => "auth.cleanup_remote_links",
             Self::CollabBootstrap => "collab.bootstrap",
             Self::CollabTrain => "collab.train",
             Self::CatalogCreditReview => "catalog.review_credits",
@@ -306,7 +303,6 @@ impl JobKind {
         match self {
             Self::AuthCleanupLinkRequests
             | Self::AuthCleanupLoginRequests
-            | Self::AuthCleanupRemoteLinks
             | Self::CleanupJobReceipts
             | Self::DiagCleanup
             | Self::DispatchAudioIndex
@@ -394,7 +390,6 @@ impl FromStr for JobKind {
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
             "auth.cleanup_login_requests" => Self::AuthCleanupLoginRequests,
-            "auth.cleanup_remote_links" => Self::AuthCleanupRemoteLinks,
             "collab.bootstrap" => Self::CollabBootstrap,
             "collab.train" => Self::CollabTrain,
             "catalog.review_credits" => Self::CatalogCreditReview,
@@ -532,13 +527,12 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 62);
+        assert_eq!(kinds.len(), 61);
     }
 
     #[test]
     fn latency_sensitive_and_ops_kinds_have_dedicated_lanes() {
         assert_eq!(JobKind::AuthCleanupLoginRequests.lane(), JobLane::CoreFast);
-        assert_eq!(JobKind::AuthCleanupRemoteLinks.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::DispatchAudioIndex.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::DispatchTranscription.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::LyricsEmbed.lane(), JobLane::CoreFast);

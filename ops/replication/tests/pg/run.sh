@@ -72,6 +72,7 @@ done
 echo "ok publication column lists = planned columns that exist"
 
 . "$here/lyrics_drop.sh"
+. "$here/remote_voice_drop.sh"
 
 subscribe core main "scd_api_pub, scd_cmd_pub" "origin = none"
 subscribe core star "scd_api_pub, scd_cmd_pub" "origin = none"
