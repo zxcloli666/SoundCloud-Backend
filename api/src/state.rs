@@ -72,9 +72,6 @@ pub struct AppState {
     pub discover: Arc<DiscoverService>,
     pub sync_queue: Arc<SyncQueueService>,
     pub rooms: Arc<RoomsService>,
-    pub remote: Arc<crate::modules::remote::RemoteHub>,
-    pub links: Arc<crate::modules::remote::LinksService>,
-    pub confirm: Arc<crate::modules::remote::LinkConfirm>,
     pub voice_chat: Arc<crate::modules::voice_chat::VoiceChat>,
     pub voice_speak: Arc<crate::modules::voice_speak::VoiceSpeak>,
 }

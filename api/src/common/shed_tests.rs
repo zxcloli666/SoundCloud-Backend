@@ -130,18 +130,6 @@ fn the_room_long_poll_skips_the_core_limit_and_room_writes_do_not() {
 }
 
 #[test]
-fn the_voice_long_polls_skip_the_core_limit_and_the_rest_of_remote_does_not() {
-    assert!(skips_core(&Method::GET, "/remote/wait"));
-    assert!(skips_core(&Method::POST, "/skills/alice"));
-    assert!(skips_core(&Method::POST, "/skills/salut"));
-    assert!(!skips_core(&Method::POST, "/remote/wait"));
-    assert!(!skips_core(&Method::POST, "/remote/reply"));
-    assert!(!skips_core(&Method::POST, "/remote/link-code"));
-    assert!(!skips_core(&Method::GET, "/remote/links"));
-    assert!(!skips_core(&Method::POST, "/oauth/token"));
-}
-
-#[test]
 fn the_speak_poll_skips_the_core_limit_and_the_speak_post_does_not() {
     assert!(skips_core(
         &Method::GET,
@@ -157,9 +145,9 @@ fn the_speak_poll_skips_the_core_limit_and_the_speak_post_does_not() {
 }
 
 #[tokio::test]
-async fn a_held_voice_wait_does_not_use_a_slot() {
+async fn a_held_speak_poll_does_not_use_a_slot() {
     let app = Router::new()
-        .route("/remote/wait", get(slow))
+        .route("/voice/speak/{ticket}", get(slow))
         .route("/tracks/{id}", get(slow))
         .layer(from_fn_with_state(
             Shed::new(1, 1, Duration::from_millis(20)),
@@ -168,7 +156,7 @@ async fn a_held_voice_wait_does_not_use_a_slot() {
     let waits: Vec<_> = (0..5)
         .map(|_| {
             let app = app.clone();
-            tokio::spawn(async move { app.oneshot(get_request("/remote/wait")).await })
+            tokio::spawn(async move { app.oneshot(get_request("/voice/speak/0190f0c2")).await })
         })
         .collect();
     tokio::time::sleep(Duration::from_millis(50)).await;

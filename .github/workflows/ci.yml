@@ -66,7 +66,7 @@ jobs:
         | test(~modules::chat::synthetic::tests) | test(~modules::chat::devices::tests) | test(~modules::chat::keys::tests)
         | test(~modules::chat::invites::tests) | test(~modules::chat::settings::tests) | test(~qdrant_io::live_tests)
         | test(~modules::users::public::tests) | test(~modules::resolve::miss_tests)
-        | test(~modules::remote::) | test(~router_voice_tests) | test(~modules::voice_chat::worker::)
+        | test(~router_voice_tests) | test(~modules::voice_chat::worker::)
     steps:
       - uses: actions/checkout@v7
 
