@@ -246,6 +246,7 @@ async fn project_many_filtered(
 
     let track_ids: Vec<Uuid> = by_id.values().map(|row| row.id).collect();
     let highlights = super::highlight::by_track_ids(pg, &track_ids).await?;
+    let videos = super::video::by_sc_track_ids(pg, sc_track_ids).await?;
 
     let users: std::collections::HashMap<String, Value> = if uploader_ids.is_empty() {
         Default::default()
@@ -271,6 +272,7 @@ async fn project_many_filtered(
                     .and_then(|uid| users.get(uid));
                 let mut track = project_to_sc_shape(row, uploader);
                 super::highlight::attach(&mut track, highlights.get(&row.id));
+                super::video::attach(&mut track, videos.get(&row.sc_track_id));
                 track
             })
         })

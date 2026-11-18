@@ -83,8 +83,11 @@ pub(super) async fn load(
             }
             let uploader = user_projection(pg, row.uploader_sc_user_id.as_deref()).await?;
             let highlights = tracks::highlight::by_track_ids(pg, &[row.id]).await?;
+            let videos =
+                tracks::video::by_sc_track_ids(pg, std::slice::from_ref(&row.sc_track_id)).await?;
             let mut value = tracks::project_to_sc_shape(&row, uploader.as_ref());
             tracks::highlight::attach(&mut value, highlights.get(&row.id));
+            tracks::video::attach(&mut value, videos.get(&row.sc_track_id));
             Ok(LocalEntity {
                 value,
                 synced_at: row.sc_synced_at,

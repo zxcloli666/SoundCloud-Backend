@@ -2,11 +2,11 @@ import re
 
 KEYWORDS = frozenset(
     """
-    all analyse analyze and any array as asc asymmetric authorization between bigint binary bit boolean both case
+    all analyse analyze and any array as asc asymmetric authorization begin between bigint binary bit boolean both case
     cast char character check coalesce collate collation column concurrently constraint create cross
     current_catalog current_date current_role current_schema current_time current_timestamp current_user dec
     decimal default deferrable desc distinct do else end except exists extract false fetch float for foreign
-    freeze from full grant greatest group grouping having ilike in initially inner inout int integer intersect
+    declare foreach freeze from full grant greatest group grouping having ilike in initially inner inout int integer intersect loop strict while
     interval into is isnull join json json_array json_arrayagg json_exists json_object json_objectagg json_query
     json_scalar json_serialize json_table json_value lateral leading least left like limit localtime
     localtimestamp merge_action national natural nchar none normalize not notnull null nullif numeric offset on

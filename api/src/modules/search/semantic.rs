@@ -137,6 +137,7 @@ impl VibeSearchService {
         let track_ids: Vec<uuid::Uuid> = by_id.values().map(|row| row.id).collect();
         let highlights =
             crate::modules::tracks::highlight::by_track_ids(&self.pg, &track_ids).await?;
+        let videos = crate::modules::tracks::video::by_sc_track_ids(&self.pg, ids).await?;
 
         Ok(ids
             .iter()
@@ -148,6 +149,7 @@ impl VibeSearchService {
                         .and_then(|uid| users.get(uid));
                     let mut track = project_to_sc_shape(row, uploader);
                     crate::modules::tracks::highlight::attach(&mut track, highlights.get(&row.id));
+                    crate::modules::tracks::video::attach(&mut track, videos.get(&row.sc_track_id));
                     track
                 })
             })

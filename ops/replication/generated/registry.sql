@@ -147,7 +147,7 @@ SELECT v.cls FROM (VALUES
     ('track_storage_failures', 'P'),
     ('track_sync_stamps', 'C'),
     ('track_video_dispatch', 'P'),
-    ('track_videos', 'P'),
+    ('track_videos', 'C'),
     ('track_work_aliases', 'P'),
     ('track_work_keys', 'P'),
     ('tracks', 'C'),
@@ -324,6 +324,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_seeks', jsonb_build_object('id', t.id) FROM public.track_seeks t ON CONFLICT DO NOTHING;
         WHEN 'track_sync_stamps' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_sync_stamps', jsonb_build_object('track_id', t.track_id) FROM public.track_sync_stamps t ON CONFLICT DO NOTHING;
+        WHEN 'track_videos' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'track_videos', jsonb_build_object('sc_track_id', t.sc_track_id, 'kind', t.kind) FROM public.track_videos t ON CONFLICT DO NOTHING;
         WHEN 'tracks' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'tracks', jsonb_build_object('id', t.id) FROM public.tracks t ON CONFLICT DO NOTHING;
         WHEN 'user_auras' THEN
@@ -439,6 +441,7 @@ BEGIN
         ('track_search', 'C'),
         ('track_seeks', 'A'),
         ('track_sync_stamps', 'C'),
+        ('track_videos', 'C'),
         ('tracks', 'C'),
         ('user_auras', 'A'),
         ('user_blocked_artists', 'A'),
