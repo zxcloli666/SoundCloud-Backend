@@ -39,7 +39,10 @@ async fn wave_and_shelf_tops_read_only_the_playable_table_and_stop_at_the_cut(
             .iter()
             .filter(|node| text(node, "Relation Name") == Some("artist_playable_tracks"))
             .collect();
-        assert!(!playable.is_empty(), "{name}: the playable table is not read: {plan}");
+        assert!(
+            !playable.is_empty(),
+            "{name}: the playable table is not read: {plan}"
+        );
         assert!(
             playable.iter().all(|node| {
                 text(node, "Node Type") == Some("Index Only Scan")
@@ -104,8 +107,8 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "VACUUM ANALYZE artists, tracks, track_artists, sc_track_counters, artist_playable_tracks",
     )
-        .execute(pool)
-        .await?;
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
