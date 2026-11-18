@@ -29,7 +29,11 @@ async fn setup(
         subject_id: "42".into(),
         owner: true,
     };
-    Ok((job, payload, CollectionWriter::new(pool.clone(), 420000, 2_000)))
+    Ok((
+        job,
+        payload,
+        CollectionWriter::new(pool.clone(), 420000, 2_000),
+    ))
 }
 
 fn track(id: i64) -> Value {
@@ -1829,7 +1833,12 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
                 &payload,
                 &followers,
                 fans(
-                    vec![fan(21, "E", 1), fan(22, "F", 1), fan(23, "G", 1), fan(24, "H", 1)],
+                    vec![
+                        fan(21, "E", 1),
+                        fan(22, "F", 1),
+                        fan(23, "G", 1),
+                        fan(24, "H", 1)
+                    ],
                     Some("v2:/users/42/followers?offset=4"),
                 ),
                 catalog_ingest::Observation::begin(&pool).await?,
