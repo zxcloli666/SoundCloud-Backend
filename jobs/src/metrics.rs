@@ -8,6 +8,12 @@ use backend_contracts::{CollectionFailure, JobKind, JobLane};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
+mod mobile;
+
+pub use mobile::{
+    ACTION_TYPES as MOBILE_ACTION_TYPES, record_mobile_action, record_mobile_request,
+};
+
 const AUTH_CLEANUP_SKIPPED: &str = "auth_cleanup_skipped_total";
 const AUTH_CLEANUP_PROGRESS: &str = "auth_cleanup_last_progress_timestamp_seconds";
 const JOB_DURATION: &str = "jobs_execution_duration_seconds";
@@ -177,6 +183,7 @@ fn start_upkeep(handle: PrometheusHandle) {
 
 fn register_series_that_start_at_zero() {
     crate::llm::start_at_zero();
+    mobile::register();
     for reason in CollabSkipReason::ALL {
         metrics::counter!(COLLAB_SKIPPED, "reason" => reason.as_str()).increment(0);
     }

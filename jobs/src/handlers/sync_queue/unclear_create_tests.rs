@@ -16,6 +16,7 @@ use crate::handlers::star_priority::Turns;
 use super::SyncQueueHandler;
 use super::client::{SoundCloudClient, TokenRefreshClient};
 use super::connection::ConnectionManager;
+use super::mobile::MobileSender;
 use super::pause_group::AppReports;
 use super::repository::SyncQueueRepository;
 use super::storage::TrackStorage;
@@ -181,6 +182,7 @@ pub(super) fn handler(
         client: Arc::new(SoundCloudClient::new(&config)?),
         token_client: Arc::new(TokenRefreshClient::new(&oauth)?),
         storage: TrackStorage::new(&config)?,
+        mobile: MobileSender::new(pool.clone(), None),
         write_pauses: WritePauses::default(),
         spacings: WritePauses::default(),
         account_pauses: WritePauses::default(),
