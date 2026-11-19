@@ -13,6 +13,8 @@ const READERS: &[&str] = &[
     "env::boolean",
     "std::env::var",
     "schedule_interval(",
+    "seconds(",
+    "bounded(",
     "stream_bytes(",
     "jetstream_domains(",
     "worker_backlog(",

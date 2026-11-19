@@ -1126,6 +1126,18 @@ AS $f$
 SELECT md5(ROW(t.attempts, t.last_error, t.next_at, t.payload, t.sc_track_id, t.stage, t.updated_at)::text) FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_video_gen(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempt, t.created_at, t.faults, t.next_at, t.plan, t.reason, t.redo, t.rejections, t.sc_track_id, t.sent_at, t.shot, t.stage, t.state, t.step, t.updated_at)::text) FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_videos(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1426,6 +1438,30 @@ AS $f$
 SELECT md5(ROW(t.added_by, t.created_at, t.kind, t.sc_user_id)::text) FROM public.video_flags t WHERE t.kind = (k ->> 'kind')::text AND t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_video_gen_pause(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.alerted_at, t.created_at, t.id, t.paused_until, t.reason, t.updated_at)::text) FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_video_gen_spend(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.cache_read_tokens, t.cache_write_tokens, t.call, t.created_at, t.id, t.input_tokens, t.model, t.output_tokens, t.period, t.provider, t.sc_track_id, t.usd)::text) FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_wanted_track_albums(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1668,6 +1704,8 @@ BEGIN
             RETURN public.scd_row_hash_track_sync_stamps(k);
         WHEN 'track_video_dispatch' THEN
             RETURN public.scd_row_hash_track_video_dispatch(k);
+        WHEN 'track_video_gen' THEN
+            RETURN public.scd_row_hash_track_video_gen(k);
         WHEN 'track_videos' THEN
             RETURN public.scd_row_hash_track_videos(k);
         WHEN 'track_work_aliases' THEN
@@ -1718,6 +1756,10 @@ BEGIN
             RETURN public.scd_row_hash_video_accounts(k);
         WHEN 'video_flags' THEN
             RETURN public.scd_row_hash_video_flags(k);
+        WHEN 'video_gen_pause' THEN
+            RETURN public.scd_row_hash_video_gen_pause(k);
+        WHEN 'video_gen_spend' THEN
+            RETURN public.scd_row_hash_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             RETURN public.scd_row_hash_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN

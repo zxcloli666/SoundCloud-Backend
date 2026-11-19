@@ -4,6 +4,7 @@ mod env;
 mod oauth;
 mod scd;
 mod video;
+mod video_gen;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
 pub use scd::ScdNode;
 pub use video::{ObjectsConfig, VideoAccountsConfig, VideoFindConfig, VideoVlmConfig};
+pub use video_gen::{DirectorConfig, VideoGenConfig};
 
 const DURATION_MAX_BATCH_SIZE: i64 = 500;
 const DURATION_MAX_CONCURRENCY: usize = 32;
@@ -37,6 +39,7 @@ pub struct JobsConfig {
     pub video_accounts: VideoAccountsConfig,
     pub video_find: VideoFindConfig,
     pub video_vlm: VideoVlmConfig,
+    pub video_gen: VideoGenConfig,
     pub durations: DurationConfig,
     pub indexing: IndexingConfig,
     pub sync_queue: SyncQueueConfig,
@@ -526,6 +529,7 @@ impl JobsConfig {
             highlights: HighlightConfig::from_env()?,
             video_find: VideoFindConfig::from_env()?,
             video_vlm: VideoVlmConfig::from_env()?,
+            video_gen: VideoGenConfig::from_env()?,
             video_accounts: VideoAccountsConfig::from_env()?,
             durations: DurationConfig::from_env()?,
             indexing: IndexingConfig::from_env()?,

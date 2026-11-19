@@ -75,6 +75,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_sync_stamps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_dispatch;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_gen;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_videos;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_keys;
@@ -91,6 +92,8 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_user_web_profiles;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_users;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_accounts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_flags;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_gen_pause;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_gen_spend;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_albums;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_work_aliases;
@@ -5836,6 +5839,8 @@ ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_video_dispatch FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_video_dispatch', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_video_gen FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_video_gen', 'cmd', 'migration', 'repl');
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_videos FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_videos', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_track_videos()
@@ -7613,6 +7618,10 @@ CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_flags FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_flags', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_gen_pause FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_gen_pause', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_gen_spend FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_gen_spend', 'cmd', 'migration', 'repl');
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_albums', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_wanted_track_albums()
@@ -7943,6 +7952,7 @@ FROM (VALUES
     ('guard', 'track_storage_failures', 'scd_guard_track_storage_failures'),
     ('guard', 'track_sync_stamps', 'scd_guard_track_sync_stamps'),
     ('guard', 'track_video_dispatch', 'scd_guard_track_video_dispatch'),
+    ('guard', 'track_video_gen', 'scd_guard_track_video_gen'),
     ('guard', 'track_videos', 'scd_guard_track_videos'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
     ('guard', 'track_work_keys', 'scd_guard_track_work_keys'),
@@ -7959,6 +7969,8 @@ FROM (VALUES
     ('guard', 'users', 'scd_guard_users'),
     ('guard', 'video_accounts', 'scd_guard_video_accounts'),
     ('guard', 'video_flags', 'scd_guard_video_flags'),
+    ('guard', 'video_gen_pause', 'scd_guard_video_gen_pause'),
+    ('guard', 'video_gen_spend', 'scd_guard_video_gen_spend'),
     ('guard', 'wanted_track_albums', 'scd_guard_wanted_track_albums'),
     ('guard', 'wanted_track_artists', 'scd_guard_wanted_track_artists'),
     ('guard', 'wanted_track_work_aliases', 'scd_guard_wanted_track_work_aliases'),
@@ -8253,6 +8265,7 @@ BEGIN
             ('track_sync_stamps', 'zz_owner'),
             ('track_sync_stamps', 'zzz_suppress'),
             ('track_video_dispatch', 'zz_guard'),
+            ('track_video_gen', 'zz_guard'),
             ('track_videos', 'zz_guard'),
             ('track_videos', 'zz_owner'),
             ('track_videos', 'zzz_suppress'),
@@ -8334,6 +8347,8 @@ BEGIN
             ('users', 'zzz_suppress'),
             ('video_accounts', 'zz_guard'),
             ('video_flags', 'zz_guard'),
+            ('video_gen_pause', 'zz_guard'),
+            ('video_gen_spend', 'zz_guard'),
             ('wanted_track_albums', 'zz_guard'),
             ('wanted_track_albums', 'zz_owner'),
             ('wanted_track_albums', 'zzz_suppress'),

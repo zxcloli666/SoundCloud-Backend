@@ -49,6 +49,7 @@ pub(crate) mod taste;
 mod telemetry;
 pub(crate) mod video_accounts;
 pub(crate) mod video_find;
+pub(crate) mod video_gen;
 pub(crate) mod video_vlm;
 mod wanted;
 mod worker_backlog;
@@ -98,6 +99,8 @@ use self::telemetry::TelemetryHandler;
 use self::video_accounts::{Checker, Proxied, Seal, SpotifyKey, Telegram, VideoAccounts};
 use self::video_find::ytdlp::YtDlp;
 use self::video_find::{Pooled, ProxyPool, VideoFind};
+use self::video_gen::VideoGen;
+use self::video_gen::opus::Opus;
 use self::video_vlm::VideoVlm;
 use self::wanted::{AiMatcherClient, WantedHandler};
 use crate::objects::Objects;
@@ -455,6 +458,32 @@ impl JobHandlers {
             &config.video_find,
             Objects::connect(objects).await,
         )))
+    }
+
+    pub async fn video_gen(
+        &self,
+        pool: sqlx::PgPool,
+        config: &JobsConfig,
+        bus: crate::bus::Bus,
+    ) -> Result<
+        Option<Arc<VideoGen<Opus, Objects, crate::bus::Bus, Telegram>>>,
+        crate::ClientBuildError,
+    > {
+        let (Some(objects), Some(director)) = (
+            config.video_find.objects.as_ref(),
+            config.video_gen.director.as_ref(),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::new(VideoGen::new(
+            pool,
+            config.sync_queue.storage_url.clone(),
+            config.video_gen.clone(),
+            Opus::new(director)?,
+            Objects::connect(objects).await,
+            bus,
+            Telegram::new(config.video_accounts.tg_webhook.clone())?,
+        ))))
     }
 
     pub async fn bootstrap(&self) -> JobResult {
