@@ -48,8 +48,8 @@ WITH ul AS (
            b,
            co,
            weight,
-           row_number() OVER (PARTITION BY a ORDER BY weight DESC) AS rank_a,
-           row_number() OVER (PARTITION BY b ORDER BY weight DESC) AS rank_b
+           row_number() OVER (PARTITION BY a ORDER BY weight DESC, b) AS rank_a,
+           row_number() OVER (PARTITION BY b ORDER BY weight DESC, a) AS rank_b
     FROM weighted
 ), fresh AS MATERIALIZED (
     SELECT a, b, co::int AS co, weight

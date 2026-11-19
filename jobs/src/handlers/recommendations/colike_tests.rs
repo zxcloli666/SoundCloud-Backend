@@ -176,9 +176,18 @@ async fn rebuild_in_one_statement(pool: &PgPool) -> anyhow::Result<()> {
 }
 
 async fn rebuild_in_batches_of(pool: &PgPool, batch_edges: i64) -> anyhow::Result<Rebuild> {
+    rebuild_in_shards(pool, batch_edges, 3).await
+}
+
+async fn rebuild_in_shards(
+    pool: &PgPool,
+    batch_edges: i64,
+    shards: i32,
+) -> anyhow::Result<Rebuild> {
     let mut connection = pool.acquire().await?;
     connection.close_on_drop();
     let pacing = Pacing {
+        shards,
         batch_edges,
         pause: Duration::ZERO,
     };
@@ -216,16 +225,16 @@ async fn batched_rebuild_ends_where_the_single_statement_ends(pool: PgPool) -> a
     assert!(a_ids(&previous).contains(&artist(1)) && !a_ids(&expected).contains(&artist(1)));
     assert!(!a_ids(&previous).contains(&artist(8)) && a_ids(&expected).contains(&artist(8)));
 
-    for batch_edges in [1, 2, 3, 500] {
+    for (batch_edges, shards) in [(1, 1), (2, 2), (3, 5), (500, 64)] {
         restore_previous_run(&pool).await?;
         let unchanged = row_versions(&pool).await?.get(&edge(2, 3)).cloned();
 
-        rebuild_in_batches_of(&pool, batch_edges).await?;
+        rebuild_in_shards(&pool, batch_edges, shards).await?;
 
         assert_eq!(
             edges(&pool).await?,
             expected,
-            "batches of {batch_edges} edges"
+            "batches of {batch_edges} edges, {shards} shards"
         );
         assert_eq!(
             row_versions(&pool).await?.get(&edge(2, 3)).cloned(),
@@ -266,6 +275,55 @@ async fn a_rebuild_bigger_than_one_batch_commits_batch_by_batch(
         transactions.len() > 1,
         "the written edges must come from more than one transaction: {transactions:?}"
     );
+    Ok(())
+}
+
+async fn seed_crowded_artists(pool: &PgPool) -> anyhow::Result<()> {
+    seed_artists(pool, 120).await?;
+    sqlx::query(
+        "INSERT INTO user_likes_tracks (user_id, sc_track_id)
+         SELECT DISTINCT listener::text, 'track-' || ((listener * 37 + step * (listener % 11 + 1)) % 120 + 1)
+         FROM generate_series(1, 300) AS listener, generate_series(0, 39) AS step
+         ON CONFLICT DO NOTHING",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn every_shard_count_keeps_the_same_top_edges_as_the_single_statement(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_crowded_artists(&pool).await?;
+    rebuild_in_one_statement(&pool).await?;
+    let expected = edges(&pool).await?;
+    let candidates: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (
+             SELECT 1
+             FROM user_likes_tracks AS l
+             JOIN user_likes_tracks AS r ON r.user_id = l.user_id AND l.sc_track_id < r.sc_track_id
+             GROUP BY l.sc_track_id, r.sc_track_id
+             HAVING count(*) >= 2
+         ) AS pair",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert!(
+        candidates > expected.len() as i64,
+        "the fixture must cut pairs at the top {TOP_K_PER_ARTIST}: {candidates} pairs, {} kept",
+        expected.len()
+    );
+    for shards in [1, 4, 9, 64] {
+        sqlx::query("DELETE FROM artist_colike")
+            .execute(&pool)
+            .await?;
+        let rebuild = rebuild_in_shards(&pool, 500, shards).await?;
+
+        assert_eq!(edges(&pool).await?, expected, "{shards} shards");
+        assert_eq!(rebuild.fresh, expected.len() as u64, "{shards} shards");
+    }
     Ok(())
 }
 
