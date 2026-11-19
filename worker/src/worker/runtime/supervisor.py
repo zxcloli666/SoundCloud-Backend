@@ -510,7 +510,7 @@ class Supervisor:
         return matching or hosts
 
     def _idle_engines(self, hosts: list[Managed]) -> list[Managed]:
-            return [
+        return [
             m
             for m in hosts
             if m.state == STATE_READY
