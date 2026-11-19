@@ -23,13 +23,12 @@ pub(super) struct Found {
     pub(super) duration_ms: i32,
     pub(super) looped: bool,
     pub(super) scores: Value,
-    pub(super) uncertain: bool,
-    pub(super) file: Option<(VideoClip, VideoPart)>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Verdict {
-    Found(Box<Found>),
+    Found(Box<Found>, (VideoClip, VideoPart)),
+    Held(Box<Found>),
     Settle(WorkerReason),
     Retry(WorkerReason),
 }
@@ -39,26 +38,34 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         let attempt = i32::try_from(result.attempt)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("video attempt is out of range")))?;
         let track = result.sc_track_id.as_str();
-        let verdict = judge(&result).map_err(JobError::permanent)?;
-        if let Verdict::Found(found) = &verdict
-            && !found.uncertain
-            && let Some((clip, part)) = &found.file
-        {
-            let file = self
-                .parts
-                .add(track, result.attempt, clip, part)
-                .map_err(JobError::permanent)?;
-            return match file {
-                Some(file) => self.finish_clip(track, attempt, found, file).await,
-                None => Ok(()),
-            };
+        match judge(&result).map_err(JobError::permanent)? {
+            Verdict::Found(found, (clip, part)) => {
+                let file = self
+                    .parts
+                    .add(track, result.attempt, &clip, &part)
+                    .map_err(JobError::permanent)?;
+                match file {
+                    Some(file) => self.finish_clip(track, attempt, &found, file).await,
+                    None => Ok(()),
+                }
+            }
+            verdict => self.settle_staged(track, attempt, &verdict, &result).await,
         }
+    }
+
+    async fn settle_staged(
+        &self,
+        track: &str,
+        attempt: i32,
+        verdict: &Verdict,
+        result: &VideoFindResult,
+    ) -> JobResult {
         let Some(staged) = queue::staged(&self.pool, track, attempt).await? else {
             debug!(track, attempt, "stale video result ignored");
             return Ok(());
         };
         let held = self
-            .settle_verdict(track, attempt, &verdict, &staged, &result)
+            .settle_verdict(track, attempt, verdict, &staged, result)
             .await?;
         self.drop_temps(&leftover(&staged, held)).await;
         Ok(())
@@ -98,23 +105,12 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
     ) -> JobResult<Option<u32>> {
         let detail = result.detail.as_deref();
         match verdict {
-            Verdict::Found(found) if found.uncertain => {
+            Verdict::Held(found) => {
                 let candidate = candidate_of(staged, found.candidate)?;
                 hold(&self.pool, track, attempt, found, candidate).await?;
                 Ok(Some(found.candidate))
             }
-            Verdict::Found(found) => {
-                let candidate = candidate_of(staged, found.candidate)?;
-                let key = final_key(track, attempt);
-                self.blobs
-                    .copy(&candidate.key, &key)
-                    .await
-                    .map_err(JobError::retryable)?;
-                if !store_found(&self.pool, track, attempt, found, candidate, &key).await? {
-                    let _ = self.blobs.delete(&key).await;
-                }
-                Ok(None)
-            }
+            Verdict::Found(..) => Ok(None),
             Verdict::Settle(reason) => {
                 let wait = match reason {
                     WorkerReason::StaticVideo => self.pacing.static_recheck,
@@ -300,7 +296,7 @@ pub(super) fn judge(result: &VideoFindResult) -> anyhow::Result<Verdict> {
         "video result has a non-canonical track id"
     );
     match (result.status, result.reason) {
-        (WorkerStatus::Ok, None) => Ok(Verdict::Found(Box::new(found(result)?))),
+        (WorkerStatus::Ok, None) => found(result),
         (WorkerStatus::Ok, Some(reason)) => {
             bail!("video ok result carries reason {}", reason.as_str())
         }
@@ -321,7 +317,7 @@ pub(super) fn judge(result: &VideoFindResult) -> anyhow::Result<Verdict> {
     }
 }
 
-fn found(result: &VideoFindResult) -> anyhow::Result<Found> {
+fn found(result: &VideoFindResult) -> anyhow::Result<Verdict> {
     let (Some(kind), Some(candidate), Some(offset_ms), Some(duration_ms)) = (
         result.kind,
         result.candidate,
@@ -334,24 +330,25 @@ fn found(result: &VideoFindResult) -> anyhow::Result<Found> {
         offset_ms >= 0 && duration_ms > 0,
         "video window {offset_ms}+{duration_ms} is invalid"
     );
-    let uncertain = result.uncertain.unwrap_or(false);
     let file = match (&result.clip, &result.part) {
         (Some(clip), Some(part)) => Some((clip.clone(), part.clone())),
         (None, None) => None,
         _ => bail!("video result carries half a file"),
     };
-    if kind == VideoKind::Clip && !uncertain {
-        ensure!(file.is_some(), "video clip result carries no file");
-    }
-    let scores = serde_json::to_value(result.scores.clone().unwrap_or_default())?;
-    Ok(Found {
+    let window = Box::new(Found {
         kind,
         candidate,
         offset_ms,
         duration_ms,
         looped: result.looped.unwrap_or(kind == VideoKind::Loop),
-        scores,
-        uncertain,
-        file,
+        scores: serde_json::to_value(result.scores.clone().unwrap_or_default())?,
+    });
+    if result.uncertain.unwrap_or(false) {
+        return Ok(Verdict::Held(window));
+    }
+    Ok(match file {
+        Some(file) => Verdict::Found(window, file),
+        None if kind == VideoKind::Loop => Verdict::Retry(WorkerReason::InternalError),
+        None => bail!("video clip result carries no file"),
     })
 }

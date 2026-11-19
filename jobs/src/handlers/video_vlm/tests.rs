@@ -161,8 +161,23 @@ fn failure(id: &str, attempt: i64, reason: WorkerReason) -> VideoVlmResult {
 }
 
 fn clip_part(id: &str, attempt: i64, file: &[u8], parts: &[&[u8]], index: usize) -> VideoVlmResult {
+    file_part(VideoLabel::Clip, id, attempt, file, parts, index)
+}
+
+fn loop_part(id: &str, attempt: i64, file: &[u8], parts: &[&[u8]], index: usize) -> VideoVlmResult {
+    file_part(VideoLabel::Loop, id, attempt, file, parts, index)
+}
+
+fn file_part(
+    label: VideoLabel,
+    id: &str,
+    attempt: i64,
+    file: &[u8],
+    parts: &[&[u8]],
+    index: usize,
+) -> VideoVlmResult {
     let digest = Sha256::digest(file);
-    let mut result = answer(id, attempt, VideoLabel::Clip);
+    let mut result = answer(id, attempt, label);
     result.duration_ms = Some(25_000);
     result.clip = Some(VideoClip {
         bytes: file.len() as u64,
@@ -293,26 +308,43 @@ async fn a_clip_whose_checksum_fails_is_not_stored_and_the_temp_file_stays(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_loop_is_copied_from_the_temp_file_and_the_temp_file_goes(
+async fn a_loop_arrives_in_parts_and_is_stored_from_them_not_from_the_temp_file(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let (vlm, blobs) = rig(&pool);
     dispatched(&pool, &blobs, "11", 1).await?;
+    let file = b"the encoded loop";
+    let parts: [&[u8]; 2] = [b"the encoded", b" loop"];
 
-    finish(&vlm, answer("11", 1, VideoLabel::Loop)).await?;
+    finish(&vlm, loop_part("11", 1, file, &parts, 1)).await?;
+    assert_eq!(stored(&pool, "11").await?, None);
+    finish(&vlm, loop_part("11", 1, file, &parts, 0)).await?;
 
     assert_eq!(blobs.keys(), ["video/11-1.mp4"]);
-    assert_eq!(
-        blobs.get("video/11-1.mp4").as_deref(),
-        Some(&b"temp bytes"[..])
-    );
+    assert_eq!(blobs.get("video/11-1.mp4").as_deref(), Some(&file[..]));
     let row = stored(&pool, "11").await?.unwrap();
     assert_eq!(
         (row.0.as_str(), row.1.as_str(), row.2, row.3, row.4),
-        ("loop", "video/11-1.mp4", 0, true, 30_000)
+        ("loop", "video/11-1.mp4", 0, true, 25_000)
     );
     assert_eq!(row.5["vlm"]["label"], "loop");
     assert_eq!(stage(&pool, "11").await?.0, "found");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_old_workers_loop_without_a_file_stores_nothing_and_is_sent_again(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (vlm, blobs) = rig(&pool);
+    let key = dispatched(&pool, &blobs, "11", 1).await?;
+
+    finish(&vlm, answer("11", 1, VideoLabel::Loop)).await?;
+
+    assert_eq!(stored(&pool, "11").await?, None);
+    assert_ne!(stage(&pool, "11").await?.0, "found");
+    assert!(blobs.get(&key).is_some());
+    assert!(blobs.get("video/11-1.mp4").is_none());
     Ok(())
 }
 
@@ -429,14 +461,20 @@ fn an_ok_answer_needs_its_label_model_and_exactly_the_file_a_clip_needs() {
     no_label.label = None;
     let mut no_model = answer("11", 1, VideoLabel::Loop);
     no_model.model = None;
-    let mut loop_with_file = clip_part("11", 1, b"ab", &[b"ab"], 0);
-    loop_with_file.label = Some(VideoLabel::Loop);
+    let mut static_with_file = clip_part("11", 1, b"ab", &[b"ab"], 0);
+    static_with_file.label = Some(VideoLabel::Static);
     let mut clip_without_file = answer("11", 1, VideoLabel::Clip);
     clip_without_file.duration_ms = Some(1_000);
     let mut half = clip_part("11", 1, b"ab", &[b"ab"], 0);
     half.part = None;
 
-    for bad in [no_label, no_model, loop_with_file, clip_without_file, half] {
+    for bad in [
+        no_label,
+        no_model,
+        static_with_file,
+        clip_without_file,
+        half,
+    ] {
         assert!(judge(&bad).is_err());
     }
     assert!(matches!(
@@ -444,9 +482,17 @@ fn an_ok_answer_needs_its_label_model_and_exactly_the_file_a_clip_needs() {
         Verdict::Labelled(_)
     ));
     assert!(matches!(
+        judge(&loop_part("11", 1, b"ab", &[b"ab"], 0)).unwrap(),
+        Verdict::Labelled(_)
+    ));
+    assert!(matches!(
         judge(&answer("11", 1, VideoLabel::Static)).unwrap(),
         Verdict::Labelled(_)
     ));
+    assert_eq!(
+        judge(&answer("11", 1, VideoLabel::Loop)).unwrap(),
+        Verdict::Again(WorkerReason::InternalError)
+    );
 }
 
 #[test]

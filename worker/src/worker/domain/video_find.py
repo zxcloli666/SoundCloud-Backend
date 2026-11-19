@@ -227,39 +227,48 @@ class VideoFindLane:
     async def _deliver(self, best: Evaluated, folder: Path, deadline: Deadline) -> Outcome:
         kind = "loop" if best.verdict.kind == "loop" else "clip"
         scores = {**best.measured.scores(), **best.proof}
-        held = best.verdict.uncertain
-        if kind == "loop" or held:
+        if best.verdict.uncertain:
             info = await features.probe(best.path, deadline)
             return Outcome.ok(
                 kind=kind,
-                uncertain=held,
+                uncertain=True,
                 candidate=best.candidate.index,
                 offset_ms=0 if kind == "loop" else max(best.offset_ms, 0),
                 duration_ms=max(1, round(info.duration_s * MS)),
                 loop=kind == "loop",
                 scores=scores,
             )
-        return await self._clip(best, folder, scores, deadline)
+        return await self._encoded(best, kind, folder, scores, deadline)
 
-    async def _clip(
-        self, best: Evaluated, folder: Path, scores: Mapping[str, float], deadline: Deadline
+    async def _encoded(
+        self,
+        best: Evaluated,
+        kind: str,
+        folder: Path,
+        scores: Mapping[str, float],
+        deadline: Deadline,
     ) -> Outcome:
-        pad_s = max(-best.offset_ms, 0) / MS
+        looped = kind == "loop"
+        offset_ms = 0 if looped else best.offset_ms
         target = folder / "out.mp4"
         await publish.encode(
-            best.path, target, pad_s=pad_s, settings=self._video, deadline=deadline
+            best.path,
+            target,
+            pad_s=max(-offset_ms, 0) / MS,
+            settings=self._video,
+            deadline=deadline,
         )
         encoded = await features.probe(target, deadline)
         blob = await asyncio.to_thread(target.read_bytes)
         parts = publish.split(blob, self._part_bytes)
         return Outcome.ok_in_parts(
             parts,
-            kind="clip",
+            kind=kind,
             uncertain=False,
             candidate=best.candidate.index,
-            offset_ms=max(best.offset_ms, 0),
+            offset_ms=max(offset_ms, 0),
             duration_ms=max(1, round(encoded.duration_s * MS)),
-            loop=False,
+            loop=looped,
             scores=scores,
             clip={
                 "bytes": len(blob),

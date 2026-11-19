@@ -89,12 +89,6 @@ impl Blobs for Memory {
         Ok(())
     }
 
-    async fn copy(&self, from: &str, to: &str) -> Result<(), ObjectsError> {
-        let bytes = self.get(from).unwrap();
-        self.put_at(to, &bytes, SystemTime::now());
-        Ok(())
-    }
-
     async fn delete(&self, key: &str) -> Result<(), ObjectsError> {
         self.files.lock().unwrap().remove(key);
         Ok(())
@@ -278,10 +272,21 @@ fn part_message(
     parts: &[&[u8]],
     index: usize,
 ) -> VideoFindResult {
-    let digest = Sha256::digest(file);
-    let mut result = done(id, attempt, None);
+    let mut result = loop_message(id, attempt, file, parts, index);
     result.kind = Some(VideoKind::Clip);
     result.looped = Some(false);
+    result
+}
+
+fn loop_message(
+    id: &str,
+    attempt: i64,
+    file: &[u8],
+    parts: &[&[u8]],
+    index: usize,
+) -> VideoFindResult {
+    let digest = Sha256::digest(file);
+    let mut result = done(id, attempt, None);
     result.clip = Some(VideoClip {
         bytes: file.len() as u64,
         sha256: digest.iter().map(|byte| format!("{byte:02x}")).collect(),
@@ -441,18 +446,21 @@ async fn candidates_are_fetched_into_temp_keys_and_a_paused_youtube_account_stop
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_loop_is_promoted_from_its_temp_file_and_every_temp_file_goes(
+async fn a_loop_arrives_in_parts_and_is_stored_from_them_and_every_temp_file_goes(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     star_track(&pool, "11", 1, 1).await?;
     let (video, _, blobs, _) = rig(&pool);
-    let claim = staged_claim(&pool, &blobs, "11", 3).await?;
+    staged_claim(&pool, &blobs, "11", 3).await?;
+    let file = b"the encoded loop";
+    let parts: [&[u8]; 2] = [b"the encoded", b" loop"];
 
-    finish(&video, &done("11", 1, None)).await?;
+    finish(&video, &loop_message("11", 1, file, &parts, 0)).await?;
+    assert_eq!(stored(&pool, "11").await?, None);
+    finish(&video, &loop_message("11", 1, file, &parts, 1)).await?;
 
-    assert_eq!(claim.attempt, 1);
     assert_eq!(blobs.keys(), ["video/11-1.mp4"]);
-    assert_eq!(blobs.get("video/11-1.mp4").as_deref(), Some(&b"temp 1"[..]));
+    assert_eq!(blobs.get("video/11-1.mp4").as_deref(), Some(&file[..]));
     assert_eq!(
         stored(&pool, "11").await?,
         Some((
@@ -464,6 +472,22 @@ async fn a_loop_is_promoted_from_its_temp_file_and_every_temp_file_goes(
         ))
     );
     assert_eq!(stage(&pool, "11").await?.0, "found");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn an_old_workers_loop_without_a_file_stores_nothing_and_is_retried(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    star_track(&pool, "11", 1, 1).await?;
+    let (video, _, blobs, _) = rig(&pool);
+    staged_claim(&pool, &blobs, "11", 3).await?;
+
+    finish(&video, &done("11", 1, None)).await?;
+
+    assert_eq!(stored(&pool, "11").await?, None);
+    assert!(blobs.get("video/11-1.mp4").is_none());
+    assert_ne!(stage(&pool, "11").await?.0, "found");
     Ok(())
 }
 
@@ -665,7 +689,11 @@ fn a_result_naming_no_candidate_or_no_window_is_refused() {
     assert!(result::judge(&clip_without_file).is_err());
     assert!(matches!(
         result::judge(&done("11", 1, None)),
-        Ok(Verdict::Found(_))
+        Ok(Verdict::Retry(WorkerReason::InternalError))
+    ));
+    assert!(matches!(
+        result::judge(&loop_message("11", 1, b"ab", &[b"ab"], 0)),
+        Ok(Verdict::Found(..))
     ));
 }
 

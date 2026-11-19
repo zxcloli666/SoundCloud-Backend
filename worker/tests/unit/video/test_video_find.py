@@ -8,10 +8,13 @@ import pytest
 
 from tests.fakes.engines import FakeEngines
 from tests.fakes.http_audio import FakeAudioServer
+from tests.unit.video import media
 from worker.domain.audio.source import AudioSource
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import PermanentFailure, Reason, Status
-from worker.domain.video_find import Candidate, InputsGone, VideoFindLane
+from worker.domain.video.classify import Verdict
+from worker.domain.video.features import Features
+from worker.domain.video_find import Candidate, Evaluated, InputsGone, VideoFindLane
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import Settings
@@ -91,3 +94,39 @@ async def test_a_candidate_over_the_size_cap_is_skipped_not_gone(harness: Harnes
 
     assert not isinstance(failed.value, InputsGone)
     assert failed.value.reason is Reason.AUDIO_TOO_LARGE
+
+
+def evaluated(path: Path, verdict: Verdict) -> Evaluated:
+    measured = Features(4.0, 5.0, 9.0, 0.0, 0.0, 0.1, 0.0, 0.9, 2.0, 0.2)
+    return Evaluated(Candidate(1, "video", "u"), path, 0, {"ber": 0.02}, measured, verdict)
+
+
+async def test_a_confident_loop_is_encoded_and_returned_in_parts_like_a_clip(
+    harness: Harness,
+) -> None:
+    source = harness.folder / "c1.mp4"
+    media.make_mpegts(source, seconds=4)
+    best = evaluated(source, Verdict("loop", False, "loop_score"))
+
+    outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(120))
+
+    blob = b"".join(outcome.parts)
+    assert outcome.status is Status.OK
+    assert (outcome.fields["kind"], outcome.fields["loop"]) == ("loop", True)
+    assert (outcome.fields["offset_ms"], outcome.fields["candidate"]) == (0, 1)
+    assert outcome.fields["clip"]["bytes"] == len(blob)
+    assert blob[4:8] == b"ftyp"
+    out = harness.folder / "check.mp4"
+    out.write_bytes(blob)
+    assert media.stream_types(out) == ["video"]
+
+
+async def test_an_uncertain_loop_still_goes_to_the_vlm_without_a_file(harness: Harness) -> None:
+    source = harness.folder / "c1.mp4"
+    media.make_mpegts(source, seconds=2)
+    best = evaluated(source, Verdict("loop", True, "loop_score"))
+
+    outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(60))
+
+    assert outcome.parts == ()
+    assert (outcome.fields["kind"], outcome.fields["uncertain"]) == ("loop", True)
