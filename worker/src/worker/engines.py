@@ -38,6 +38,7 @@ from worker.runtime import shm
 from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import (
     CAUSE_DEADLINE,
+    CAUSE_MEMORY,
     DeadlineExceeded,
     EngineClient,
     EngineCrashed,
@@ -69,6 +70,7 @@ ELAPSED_S = "elapsed_s"
 SECONDS = "seconds"
 TASTE_SLOT = "train-taste"
 TEXT_BYTES_PER_TOKEN = 4
+KILL_REASONS = {CAUSE_DEADLINE: Reason.DEADLINE_EXCEEDED, CAUSE_MEMORY: Reason.OUT_OF_MEMORY}
 
 log = logging.getLogger(__name__)
 
@@ -580,9 +582,7 @@ def translated(slot: str, bad_input: Reason) -> Iterator[None]:
             Reason.DEADLINE_EXCEEDED, f"slot={slot} stage={error.stage}"
         ) from error
     except EngineKilled as error:
-        reason = (
-            Reason.DEADLINE_EXCEEDED if error.cause == CAUSE_DEADLINE else Reason.ENGINE_CRASHED
-        )
+        reason = KILL_REASONS.get(error.cause, Reason.ENGINE_CRASHED)
         raise TransientFailure(reason, f"slot={slot} killed={error.cause}") from error
     except EngineCrashed as error:
         raise TransientFailure(Reason.ENGINE_CRASHED, f"slot={slot} {error.detail}") from error

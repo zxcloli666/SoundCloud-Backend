@@ -15,6 +15,7 @@ from worker.runtime.clock import Clock, MonotonicClock
 from worker.runtime.engine_client import (
     CAUSE_DEADLINE,
     CAUSE_LOAD_TIMEOUT,
+    CAUSE_MEMORY,
     CAUSE_PING,
     CAUSE_RECYCLE,
     CAUSE_STOP,
@@ -25,7 +26,7 @@ from worker.runtime.engine_client import (
     Launch,
     SlotUnavailable,
 )
-from worker.runtime.memory import NO_USAGE, Usage
+from worker.runtime.memory import NO_USAGE, Usage, rss_mib
 from worker.runtime.protocol import Pong, SlotSpec
 
 MODE_SLOT = "slot"
@@ -102,6 +103,9 @@ class RuntimePolicy:
     breaker_open_s: float = 300.0
     kill_join_s: float = 2.0
     stop_grace_s: float = 5.0
+    memory_limit_mib: int = 0
+    memory_reserve_mib: int = 1536
+    memory_check_s: float = 2.0
 
 
 def plan_engines(
@@ -262,6 +266,7 @@ class Supervisor:
         self._retiring: set[EngineClient] = set()
         self._changed = asyncio.Event()
         self._housekeeper: asyncio.Task[None] | None = None
+        self._memory_guard: asyncio.Task[None] | None = None
         self._side_tasks: set[asyncio.Task[None]] = set()
         self._stopping = False
         self._loads = asyncio.Semaphore(1 if policy.serial_loads else len(self._engines) or 1)
@@ -291,6 +296,8 @@ class Supervisor:
                 self._run(managed), name=f"engine:{managed.plan.name}"
             )
         self._housekeeper = asyncio.create_task(self._housekeeping(), name="housekeeping")
+        if self._policy.memory_limit_mib > 0:
+            self._memory_guard = asyncio.create_task(self._guard_memory(), name="memory-guard")
 
     async def stop(self) -> None:
         self._stopping = True
@@ -298,6 +305,8 @@ class Supervisor:
         alive = self._alive_clients()
         if self._housekeeper is not None:
             self._housekeeper.cancel()
+        if self._memory_guard is not None:
+            self._memory_guard.cancel()
         for side in list(self._side_tasks):
             side.cancel()
         await asyncio.gather(*(client.stop() for client in alive))
@@ -629,7 +638,9 @@ class Supervisor:
                     raise EngineCrashed(
                         client.name, f"slot {spec.name} reported unloaded after load"
                     )
-        self._log.info("engine_ready", engine=client.name, pid=client.pid, **asdict(client.usage()))
+        usage = client.usage()
+        client.baseline_mib = usage.resident_mib
+        self._log.info("engine_ready", engine=client.name, pid=client.pid, **asdict(usage))
 
     async def _await_current_exit(self, managed: Managed) -> EngineClient:
         while True:
@@ -698,6 +709,50 @@ class Supervisor:
                     and self._is_idle(client)
                 ):
                     await self._inspect_guarded(managed, client)
+
+    async def _guard_memory(self) -> None:
+        ceiling = self._policy.memory_limit_mib - self._policy.memory_reserve_mib
+        self._log.info(
+            "memory_guard_start",
+            limit_mib=self._policy.memory_limit_mib,
+            ceiling_mib=ceiling,
+        )
+        while not self._stopping:
+            await self._clock.sleep(self._policy.memory_check_s)
+            try:
+                await self._check_memory(ceiling)
+            except Exception as error:
+                self._counters.inc("memory_guard_errors_total")
+                self._log.exception("memory_guard_failed", error)
+
+    async def _check_memory(self, ceiling_mib: int) -> None:
+        resident = {client: client.usage().resident_mib for client in self._alive_clients()}
+        total = rss_mib() + sum(resident.values())
+        self._counters.gauge("worker_resident_mib", total)
+        if total <= ceiling_mib:
+            return
+        candidates = [
+            m.client
+            for m in self._engines
+            if m.client is not None and m.client in resident and m.client.kill_cause is None
+        ]
+        if not candidates:
+            return
+        victim = max(
+            candidates,
+            key=lambda client: (resident[client] - client.baseline_mib, resident[client]),
+        )
+        self._counters.inc("engine_memory_kills_total", engine=victim.name)
+        self._log.error(
+            "engine_memory_kill",
+            engine=victim.name,
+            pid=victim.pid,
+            resident_mib=resident[victim],
+            baseline_mib=victim.baseline_mib,
+            total_mib=total,
+            ceiling_mib=ceiling_mib,
+        )
+        await victim.kill(CAUSE_MEMORY)
 
     def _is_idle(self, client: EngineClient) -> bool:
         return (

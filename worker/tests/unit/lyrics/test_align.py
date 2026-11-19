@@ -100,6 +100,20 @@ async def test_words_outside_the_window_count_against_the_region(
     assert result.words[-1].end_s == 16.0
 
 
+async def test_a_span_longer_than_qwen_holds_goes_to_mms(
+    engines: FakeEngines, settings: Settings
+) -> None:
+    region_aligner, counters = aligner(engines, settings)
+    vocals = np.zeros(16_000 * 200, dtype=np.float32)
+    span = Region(10.0, 10.0 + align.QWEN_MAX_WINDOW_S + 1.0)
+    result = await region_aligner.align(
+        vocals, 0, span, lines_of(RUSSIAN_LINES[:2]), Deadline.after(10)
+    )
+    assert result.engine == "mms"
+    assert not any(name == "align" for name, _ in engines.calls)
+    assert counters.value("align_qwen_window_too_long_total") == 1
+
+
 async def test_broken_align_slot_sends_every_region_to_mms(
     engines: FakeEngines, settings: Settings
 ) -> None:

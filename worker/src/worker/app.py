@@ -50,7 +50,7 @@ from worker.observability import logging as json_logging
 from worker.observability.counters import Counters
 from worker.observability.health_file import HEALTH_PATH, LANES, SINCE, STATE, HealthFile
 from worker.observability.logging import JsonLog
-from worker.runtime import cpu_flags
+from worker.runtime import cpu_flags, memory
 from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import Launch
 from worker.runtime.protocol import SlotSpec
@@ -260,6 +260,8 @@ class Blueprint:
             recycle_overlap=runtime.mode == MODE_SLOT,
             idle_unload_s=float(runtime.idle_unload_s),
             oom_unload=runtime.oom_unload,
+            memory_limit_mib=memory.cgroup_limit_mib() or 0,
+            memory_reserve_mib=runtime.memory_reserve_mib,
         )
         return cls(
             lanes=lanes,

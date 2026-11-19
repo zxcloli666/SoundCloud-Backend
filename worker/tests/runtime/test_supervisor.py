@@ -26,6 +26,7 @@ from worker.observability.counters import Counters
 from worker.runtime import shm
 from worker.runtime.engine_client import (
     CAUSE_DEADLINE,
+    CAUSE_MEMORY,
     DeadlineExceeded,
     EngineClient,
     EngineCrashed,
@@ -33,7 +34,7 @@ from worker.runtime.engine_client import (
     SlotUnavailable,
     next_message_id,
 )
-from worker.runtime.memory import NO_USAGE
+from worker.runtime.memory import NO_USAGE, rss_mib
 from worker.runtime.protocol import Call, ErrorKind, Reply, SlotSpec
 from worker.runtime.supervisor import (
     LANE_GROUPS,
@@ -464,6 +465,34 @@ async def test_engine_memory_is_reported_per_engine_and_zero_once_stopped() -> N
     finally:
         await supervisor.stop()
     assert supervisor.memory() == {"a": NO_USAGE, "b": NO_USAGE}
+
+
+async def test_memory_guard_kills_the_engine_that_grew_and_spares_the_others() -> None:
+    plans = [EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))]
+    probe = await started_supervisor(plans)
+    try:
+        idle_total = rss_mib() + sum(usage.resident_mib for usage in probe.memory().values())
+    finally:
+        await probe.stop()
+    counters = Counters()
+    policy = replace(
+        TEST_POLICY,
+        memory_limit_mib=idle_total + 150,
+        memory_reserve_mib=0,
+        memory_check_s=0.1,
+    )
+    supervisor = await started_supervisor(plans, policy, counters)
+    try:
+        spared = dict((name, pid) for name, pid, _ in supervisor.engines())["b"]
+        with pytest.raises(EngineKilled) as raised:
+            await call_once(supervisor, "a", "ballast", {"mib": 400, "hold_s": 20.0}, 30.0)
+        assert raised.value.cause == CAUSE_MEMORY
+        assert counters.value("engine_memory_kills_total", engine="a") == 1
+        assert counters.value("engine_memory_kills_total", engine="b") == 0
+        assert dict((name, pid) for name, pid, _ in supervisor.engines())["b"] == spared
+        assert await wait_until(lambda: supervisor.slot_state("a") == STATE_READY, 10.0)
+    finally:
+        await supervisor.stop()
 
 
 async def test_idle_unload_timeout_kills_the_stuck_engine() -> None:

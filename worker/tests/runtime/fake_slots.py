@@ -70,6 +70,10 @@ class Fake:
             return {}, {"loads": self.loads, "instance": id(self)}
         if method == "environment":
             return {}, {"wait_policy": os.environ.get("OMP_WAIT_POLICY", ""), "nice": os.nice(0)}
+        if method == "ballast":
+            held = bytes(range(256)) * (int(str(args.get("mib", 64))) << 12)
+            time.sleep(float(str(args.get("hold_s", 5.0))))
+            return {}, {"held": len(held)}
         if method == "boom":
             raise ValueError("model exploded")
         if method == "oom" and rows > int(str(args.get("fits", 1))):

@@ -36,6 +36,7 @@ CAUSE_PING = "ping"
 CAUSE_RECYCLE = "recycle"
 CAUSE_STOP = "stop"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
+CAUSE_MEMORY = "memory"
 COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan", LOCAL_LLM_SLOT, TTS_SLOT})
 COOPERATIVE_GRACE_S = 15.0
 COOPERATIVE_STUCK_S = 60.0
@@ -152,6 +153,7 @@ class EngineClient:
         self._exit: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         self._gone: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._kill_cause: str | None = None
+        self.baseline_mib = 0
         self._dead = False
         self._states = {spec.name: SlotState(spec.name, False, 0, 0, 0) for spec in self.specs}
         self._last_call_at = {spec.name: clock.now() for spec in self.specs}

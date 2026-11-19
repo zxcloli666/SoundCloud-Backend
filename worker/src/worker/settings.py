@@ -152,6 +152,7 @@ class RuntimeSection:
     allow_slow_lanes: bool
     threads: int
     isolate_encode: bool
+    memory_reserve_mib: int
 
 
 @dataclass(frozen=True)
@@ -718,6 +719,8 @@ def validate_runtime(settings: Settings) -> list[str]:
         problems.append("runtime recycle/idle values out of range")
     if runtime.threads < 0:
         problems.append("runtime.threads must be >= 0")
+    if runtime.memory_reserve_mib < 0:
+        problems.append("runtime.memory_reserve_mib must be >= 0")
     return problems
 
 

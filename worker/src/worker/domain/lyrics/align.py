@@ -19,6 +19,7 @@ FALLBACK_COLLAPSED_SHARE = 0.5
 MMS_FRAMES_PER_S = 50.0
 FRAMES_PER_CTC_TARGET = 2
 QWEN_WINDOW_PAD_S = 0.0
+QWEN_MAX_WINDOW_S = 120.0
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class RegionAligner:
         deadline.check("align")
         window = cut_window(vocals, region, self._settings.window_pad_s)
         language = majority_language(lines)
-        if language in ALIGNER_LANGUAGES and self._qwen_available:
+        if language in ALIGNER_LANGUAGES and self._qwen_available and self._qwen_fits(region):
             region_only = cut_window(vocals, region, QWEN_WINDOW_PAD_S)
             primary = await self._qwen(region_only, index, region, lines, language, deadline)
             if primary is not None:
@@ -71,6 +72,12 @@ class RegionAligner:
                     vocals, primary, window, index, region, lines, deadline
                 )
         return await self._mms(window, index, region, lines, deadline)
+
+    def _qwen_fits(self, region: Region) -> bool:
+        if region.duration_s <= QWEN_MAX_WINDOW_S:
+            return True
+        self._counters.inc("align_qwen_window_too_long_total")
+        return False
 
     async def _qwen(
         self,
