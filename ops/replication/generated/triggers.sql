@@ -1274,6 +1274,75 @@ ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_audience_ids FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_audience_ids', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE FUNCTION public.scd_owner_catalog_audience_ids()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', OLD.subject_id, 'relation', OLD.relation, 'user_id', OLD.user_id)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.subject_id, NEW.relation, NEW.user_id) IS DISTINCT FROM (OLD.subject_id, OLD.relation, OLD.user_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', OLD.subject_id, 'relation', OLD.relation, 'user_id', OLD.user_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'relation', NEW.relation, 'user_id', NEW.user_id)) THEN
+                    INSERT INTO public.catalog_audience_ids (created_at, relation, subject_id, user_id) VALUES (NEW.created_at, NEW.relation, NEW.subject_id, NEW.user_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'relation', NEW.relation, 'user_id', NEW.user_id)) THEN
+                DELETE FROM public.catalog_audience_ids t WHERE (t.subject_id, t.relation, t.user_id) = (OLD.subject_id, OLD.relation, OLD.user_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'relation', NEW.relation, 'user_id', NEW.user_id)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.catalog_audience_ids t WHERE (t.subject_id, t.relation, t.user_id) = (NEW.subject_id, NEW.relation, NEW.user_id) FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'relation', NEW.relation, 'user_id', NEW.user_id)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.catalog_audience_ids t SET created_at = NEW.created_at WHERE (t.subject_id, t.relation, t.user_id) = (NEW.subject_id, NEW.relation, NEW.user_id);
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.catalog_audience_ids (created_at, relation, subject_id, user_id)
+        VALUES (NEW.created_at, NEW.relation, NEW.subject_id, NEW.user_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.catalog_audience_ids still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience_ids FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience_ids();
+ALTER TABLE public.catalog_audience_ids ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience_ids FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.catalog_audience_ids ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_cursors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_cursors', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_seen FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_seen', 'cmd', 'migration', 'repl');
@@ -8409,6 +8478,8 @@ BEGIN
             ('catalog_audience', 'zz_owner'),
             ('catalog_audience', 'zzz_suppress'),
             ('catalog_audience_ids', 'zz_guard'),
+            ('catalog_audience_ids', 'zz_owner'),
+            ('catalog_audience_ids', 'zzz_suppress'),
             ('catalog_collection_cursors', 'zz_guard'),
             ('catalog_collection_seen', 'zz_guard'),
             ('catalog_collection_sync', 'zz_guard'),

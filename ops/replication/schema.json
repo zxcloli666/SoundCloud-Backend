@@ -508,7 +508,9 @@
    "fks": [
    ],
    "triggers": [
-    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_catalog_audience_ids", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["subject_id", "relation", "user_id"], "expr": false, "keys": ["subject_id", "relation", "user_id"], "name": "catalog_audience_ids_pkey", "primary": true, "where": null}

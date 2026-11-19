@@ -128,7 +128,7 @@ tables:
   background_job_enqueues: {class: P}
   background_jobs: {class: P, note: "api enqueues only through job.enqueue; api status reads go to job_status"}
   background_schedules: {class: P}
-  catalog_audience_ids: {class: P, note: "catalog_audience with bigint subject and user ids and a smallint relation (1 track-favoriters, 2 track-reposters, 3 playlist-reposters); jobs writes both while it fills on core, it turns C when published"}
+  catalog_audience_ids: {class: C, note: "catalog_audience with bigint subject and user ids and a smallint relation (1 track-favoriters, 2 track-reposters, 3 playlist-reposters)"}
   catalog_collection_cursors: {class: P}
   catalog_collection_seen: {class: P}
   catalog_merge_state: {class: P}
