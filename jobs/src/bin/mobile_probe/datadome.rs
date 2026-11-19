@@ -2,6 +2,14 @@ use sc_mobile::{MobileError, MobileReply};
 
 pub const NOTE: &str = "datadome";
 
+pub fn with_datadome(note: String, blocked: bool) -> Vec<String> {
+    let mut notes = vec![note];
+    if blocked {
+        notes.push(NOTE.to_owned());
+    }
+    notes
+}
+
 pub fn is_datadome(outcome: &Result<MobileReply, MobileError>) -> bool {
     matches!(outcome, Ok(reply) if reply.is_captcha())
 }

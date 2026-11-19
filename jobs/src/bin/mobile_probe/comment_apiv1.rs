@@ -27,7 +27,7 @@ pub async fn post_then_delete(
         (None, None) => "the answer names no comment".to_owned(),
     };
     let blocked = datadome::is_datadome(&outcome);
-    let notes = with_datadome(note, blocked);
+    let notes = datadome::with_datadome(note, blocked);
     journal.reply("comment.post_apiv1", Sent::of_apiv1(&post), &outcome, notes);
     if blocked {
         return;
@@ -94,7 +94,7 @@ async fn delete_and_check(
         "comment.delete",
         Sent::of(&delete),
         &outcome,
-        with_datadome(note, blocked),
+        datadome::with_datadome(note, blocked),
     );
     if blocked {
         return;
@@ -108,7 +108,7 @@ async fn delete_and_check(
         "comment.gone_apiv1",
         Sent::of_apiv1(&read),
         &outcome,
-        with_datadome(note, blocked),
+        datadome::with_datadome(note, blocked),
     );
     if blocked {
         return;
@@ -159,14 +159,6 @@ fn listing_notes(
         format!("deleted comment listed: {listed}"),
     ];
     notes.extend(failure_note(outcome));
-    if blocked {
-        notes.push(datadome::NOTE.to_owned());
-    }
-    notes
-}
-
-pub fn with_datadome(note: String, blocked: bool) -> Vec<String> {
-    let mut notes = vec![note];
     if blocked {
         notes.push(datadome::NOTE.to_owned());
     }

@@ -1,14 +1,20 @@
 mod account;
+mod actions;
 mod apiv1;
 mod args;
 mod comment;
 mod comment_apiv1;
 mod datadome;
+mod follow;
+mod interaction;
 mod journal;
+mod like;
+mod playlist;
 mod reaction;
 mod scrub;
 mod sign_in;
 mod streams;
+mod verdict;
 
 use std::process::ExitCode;
 
@@ -92,4 +98,5 @@ async fn run(client: &MobileClient, args: &Args, journal: &mut Journal) {
         None => journal.skip("reaction", "no --reaction-track"),
     }
     comment::run(client, args, &caller, journal, own_urn.as_deref()).await;
+    actions::run(client, args, &caller, journal).await;
 }

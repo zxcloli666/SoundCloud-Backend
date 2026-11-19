@@ -39,7 +39,7 @@ pub const REACTIONS_PER_TARGET: &str = "query ReactionsPerTarget(
   }
 }";
 
-const LIMIT_PER_TARGET: u32 = 10;
+pub(crate) const LIMIT_PER_TARGET: u32 = 10;
 
 pub struct TrackReaction<'a> {
     pub track_urn: &'a str,
