@@ -61,7 +61,6 @@ SELECT v.cls FROM (VALUES
     ('background_job_failures', 'C'),
     ('background_jobs', 'P'),
     ('background_schedules', 'P'),
-    ('catalog_audience', 'C'),
     ('catalog_audience_ids', 'C'),
     ('catalog_collection_cursors', 'P'),
     ('catalog_collection_seen', 'P'),
@@ -233,8 +232,6 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'artists', jsonb_build_object('id', t.id) FROM public.artists t ON CONFLICT DO NOTHING;
         WHEN 'background_job_failures' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'background_job_failures', jsonb_build_object('id', t.id, 'generation', t.generation) FROM public.background_job_failures t ON CONFLICT DO NOTHING;
-        WHEN 'catalog_audience' THEN
-            INSERT INTO public.repl_resend (tbl, pk) SELECT 'catalog_audience', jsonb_build_object('subject_urn', t.subject_urn, 'relation', t.relation, 'user_urn', t.user_urn) FROM public.catalog_audience t ON CONFLICT DO NOTHING;
         WHEN 'catalog_audience_ids' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'catalog_audience_ids', jsonb_build_object('subject_id', t.subject_id, 'relation', t.relation, 'user_id', t.user_id) FROM public.catalog_audience_ids t ON CONFLICT DO NOTHING;
         WHEN 'catalog_collection_sync' THEN
@@ -401,7 +398,6 @@ BEGIN
         ('artist_socials', 'C'),
         ('artists', 'C'),
         ('background_job_failures', 'C'),
-        ('catalog_audience', 'C'),
         ('catalog_audience_ids', 'C'),
         ('catalog_collection_sync', 'C'),
         ('cdn_tracks', 'A'),

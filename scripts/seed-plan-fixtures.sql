@@ -43,7 +43,7 @@ BEGIN
         'listening_history', 'lyrics_cache', 'lyrics_lookup_state', 'background_jobs',
         'playlists', 'playlist_track_projection', 'playlist_membership_state',
         'playlist_membership_operations', 'playlist_remote_snapshot_tracks',
-        'catalog_audience', 'catalog_audience_ids', 'track_comments', 'user_followings'
+        'catalog_audience_ids', 'track_comments', 'user_followings'
     ]
     LOOP
         IF to_regclass(target) IS NULL THEN
@@ -141,8 +141,6 @@ BEGIN
                        WHEN target || '.' || attname = 'lyrics_lookup_state.priority' THEN '0'
                        WHEN target || '.' || attname = 'playlist_membership_operations.kind'
                            THEN $v$'remove'$v$
-                       WHEN target || '.' || attname = 'catalog_audience.relation'
-                           THEN $v$'track-favoriters'$v$
                        WHEN target || '.' || attname = 'catalog_audience_ids.relation'
                            THEN '1 + n % 3'
                        WHEN attname = 'sc_track_id' OR attname = 'sc_user_id'

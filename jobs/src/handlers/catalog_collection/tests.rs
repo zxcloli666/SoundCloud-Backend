@@ -720,23 +720,6 @@ async fn every_collection_kind_persists_to_its_own_mirror(pool: PgPool) -> anyho
     Ok(())
 }
 
-async fn both_audiences(pool: &PgPool) -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    let wide = sqlx::query_scalar(
-        "SELECT relation || '@' || split_part(subject_urn, ':', 3) || '/' || split_part(user_urn, ':', 3) || '@' || created_at
-         FROM catalog_audience ORDER BY 1",
-    )
-    .fetch_all(pool)
-    .await?;
-    let compact = sqlx::query_scalar(
-        "SELECT (ARRAY['track-favoriters', 'track-reposters', 'playlist-reposters'])[relation]
-                || '@' || subject_id || '/' || user_id || '@' || created_at
-         FROM catalog_audience_ids ORDER BY 1",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok((wide, compact))
-}
-
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complete(
     pool: PgPool,
@@ -745,11 +728,7 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
     payload.collection = CatalogCollection::TrackFavoriters;
     payload.owner = false;
     sqlx::raw_sql(
-        "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at) VALUES
-        ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:99', now() - interval '1 day'),
-        ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:99', now() - interval '1 day'),
-        ('soundcloud:tracks:43', 'track-favoriters', 'soundcloud:users:99', now() - interval '1 day');
-        INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at) VALUES
+        "INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at) VALUES
         (42, 1, 99, now() - interval '1 day'),
         (42, 2, 99, now() - interval '1 day'),
         (43, 1, 99, now() - interval '1 day')",
@@ -770,11 +749,10 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
             catalog_ingest::Observation::begin(&pool).await?,
         )
         .await?;
-    let stale: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM catalog_audience WHERE user_urn = 'soundcloud:users:99'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let stale: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalog_audience_ids WHERE user_id = 99")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(stale, 3);
     let second = state::begin(&pool, &job, &payload)
         .await?
@@ -792,27 +770,21 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
             catalog_ingest::Observation::begin(&pool).await?,
         )
         .await?;
-    let ordered: Vec<String> = sqlx::query_scalar(
-        "SELECT user_urn FROM catalog_audience
-         WHERE subject_urn = 'soundcloud:tracks:42' AND relation = 'track-favoriters'
-         ORDER BY created_at DESC, user_urn DESC",
+    let ordered: Vec<i64> = sqlx::query_scalar(
+        "SELECT user_id FROM catalog_audience_ids
+         WHERE subject_id = 42 AND relation = 1
+         ORDER BY created_at DESC, user_id DESC",
     )
     .fetch_all(&pool)
     .await?;
-    assert_eq!(ordered, ["soundcloud:users:17", "soundcloud:users:18"]);
-    let untouched: Vec<String> = sqlx::query_scalar(
-        "SELECT relation || '@' || subject_urn FROM catalog_audience
-         WHERE user_urn = 'soundcloud:users:99' ORDER BY 1",
+    assert_eq!(ordered, [17, 18]);
+    let untouched: Vec<(i16, i64)> = sqlx::query_as(
+        "SELECT relation, subject_id FROM catalog_audience_ids
+         WHERE user_id = 99 ORDER BY 1, 2",
     )
     .fetch_all(&pool)
     .await?;
-    assert_eq!(
-        untouched,
-        [
-            "track-favoriters@soundcloud:tracks:43",
-            "track-reposters@soundcloud:tracks:42"
-        ]
-    );
+    assert_eq!(untouched, [(1, 43), (2, 42)]);
     let known: i64 =
         sqlx::query_scalar("SELECT count(*) FROM users WHERE sc_user_id IN ('17','18')")
             .fetch_one(&pool)
@@ -836,15 +808,16 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
             catalog_ingest::Observation::begin(&pool).await?,
         )
         .await?;
-    let left: Vec<String> = sqlx::query_scalar(
-        "SELECT subject_urn FROM catalog_audience WHERE relation = 'track-favoriters' ORDER BY 1",
+    let left: Vec<i64> = sqlx::query_scalar(
+        "SELECT subject_id FROM catalog_audience_ids WHERE relation = 1 ORDER BY 1",
     )
     .fetch_all(&pool)
     .await?;
-    assert_eq!(left, ["soundcloud:tracks:43"]);
-    let (wide, compact) = both_audiences(&pool).await?;
-    assert_eq!(wide.len(), 2);
-    assert_eq!(compact, wide);
+    assert_eq!(left, [43]);
+    let all: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog_audience_ids")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(all, 2);
     Ok(())
 }
 
@@ -871,14 +844,11 @@ async fn playlist_reposters_address_the_playlist_and_keep_their_own_mirror(
             catalog_ingest::Observation::begin(&pool).await?,
         )
         .await?;
-    let rows: Vec<String> =
-        sqlx::query_scalar("SELECT subject_urn || '/' || user_urn FROM catalog_audience")
+    let rows: Vec<(i64, i16, i64)> =
+        sqlx::query_as("SELECT subject_id, relation, user_id FROM catalog_audience_ids")
             .fetch_all(&pool)
             .await?;
-    assert_eq!(rows, ["soundcloud:playlists:42/soundcloud:users:7"]);
-    let (wide, compact) = both_audiences(&pool).await?;
-    assert_eq!(compact, wide);
-    assert!(compact[0].starts_with("playlist-reposters@42/7@"));
+    assert_eq!(rows, [(42, 3, 7)]);
     Ok(())
 }
 
@@ -1767,11 +1737,10 @@ async fn a_likers_page_writes_new_and_renamed_users_and_leaves_the_rest_alone(
             ("19".to_owned(), "New".to_owned(), 2, true),
         ]
     );
-    let audience: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM catalog_audience WHERE subject_urn = 'soundcloud:tracks:42'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let audience: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalog_audience_ids WHERE subject_id = 42")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(audience, 3);
     Ok(())
 }
@@ -1785,10 +1754,7 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
     payload.collection = CatalogCollection::TrackFavoriters;
     payload.owner = false;
     sqlx::raw_sql(
-        "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at)
-         SELECT 'soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:' || n, now() - interval '1 day'
-         FROM generate_series(90, 95) AS n;
-         INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at)
+        "INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at)
          SELECT 42, 1, n, now() - interval '1 day'
          FROM generate_series(90, 95) AS n",
     )
@@ -1835,24 +1801,14 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
     .fetch_one(&pool)
     .await?;
     assert_eq!(sync, (true, 4, None));
-    let kept: Vec<String> = sqlx::query_scalar(
-        "SELECT user_urn FROM catalog_audience
-         WHERE subject_urn = 'soundcloud:tracks:42' AND relation = 'track-favoriters'
-         ORDER BY created_at DESC, user_urn DESC",
+    let kept: Vec<i64> = sqlx::query_scalar(
+        "SELECT user_id FROM catalog_audience_ids
+         WHERE subject_id = 42 AND relation = 1
+         ORDER BY created_at DESC, user_id DESC",
     )
     .fetch_all(&pool)
     .await?;
-    assert_eq!(
-        kept,
-        [
-            "soundcloud:users:17",
-            "soundcloud:users:18",
-            "soundcloud:users:19",
-            "soundcloud:users:20"
-        ]
-    );
-    let (wide, compact) = both_audiences(&pool).await?;
-    assert_eq!(compact, wide);
+    assert_eq!(kept, [17, 18, 19, 20]);
 
     payload.collection = CatalogCollection::Followers;
     let followers = state::begin(&pool, &job, &payload)
@@ -1922,11 +1878,10 @@ async fn a_finished_public_walk_drops_its_seen_keys_and_an_owner_walk_keeps_its_
     .fetch_all(&pool)
     .await?;
     assert_eq!(seen, [("liked-tracks".to_owned(), "owner".to_owned(), 2)]);
-    let audience: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM catalog_audience WHERE subject_urn = 'soundcloud:tracks:42'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let audience: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalog_audience_ids WHERE subject_id = 42")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(audience, 2);
     Ok(())
 }

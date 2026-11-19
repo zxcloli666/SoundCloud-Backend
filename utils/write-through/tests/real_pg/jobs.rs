@@ -418,11 +418,7 @@ async fn a_wake_for_an_unknown_track_answers_nothing() {
     pair.finish().await;
 }
 
-const CLEAR_FIXTURE: &str = "INSERT INTO public.catalog_audience (subject_urn, relation, user_urn, created_at)
-    VALUES ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:1', '2026-10-01 00:00:00+00'),
-           ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:2', '2026-10-01 00:00:00+00'),
-           ('soundcloud:tracks:43', 'track-favoriters', 'soundcloud:users:1', '2026-10-01 00:00:00+00');
-    INSERT INTO public.catalog_audience_ids (subject_id, relation, user_id, created_at)
+const CLEAR_FIXTURE: &str = "INSERT INTO public.catalog_audience_ids (subject_id, relation, user_id, created_at)
     VALUES (42, 1, 1, '2026-10-01 00:00:00+00'),
            (42, 2, 2, '2026-10-01 00:00:00+00'),
            (43, 1, 1, '2026-10-01 00:00:00+00');
@@ -449,7 +445,6 @@ async fn clearing_an_audience_removes_its_rows_and_sync_state_on_both_nodes() {
         .await;
     assert_eq!(run.assert_same(), json!(3));
     for pool in [&pair.api, &pair.core] {
-        assert_eq!(count(pool, "catalog_audience").await, 1);
         assert_eq!(count(pool, "catalog_audience_ids").await, 1);
         assert_eq!(count(pool, "catalog_collection_sync").await, 2);
     }
