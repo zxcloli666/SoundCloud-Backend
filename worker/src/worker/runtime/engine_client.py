@@ -153,7 +153,7 @@ class EngineClient:
         self._exit: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         self._gone: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._kill_cause: str | None = None
-        self.baseline_mib = 0
+        self.idle_held_mib = 0
         self._dead = False
         self._states = {spec.name: SlotState(spec.name, False, 0, 0, 0) for spec in self.specs}
         self._last_call_at = {spec.name: clock.now() for spec in self.specs}
@@ -174,6 +174,14 @@ class EngineClient:
     @property
     def busy(self) -> bool:
         return bool(self._pending)
+
+    @property
+    def calling(self) -> bool:
+        return bool(self._call_slots)
+
+    @property
+    def commanding(self) -> bool:
+        return len(self._pending) > len(self._call_slots)
 
     @property
     def kill_cause(self) -> str | None:

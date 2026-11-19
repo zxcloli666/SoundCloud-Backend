@@ -16,6 +16,7 @@ class Fake:
         self.spec: SlotSpec | None = None
         self.loaded = False
         self.loads = 0
+        self.ballast = b""
 
     def load(self, spec: SlotSpec) -> None:
         self.spec = spec
@@ -26,6 +27,9 @@ class Fake:
             os.unlink(marker)
             raise RuntimeError("weights missing once")
         pause(spec.options.get("load_delay_s"))
+        ballast = spec.options.get("load_ballast_mib")
+        if isinstance(ballast, int):
+            self.ballast = bytes(range(256)) * (ballast << 12)
         self.loads += 1
         exit_delay = spec.options.get("exit_delay_s")
         if exit_delay:

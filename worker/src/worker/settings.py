@@ -152,7 +152,8 @@ class RuntimeSection:
     allow_slow_lanes: bool
     threads: int
     isolate_encode: bool
-    memory_reserve_mib: int
+    memory_growth_cap_mib: int
+    memory_guard_kill: bool
     exclusive_slots: tuple[str, ...]
     exclusive_turn_s: int
 
@@ -721,8 +722,8 @@ def validate_runtime(settings: Settings) -> list[str]:
         problems.append("runtime recycle/idle values out of range")
     if runtime.threads < 0:
         problems.append("runtime.threads must be >= 0")
-    if runtime.memory_reserve_mib < 0:
-        problems.append("runtime.memory_reserve_mib must be >= 0")
+    if runtime.memory_growth_cap_mib < 0:
+        problems.append("runtime.memory_growth_cap_mib must be >= 0")
     stray = sorted(set(runtime.exclusive_slots) - set(settings.slots))
     if stray:
         problems.append(f"runtime.exclusive_slots has unknown slots {stray}")

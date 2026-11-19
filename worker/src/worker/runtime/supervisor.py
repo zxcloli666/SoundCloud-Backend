@@ -26,7 +26,7 @@ from worker.runtime.engine_client import (
     Launch,
     SlotUnavailable,
 )
-from worker.runtime.memory import NO_USAGE, Usage, rss_mib
+from worker.runtime.memory import NO_USAGE, Usage
 from worker.runtime.protocol import Pong, SlotSpec
 
 MODE_SLOT = "slot"
@@ -51,6 +51,7 @@ GPU_DEVICES = frozenset({"auto", "cuda"})
 INLINE_SLOTS = frozenset({"vad", "lid", "fingerprint"})
 BULK_NICE = 10
 RESERVED_THREADS_MAX = 4
+GROWTH_LOG_SHARE = 4
 PID_LIMIT_FILES = (Path("/sys/fs/cgroup/pids.max"), Path("/sys/fs/cgroup/pids/pids.max"))
 CGROUP = Path("/sys/fs/cgroup")
 CFS_FOLDERS = ("cpu", "cpu,cpuacct")
@@ -104,8 +105,8 @@ class RuntimePolicy:
     breaker_open_s: float = 300.0
     kill_join_s: float = 2.0
     stop_grace_s: float = 5.0
-    memory_limit_mib: int = 0
-    memory_reserve_mib: int = 1536
+    memory_growth_cap_mib: int = 0
+    memory_guard_kill: bool = False
     memory_check_s: float = 2.0
 
 
@@ -297,7 +298,7 @@ class Supervisor:
                 self._run(managed), name=f"engine:{managed.plan.name}"
             )
         self._housekeeper = asyncio.create_task(self._housekeeping(), name="housekeeping")
-        if self._policy.memory_limit_mib > 0:
+        if self._policy.memory_growth_cap_mib > 0:
             self._memory_guard = asyncio.create_task(self._guard_memory(), name="memory-guard")
 
     async def stop(self) -> None:
@@ -657,7 +658,7 @@ class Supervisor:
                         client.name, f"slot {spec.name} reported unloaded after load"
                     )
         usage = client.usage()
-        client.baseline_mib = usage.resident_mib
+        client.idle_held_mib = usage.held_mib
         self._log.info(
             "engine_ready",
             engine=client.name,
@@ -738,48 +739,69 @@ class Supervisor:
                     await self._inspect_guarded(managed, client)
 
     async def _guard_memory(self) -> None:
-        ceiling = self._policy.memory_limit_mib - self._policy.memory_reserve_mib
         self._log.info(
             "memory_guard_start",
-            limit_mib=self._policy.memory_limit_mib,
-            ceiling_mib=ceiling,
+            growth_cap_mib=self._policy.memory_growth_cap_mib,
+            kill=self._policy.memory_guard_kill,
         )
+        peaks: dict[EngineClient, int] = {}
         while not self._stopping:
             await self._clock.sleep(self._policy.memory_check_s)
             try:
-                await self._check_memory(ceiling)
+                await self._check_growth(peaks)
             except Exception as error:
                 self._counters.inc("memory_guard_errors_total")
                 self._log.exception("memory_guard_failed", error)
 
-    async def _check_memory(self, ceiling_mib: int) -> None:
-        resident = {client: client.usage().resident_mib for client in self._alive_clients()}
-        total = rss_mib() + sum(resident.values())
-        self._counters.gauge("worker_resident_mib", total)
-        if total <= ceiling_mib:
+    async def _check_growth(self, peaks: dict[EngineClient, int]) -> None:
+        for managed in self._engines:
+            client = managed.client
+            if (
+                client is None
+                or managed.state != STATE_READY
+                or not client.alive
+                or client.kill_cause is not None
+                or client.commanding
+            ):
+                continue
+            held = client.usage().held_mib
+            if not client.calling:
+                self._settle_peak(client, peaks.pop(client, 0))
+                client.idle_held_mib = held
+                continue
+            growth = held - client.idle_held_mib
+            if growth <= peaks.get(client, 0):
+                continue
+            peaks[client] = growth
+            if growth > self._policy.memory_growth_cap_mib:
+                await self._over_cap(client, held, growth)
+        for gone in [client for client in peaks if not client.alive]:
+            del peaks[gone]
+
+    def _settle_peak(self, client: EngineClient, growth: int) -> None:
+        if growth <= 0:
             return
-        candidates = [
-            m.client
-            for m in self._engines
-            if m.client is not None and m.client in resident and m.client.kill_cause is None
-        ]
-        if not candidates:
-            return
-        victim = max(
-            candidates,
-            key=lambda client: (resident[client] - client.baseline_mib, resident[client]),
+        self._counters.gauge("engine_call_growth_mib", growth, engine=client.name)
+        if growth * GROWTH_LOG_SHARE >= self._policy.memory_growth_cap_mib:
+            self._log.info("engine_memory_growth", engine=client.name, growth_mib=growth)
+
+    async def _over_cap(self, client: EngineClient, held: int, growth: int) -> None:
+        kill = self._policy.memory_guard_kill
+        self._counters.inc(
+            "engine_memory_over_cap_total", engine=client.name, kill=str(kill).lower()
         )
-        self._counters.inc("engine_memory_kills_total", engine=victim.name)
         self._log.error(
-            "engine_memory_kill",
-            engine=victim.name,
-            pid=victim.pid,
-            resident_mib=resident[victim],
-            baseline_mib=victim.baseline_mib,
-            total_mib=total,
-            ceiling_mib=ceiling_mib,
+            "engine_memory_over_cap",
+            engine=client.name,
+            pid=client.pid,
+            held_mib=held,
+            idle_held_mib=client.idle_held_mib,
+            growth_mib=growth,
+            growth_cap_mib=self._policy.memory_growth_cap_mib,
+            kill=kill,
         )
-        await victim.kill(CAUSE_MEMORY)
+        if kill:
+            await client.kill(CAUSE_MEMORY)
 
     def _is_idle(self, client: EngineClient) -> bool:
         return (
@@ -913,6 +935,7 @@ class Supervisor:
         except (EngineCrashed, EngineKilled) as error:
             self._log.error("slot_load_crashed", engine=client.name, slot=slot, error=str(error))
             return False
+        client.idle_held_mib = client.usage().held_mib
         self._notify()
         return state.loaded
 
