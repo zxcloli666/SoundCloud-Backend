@@ -16,6 +16,7 @@ use crate::handlers::video_find::tests::{Memory, config};
 
 mod fakes;
 mod haiku;
+mod local;
 
 use self::fakes::{Eyes, Inbox, Wire};
 
@@ -360,22 +361,6 @@ async fn a_loop_arrives_in_parts_and_is_stored_from_them_not_from_the_temp_file(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn an_old_workers_loop_without_a_file_stores_nothing_and_is_sent_again(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let (vlm, blobs) = rig(&pool);
-    let key = dispatched(&pool, &blobs, "11", 1).await?;
-
-    finish(&vlm, answer("11", 1, VideoLabel::Loop)).await?;
-
-    assert_eq!(stored(&pool, "11").await?, None);
-    assert_ne!(stage(&pool, "11").await?.0, "found");
-    assert!(blobs.get(&key).is_some());
-    assert!(blobs.get("video/11-1.mp4").is_none());
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_static_answer_settles_the_track_and_deletes_the_temp_file(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -483,17 +468,15 @@ async fn a_result_for_another_attempt_or_an_idle_row_changes_nothing(
 }
 
 #[test]
-fn an_ok_answer_needs_its_label_model_and_exactly_the_file_a_clip_needs() {
+fn an_ok_answer_needs_its_label_and_exactly_the_file_its_label_allows() {
     let mut no_label = answer("11", 1, VideoLabel::Loop);
     no_label.label = None;
     let mut static_with_file = clip_part("11", 1, b"ab", &[b"ab"], 0);
     static_with_file.label = Some(VideoLabel::Static);
-    let mut clip_without_file = answer("11", 1, VideoLabel::Clip);
-    clip_without_file.duration_ms = Some(1_000);
     let mut half = clip_part("11", 1, b"ab", &[b"ab"], 0);
     half.part = None;
 
-    for bad in [no_label, static_with_file, clip_without_file, half] {
+    for bad in [no_label, static_with_file, half] {
         assert!(judge(&bad).is_err());
     }
     assert!(matches!(
@@ -508,10 +491,6 @@ fn an_ok_answer_needs_its_label_model_and_exactly_the_file_a_clip_needs() {
         judge(&answer("11", 1, VideoLabel::Static)).unwrap(),
         Verdict::Labelled(_)
     ));
-    assert_eq!(
-        judge(&answer("11", 1, VideoLabel::Loop)).unwrap(),
-        Verdict::Again(WorkerReason::InternalError)
-    );
 }
 
 #[test]

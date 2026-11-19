@@ -53,7 +53,7 @@ class FakeEngines:
         self.completion = Completion(
             "{}", input_tokens=7, reused_tokens=0, output_tokens=2, finished=True
         )
-        self.frame_verdict = FrameVerdict("loop", {"clip": 0.1, "loop": 0.8, "static": 0.1})
+        self.frame_verdict = FrameVerdict("clip", {"clip": 0.8, "static": 0.2})
         self.speech = Speech(np.full(SPEECH_SAMPLES, 0.25, np.float32), loaded=False, load_s=0.0)
 
     def fail(self, method: str, error: Exception) -> None:

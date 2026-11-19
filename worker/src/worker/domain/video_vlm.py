@@ -22,6 +22,7 @@ from worker.settings import VideoSection, VlmSettings
 
 LANE = "video-vlm"
 LABELS = ("clip", "loop", "static")
+ANSWERS = ("clip", "static")
 STATIC = "static"
 MS = 1000.0
 FRAME_QUALITY = 90
@@ -79,7 +80,7 @@ class VideoVlmLane:
             frames = await self._frames(job, path, deadline)
             if job.frames_only:
                 return await self._delivered(frames)
-            return await self._classify(job, frames, path, folder, deadline)
+            return await self._classify(job, frames, deadline)
 
     async def _download(self, job: Job, path: Path, deadline: Deadline) -> None:
         try:
@@ -111,31 +112,18 @@ class VideoVlmLane:
         log.info("video frames cut", extra={"frames": len(named)})
         return files.delivered(named, self._part_bytes)
 
-    async def _classify(
-        self, job: Job, frames: Uint8Array, path: Path, folder: Path, deadline: Deadline
-    ) -> Outcome:
+    async def _classify(self, job: Job, frames: Uint8Array, deadline: Deadline) -> Outcome:
         if job.prompt is None:
             raise PermanentFailure(Reason.INVALID_REQUEST, "prompt must be a string")
-        verdict = await self._engines.classify_frames(frames, job.prompt, LABELS, deadline)
+        verdict = await self._engines.classify_frames(frames, job.prompt, ANSWERS, deadline)
         log.info(
             "video classified",
             extra={"label": verdict.label, "frames": int(frames.shape[0])},
         )
         scores = {name: round(value, 4) for name, value in verdict.scores.items()}
-        if verdict.label == STATIC:
-            return Outcome.ok(label=verdict.label, model=self._model, scores=scores)
-        return await self._encoded(
-            verdict.label, path, folder, deadline, model=self._model, scores=scores
-        )
+        return Outcome.ok(label=verdict.label, model=self._model, scores=scores)
 
-    async def _encoded(
-        self,
-        label: str,
-        path: Path,
-        folder: Path,
-        deadline: Deadline,
-        **verdict: object,
-    ) -> Outcome:
+    async def _encoded(self, label: str, path: Path, folder: Path, deadline: Deadline) -> Outcome:
         target = folder / "out.mp4"
         await publish.encode(path, target, pad_s=0.0, settings=self._video, deadline=deadline)
         encoded = await features.probe(target, deadline)
@@ -144,7 +132,6 @@ class VideoVlmLane:
         return Outcome.ok_in_parts(
             parts,
             label=label,
-            **verdict,
             duration_ms=max(1, round(encoded.duration_s * MS)),
             clip={
                 "bytes": len(blob),
