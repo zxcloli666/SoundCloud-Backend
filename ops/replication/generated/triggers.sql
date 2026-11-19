@@ -27,6 +27,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_job_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_jobs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_schedules;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_audience;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_audience_ids;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_collection_cursors;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_collection_seen;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_collection_sync;
@@ -1263,6 +1264,8 @@ ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_audience_ids FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_audience_ids', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_cursors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_cursors', 'cmd', 'migration', 'repl');
 
@@ -7880,6 +7883,7 @@ FROM (VALUES
     ('guard', 'background_jobs', 'scd_guard_background_jobs'),
     ('guard', 'background_schedules', 'scd_guard_background_schedules'),
     ('guard', 'catalog_audience', 'scd_guard_catalog_audience'),
+    ('guard', 'catalog_audience_ids', 'scd_guard_catalog_audience_ids'),
     ('guard', 'catalog_collection_cursors', 'scd_guard_catalog_collection_cursors'),
     ('guard', 'catalog_collection_seen', 'scd_guard_catalog_collection_seen'),
     ('guard', 'catalog_collection_sync', 'scd_guard_catalog_collection_sync'),
@@ -8042,6 +8046,7 @@ BEGIN
             ('catalog_audience', 'zz_guard'),
             ('catalog_audience', 'zz_owner'),
             ('catalog_audience', 'zzz_suppress'),
+            ('catalog_audience_ids', 'zz_guard'),
             ('catalog_collection_cursors', 'zz_guard'),
             ('catalog_collection_seen', 'zz_guard'),
             ('catalog_collection_sync', 'zz_guard'),

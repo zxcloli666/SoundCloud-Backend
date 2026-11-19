@@ -60,6 +60,7 @@ SELECT v.cls FROM (VALUES
     ('background_jobs', 'P'),
     ('background_schedules', 'P'),
     ('catalog_audience', 'C'),
+    ('catalog_audience_ids', 'P'),
     ('catalog_collection_cursors', 'P'),
     ('catalog_collection_seen', 'P'),
     ('catalog_collection_sync', 'C'),

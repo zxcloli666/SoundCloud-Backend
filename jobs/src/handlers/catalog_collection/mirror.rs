@@ -55,6 +55,11 @@ fn subject_urn(payload: &CatalogCollectionPayload) -> String {
     payload.collection.subject().urn(&payload.subject_id)
 }
 
+fn audience_ids(payload: &CatalogCollectionPayload) -> Option<(i64, i16)> {
+    let subject = payload.subject_id.parse().ok()?;
+    Some((subject, payload.collection.audience_relation()?))
+}
+
 pub(super) async fn persist(
     connection: &mut PgConnection,
     payload: &CatalogCollectionPayload,
@@ -68,6 +73,20 @@ pub(super) async fn persist(
                 "queries/catalog_collection/audience_insert.sql",
                 subject_urn(payload),
                 payload.collection.as_str(),
+                snapshot.started_at,
+                snapshot.item_count,
+                keys
+            )
+            .execute(&mut *connection)
+            .await
+            .map_err(JobError::retryable)?;
+            let Some((subject, relation)) = audience_ids(payload) else {
+                return Ok(());
+            };
+            sqlx::query_file!(
+                "queries/catalog_collection/audience_ids_insert.sql",
+                subject,
+                relation,
                 snapshot.started_at,
                 snapshot.item_count,
                 keys
@@ -176,6 +195,21 @@ pub(super) async fn reconcile(
             payload.collection.as_str(),
             snapshot.started_at,
             &payload.subject_id,
+            snapshot.snapshot_id
+        )
+        .execute(&mut *connection)
+        .await
+        .map_err(JobError::retryable)?;
+        let Some((subject, relation)) = audience_ids(payload) else {
+            return Ok(());
+        };
+        sqlx::query_file!(
+            "queries/catalog_collection/audience_ids_reconcile.sql",
+            subject,
+            relation,
+            snapshot.started_at,
+            &payload.subject_id,
+            payload.collection.as_str(),
             snapshot.snapshot_id
         )
         .execute(connection)

@@ -498,6 +498,21 @@
     {"cols": ["subject_urn", "relation", "user_urn"], "expr": false, "keys": ["subject_urn", "relation", "user_urn"], "name": "catalog_audience_pkey", "primary": true, "where": null}
    ]
   },
+  "catalog_audience_ids": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "relation", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "subject_id", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "bigint"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["subject_id", "relation", "user_id"], "expr": false, "keys": ["subject_id", "relation", "user_id"], "name": "catalog_audience_ids_pkey", "primary": true, "where": null}
+   ]
+  },
   "catalog_collection_cursors": {
    "columns": [
     {"default": null, "generated": false, "name": "collection", "notnull": true, "type": "text"},
