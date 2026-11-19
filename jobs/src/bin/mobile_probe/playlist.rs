@@ -119,7 +119,7 @@ async fn confirm_gone(
         "playlist.gone",
         gone,
         json!({ "status": status, "shape": shape_of(&json_of(&outcome)) }),
-        vec![datadome::with_datadome(note, blocked)],
+        datadome::with_datadome(note, blocked),
     );
 }
 
