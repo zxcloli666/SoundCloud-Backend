@@ -186,6 +186,7 @@ pub(super) fn handler(
         write_pauses: WritePauses::default(),
         spacings: WritePauses::default(),
         account_pauses: WritePauses::default(),
+        bot_checks: WritePauses::default(),
         app_reports: AppReports::default(),
         like_interval: config.like_interval,
         pauses_restored: tokio::sync::OnceCell::new(),

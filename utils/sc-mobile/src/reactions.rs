@@ -87,6 +87,21 @@ fn moment(second: u64) -> String {
     format!("ts:{second}")
 }
 
+const MOMENT_MARK: &str = ":moments:";
+
+pub fn moment_urn(track_urn: &str, at_second: u64) -> String {
+    format!("{track_urn}{MOMENT_MARK}{at_second}")
+}
+
+pub fn parse_moment_urn(urn: &str) -> Option<(&str, u64)> {
+    let (track, second) = urn.rsplit_once(MOMENT_MARK)?;
+    if !track.starts_with("soundcloud:tracks:") {
+        return None;
+    }
+    let at_second = second.parse::<u64>().ok()?;
+    (second == at_second.to_string()).then_some((track, at_second))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +137,24 @@ mod tests {
         assert_eq!(removed.kind(), Kind::Mutation);
         assert_eq!(variables(&added), Some(expected.clone()));
         assert_eq!(variables(&removed), Some(expected));
+    }
+
+    #[test]
+    fn a_moment_urn_names_the_track_and_the_second_and_parses_back() {
+        let urn = moment_urn("soundcloud:tracks:123", 45);
+
+        assert_eq!(urn, "soundcloud:tracks:123:moments:45");
+        assert_eq!(parse_moment_urn(&urn), Some(("soundcloud:tracks:123", 45)));
+        for bad in [
+            "soundcloud:tracks:123",
+            "soundcloud:tracks:123:moments:",
+            "soundcloud:tracks:123:moments:-1",
+            "soundcloud:tracks:123:moments:045",
+            "soundcloud:users:1:moments:5",
+            ":moments:5",
+        ] {
+            assert_eq!(parse_moment_urn(bad), None, "{bad}");
+        }
     }
 
     #[test]

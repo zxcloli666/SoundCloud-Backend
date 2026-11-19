@@ -4,7 +4,9 @@ use super::actions;
 use super::mobile::{self, Absence, Failure, Opened, Refusal, Route};
 use super::model::ClaimedMutation;
 use super::write_gate::WriteGate;
-use super::{PAUSED_ACTION_RECHECK_SECONDS, SyncQueueHandler};
+use super::{PAUSED_ACTION_RECHECK_SECONDS, SyncQueueHandler, account_action};
+
+const BOT_CHECK_COOLDOWN_SECONDS: i64 = 60 * 60;
 use crate::metrics::record_mobile_action;
 
 pub(super) enum Flow {
@@ -26,6 +28,14 @@ impl SyncQueueHandler {
                 return Ok(Flow::Done);
             }
         };
+        if self
+            .bot_checks
+            .remaining_seconds(&account_action(mutation))
+            .is_some()
+        {
+            record_mobile_action(action, "cooling");
+            return self.refuse(mutation, route, "mobile_bot_check").await;
+        }
         let mut linked = match self.mobile.open(&mutation.user_id).await? {
             Opened::Ready(linked) => linked,
             Opened::Absent(absence) => {
@@ -91,7 +101,11 @@ impl SyncQueueHandler {
             }
             Err(Failure::Refused(refusal)) => {
                 let (outcome, reason) = match refusal {
-                    Refusal::Captcha => ("captcha", "mobile_bot_check"),
+                    Refusal::Captcha => {
+                        self.bot_checks
+                            .pause(account_action(mutation), BOT_CHECK_COOLDOWN_SECONDS);
+                        ("captcha", "mobile_bot_check")
+                    }
                     Refusal::RelinkRequired => ("relink_required", "mobile_relink_required"),
                 };
                 record_mobile_action(action, outcome);

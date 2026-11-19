@@ -25,27 +25,22 @@ pub(in crate::handlers::sync_queue) fn build(
 }
 
 fn reaction(mutation: &ClaimedMutation) -> Result<TrackReaction<'_>, ActionError> {
-    let payload = mutation
+    let (track_urn, at_second) = reactions::parse_moment_urn(&mutation.target_urn)
+        .filter(|(_, second)| *second <= MAX_SECOND)
+        .ok_or(ActionError::InvalidPayload("reaction moment"))?;
+    let value_urn = match mutation
         .payload
         .as_ref()
-        .ok_or(ActionError::InvalidPayload("payload is missing"))?;
-    let at_second = payload
-        .get("at_second")
-        .and_then(Value::as_u64)
-        .filter(|second| *second <= MAX_SECOND)
-        .ok_or(ActionError::InvalidPayload("reaction second"))?;
-    let value_urn = match payload.get("value_urn") {
+        .and_then(|payload| payload.get("value_urn"))
+    {
         None | Some(Value::Null) => FIRE,
         Some(value) => value
             .as_str()
             .filter(|value| value.starts_with(VALUE_PREFIX))
             .ok_or(ActionError::InvalidPayload("reaction value"))?,
     };
-    if !mutation.target_urn.starts_with("soundcloud:tracks:") {
-        return Err(ActionError::InvalidPayload("track urn"));
-    }
     Ok(TrackReaction {
-        track_urn: &mutation.target_urn,
+        track_urn,
         at_second,
         value_urn,
     })

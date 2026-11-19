@@ -20,6 +20,7 @@ use super::unclear_create_tests::{handler, run};
 
 const USER: &str = "17";
 const TRACK: &str = "soundcloud:tracks:42";
+const MOMENT: &str = "soundcloud:tracks:42:moments:5";
 const PERSON: &str = "soundcloud:users:9";
 const COMMENT: &str = "soundcloud:comments:5";
 const CAPTCHA_PAGE: &str = r#"{"url":"https://geo.captcha-delivery.com/interstitial/?cid=1"}"#;
@@ -272,7 +273,7 @@ impl World {
 }
 
 fn reaction_payload() -> Option<Value> {
-    Some(json!({"at_second": 5}))
+    None
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
@@ -444,7 +445,7 @@ async fn a_reaction_without_a_linked_profile_fails_with_a_reason_and_sends_nothi
     let world = world(pool, Profile::Missing).await?;
 
     world
-        .send("track_reaction_set", TRACK, reaction_payload())
+        .send("track_reaction_set", MOMENT, reaction_payload())
         .await?;
 
     assert_eq!(
@@ -465,7 +466,7 @@ async fn a_reaction_on_a_profile_that_needs_relinking_fails_with_its_reason(
     let world = world(pool, Profile::RelinkRequired).await?;
 
     world
-        .send("track_reaction_remove", TRACK, reaction_payload())
+        .send("track_reaction_remove", MOMENT, reaction_payload())
         .await?;
 
     assert_eq!(
@@ -490,10 +491,10 @@ async fn a_linked_reaction_is_a_graphql_upsert_and_a_removal_is_a_graphql_remove
     ]);
 
     world
-        .send("track_reaction_set", TRACK, reaction_payload())
+        .send("track_reaction_set", MOMENT, reaction_payload())
         .await?;
     world
-        .send("track_reaction_remove", TRACK, reaction_payload())
+        .send("track_reaction_remove", MOMENT, reaction_payload())
         .await?;
 
     let seen = world.mobile.seen();
@@ -543,7 +544,7 @@ async fn graphql_errors_on_a_reaction_are_a_failure_that_is_retried_later(
     )]);
 
     world
-        .send("track_reaction_set", TRACK, reaction_payload())
+        .send("track_reaction_set", MOMENT, reaction_payload())
         .await?;
 
     let (retries, dead, _) = world.row().await?;
@@ -560,7 +561,7 @@ async fn a_bot_check_on_a_reaction_fails_it_without_a_retry_or_an_apiv1_call(
     world.mobile.reply_with([Canned::Captcha]);
 
     world
-        .send("track_reaction_set", TRACK, reaction_payload())
+        .send("track_reaction_set", MOMENT, reaction_payload())
         .await?;
 
     assert_eq!(
@@ -579,11 +580,7 @@ async fn a_reaction_with_a_bad_payload_is_parked_before_anything_is_sent(
     let world = world(pool, Profile::Active).await?;
 
     world
-        .send(
-            "track_reaction_set",
-            TRACK,
-            Some(json!({"at_second": "five"})),
-        )
+        .send("track_reaction_set", MOMENT, Some(json!({"value_urn": 5})))
         .await?;
 
     assert!(world.row().await?.1);
@@ -664,5 +661,108 @@ async fn the_plan_header_is_written_only_when_it_changes(pool: PgPool) -> anyhow
         .await?;
     assert_eq!(world.credential().await?.2.as_deref(), Some("none"));
     assert_ne!(seen_at(&world).await?, first);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn after_a_bot_check_follows_skip_mobile_for_the_account_action(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let world = world(pool, Profile::Active).await?;
+    world.mobile.reply_with([Canned::Captcha]);
+
+    world.send("follow_user", PERSON, None).await?;
+    world
+        .send("follow_user", "soundcloud:users:10", None)
+        .await?;
+
+    assert_eq!(world.mobile.count(), 1);
+    assert_eq!(world.apiv1_hits(), 2);
+    assert_eq!(world.queued().await?, 0);
+    world.mobile.reply_with([Canned::Status(200)]);
+    world.send("unfollow_user", PERSON, None).await?;
+    assert_eq!(world.mobile.count(), 2);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn after_a_bot_check_a_reaction_fails_without_sending(pool: PgPool) -> anyhow::Result<()> {
+    let world = world(pool, Profile::Active).await?;
+    world.mobile.reply_with([Canned::Captcha]);
+
+    world.send("track_reaction_set", MOMENT, None).await?;
+    sqlx::query("DELETE FROM sync_queue")
+        .execute(&world.pool)
+        .await?;
+    world
+        .send("track_reaction_set", "soundcloud:tracks:42:moments:6", None)
+        .await?;
+
+    assert_eq!(world.mobile.count(), 1);
+    assert_eq!(
+        world.row().await?,
+        (SYNC_MAX, true, Some("mobile_bot_check".to_owned()))
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn reactions_at_other_seconds_are_other_writes_and_one_moment_is_one_write(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let world = world(pool, Profile::Active).await?;
+    for (action, target) in [
+        ("track_reaction_set", "soundcloud:tracks:42:moments:5"),
+        ("track_reaction_set", "soundcloud:tracks:42:moments:5"),
+        ("track_reaction_set", "soundcloud:tracks:42:moments:6"),
+    ] {
+        sqlx::query_file!(
+            "../api/queries/sync_queue/service/enqueue.sql",
+            USER,
+            action,
+            target,
+            &Value::Null,
+            false
+        )
+        .execute(&world.pool)
+        .await?;
+    }
+    assert_eq!(world.queued().await?, 2);
+
+    world
+        .queue(
+            "track_reaction_remove",
+            "soundcloud:tracks:42:moments:5",
+            None,
+        )
+        .await?;
+    sqlx::query("UPDATE sync_queue SET next_run_at = now()")
+        .execute(&world.pool)
+        .await?;
+    world.handler.repository.adopt().await?;
+
+    let mut claimed: Vec<(String, String)> = world
+        .handler
+        .repository
+        .claim(10)
+        .await?
+        .into_iter()
+        .map(|mutation| (mutation.action_type, mutation.target_urn))
+        .collect();
+    claimed.sort();
+
+    assert_eq!(
+        claimed,
+        [
+            (
+                "track_reaction_set".to_owned(),
+                "soundcloud:tracks:42:moments:5".to_owned()
+            ),
+            (
+                "track_reaction_set".to_owned(),
+                "soundcloud:tracks:42:moments:6".to_owned()
+            ),
+        ]
+    );
     Ok(())
 }

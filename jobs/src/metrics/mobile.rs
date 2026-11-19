@@ -11,7 +11,7 @@ pub const ACTION_TYPES: [&str; 5] = [
     "follow_user",
     "unfollow_user",
 ];
-pub const OUTCOMES: [&str; 7] = [
+pub const OUTCOMES: [&str; 8] = [
     "written",
     "target_missing",
     "not_linked",
@@ -19,6 +19,7 @@ pub const OUTCOMES: [&str; 7] = [
     "captcha",
     "failed",
     "held",
+    "cooling",
 ];
 const REQUEST_OPS: [&str; 6] = [
     "refresh",

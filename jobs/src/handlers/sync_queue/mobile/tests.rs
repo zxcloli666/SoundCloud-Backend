@@ -73,13 +73,13 @@ fn only_reactions_comment_delete_and_follows_leave_apiv1() {
 fn a_reaction_builds_the_graphql_mutation_with_the_moment_and_the_default_value() {
     let set = build(&claimed(
         "track_reaction_set",
-        "soundcloud:tracks:42",
-        Some(json!({"at_second": 5})),
+        "soundcloud:tracks:42:moments:5",
+        None,
     ));
     let remove = build(&claimed(
         "track_reaction_remove",
-        "soundcloud:tracks:42",
-        Some(json!({"at_second": 5, "value_urn": "sc:interactiontypevalue:1f525"})),
+        "soundcloud:tracks:42:moments:5",
+        Some(json!({"value_urn": "sc:interactiontypevalue:1f525"})),
     ));
 
     let (Ok(set), Ok(remove)) = (set, remove) else {
@@ -153,26 +153,18 @@ fn follows_are_rest_writes_on_the_user_urn() {
 fn a_malformed_mutation_is_refused_before_any_request_is_built() {
     let bad = [
         claimed("track_reaction_set", "soundcloud:tracks:42", None),
+        claimed("track_reaction_set", "soundcloud:tracks:42:moments:x", None),
         claimed(
             "track_reaction_set",
-            "soundcloud:tracks:42",
-            Some(json!({})),
+            "soundcloud:tracks:42:moments:99999999",
+            None,
         ),
         claimed(
             "track_reaction_set",
-            "soundcloud:tracks:42",
-            Some(json!({"at_second": -1})),
+            "soundcloud:tracks:42:moments:1",
+            Some(json!({"value_urn": "other"})),
         ),
-        claimed(
-            "track_reaction_set",
-            "soundcloud:tracks:42",
-            Some(json!({"at_second": 1, "value_urn": "other"})),
-        ),
-        claimed(
-            "track_reaction_set",
-            "soundcloud:users:42",
-            Some(json!({"at_second": 1})),
-        ),
+        claimed("track_reaction_set", "soundcloud:users:42:moments:1", None),
         claimed("comment_delete", "42", None),
     ];
 
@@ -193,8 +185,8 @@ fn a_malformed_mutation_is_refused_before_any_request_is_built() {
 fn a_reply_is_a_write_only_when_it_is_a_success_without_graph_errors() {
     let Ok(mutation) = build(&claimed(
         "track_reaction_set",
-        "soundcloud:tracks:42",
-        Some(json!({"at_second": 5})),
+        "soundcloud:tracks:42:moments:5",
+        None,
     )) else {
         panic!("a reaction must build");
     };
