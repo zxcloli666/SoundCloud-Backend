@@ -748,7 +748,7 @@ mod sources {
     }
 
     #[tokio::test]
-    async fn an_isrc_without_a_hit_is_one_search_and_no_canvas_query() {
+    async fn an_isrc_without_a_hit_falls_back_to_one_text_search() {
         let mock = Mock::new();
         let sources = spotify(&mock);
         mock.route(
@@ -758,7 +758,7 @@ mod sources {
 
         assert_eq!(sources.canvas("dc", &wanted()).await, Ok(None));
 
-        assert_eq!(asked(&mock, SEARCH), 1);
+        assert_eq!(asked(&mock, SEARCH), 2);
         assert_eq!(asked(&mock, PATHFINDER), 0);
     }
 
