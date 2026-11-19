@@ -1,6 +1,7 @@
 use backend_contracts::pipeline::VideoLabel;
 use backend_contracts::video_gen::VideoFileSlice;
 use chrono::Utc;
+use serde_json::Map;
 use tracing::{debug, info, warn};
 
 use super::haiku::{Judged, Vision};
@@ -37,11 +38,31 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                 let known = Known {
                     label: judged.label,
                     model: judged.model,
+                    scores: Map::new(),
                 };
                 self.next(track, attempt, Some(&known)).await
             }
             None => self.next(track, attempt, None).await,
         }
+    }
+
+    pub(super) async fn answered(&self, track: &str, attempt: i32, answer: &Known) -> JobResult {
+        let Some(held) = queue::held(&self.pool, track, attempt).await? else {
+            debug!(track, attempt, "stale VLM answer ignored");
+            return Ok(());
+        };
+        let known = Known {
+            label: Features::of(&held).kind(answer.label),
+            ..answer.clone()
+        };
+        info!(
+            track,
+            answer = answer.label.as_str(),
+            label = known.label.as_str(),
+            model = known.model,
+            "local VLM judged a video"
+        );
+        self.next(track, attempt, Some(&known)).await
     }
 
     async fn ask(

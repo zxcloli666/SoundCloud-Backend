@@ -353,16 +353,17 @@ fn motion_up_to_30_s_is_a_loop_and_longer_is_a_clip() {
 }
 
 #[test]
-fn haiku_is_asked_static_or_clip_and_the_local_model_keeps_three_words() {
+fn haiku_and_the_local_model_are_both_asked_only_static_or_clip() {
     let canvas = prompt::remote(8, &short());
     assert!(!canvas.contains("loop -"));
     assert!(canvas.contains("however short and even if it repeats"));
     assert!(canvas.ends_with(r#""label": "static|clip"}"#));
 
-    assert!(prompt::local(&short()).ends_with("Answer with one word: clip, loop or static."));
-    let long = prompt::local(&measured());
-    assert!(long.contains("longer than 30 s, so it is clip or static, never loop"));
-    assert!(long.ends_with("Answer with one word: clip or static."));
+    for features in [short(), measured(), Features::default()] {
+        let local = prompt::local(&features);
+        assert!(!local.contains("loop"));
+        assert!(local.ends_with("Answer with one word: static or clip."));
+    }
 }
 
 #[test]
@@ -398,19 +399,24 @@ fn the_text_without_features_leaves_the_line_out_and_a_lone_feature_stays_alone(
 }
 
 #[test]
-fn the_local_text_shares_the_static_rules_and_asks_for_one_word() {
-    let local = prompt::local(&measured());
-    let remote = prompt::remote(8, &measured());
-
-    assert!(!local.contains("JSON"));
-    assert!(!local.contains("8 frames"));
-    for shared in [
-        "static - no real filmed footage",
-        "Rules: lyrics written over the picture",
-    ] {
-        assert!(local.contains(shared) && remote.contains(shared));
-    }
-    assert!(local.contains("median share of moving pixels 0.041"));
+fn the_local_text_is_the_benched_wording_with_the_duration_and_no_other_measure() {
+    assert_eq!(
+        prompt::local(&measured()),
+        [
+            "These images are frames from one music video, in time order, spread evenly over the video. The video is 212 s long.",
+            "Classify the video as one of:",
+            "static - no real filmed footage. One still picture or a few photos, album art, a logo, a drawn cover, a fan edit of photos, or a lyric video (song words on screen over a background). Effects on a still are not footage: zoom, pan, shake, flashes, glow, rain, particles, grain, color shifts, a moving waveform.",
+            "clip - real filmed footage or real animation that goes on and changes over time: people move, the camera moves, shots and scenes change. A phone video of a person or a concert is a clip, even if the framing barely changes.",
+            "If song lyrics are written over the picture, it is static.",
+            "Answer with one word: static or clip.",
+        ]
+        .join("\n")
+    );
+    let bare = prompt::local(&Features::default());
+    assert!(bare.starts_with(
+        "These images are frames from one music video, in time order, spread evenly over the video.\n"
+    ));
+    assert!(!bare.contains(" s long"));
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]

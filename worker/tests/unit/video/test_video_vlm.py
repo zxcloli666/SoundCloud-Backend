@@ -18,12 +18,12 @@ from worker.domain.deadline import Deadline
 from worker.domain.outcome import Outcome, Reason, Status
 from worker.domain.ports import FrameVerdict
 from worker.domain.video import sample
-from worker.domain.video_vlm import LABELS, VideoVlmLane
+from worker.domain.video_vlm import ANSWERS, VideoVlmLane
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import Settings
 
-PROMPT = "Answer with one word: clip, loop or static."
+PROMPT = "Answer with one word: static or clip."
 MODEL = "Qwen/Qwen3-VL-2B-Instruct-GGUF/Qwen3VL-2B-Instruct-Q4_K_M.gguf@52d6c8ff"
 
 
@@ -86,32 +86,23 @@ async def harness(settings: Settings, work_dir: Path, video_bytes: bytes) -> Asy
         yield Harness(server, session, settings, work_dir, 2048)
 
 
-async def test_a_loop_answer_returns_the_encoded_file_in_parts_even_from_an_mpegts_source(
-    harness: Harness, settings: Settings, tmp_path: Path
+async def test_a_prompt_gets_only_the_answer_static_or_clip_without_a_file(
+    harness: Harness, settings: Settings
 ) -> None:
-    harness.server.body = media.make_mpegts(tmp_path / "stream.mp4", seconds=4)
-
-    outcome = await harness.run()
+    outcome = await harness.run(offset_ms=500, duration_ms=3000)
 
     assert outcome.status is Status.OK
-    blob = b"".join(outcome.parts)
-    assert outcome.fields["label"] == "loop"
-    assert outcome.fields["model"] == MODEL
-    assert outcome.fields["scores"] == {"clip": 0.1, "loop": 0.8, "static": 0.1}
-    assert outcome.fields["clip"] == {
-        "bytes": len(blob),
-        "sha256": hashlib.sha256(blob).hexdigest(),
-        "parts": len(outcome.parts),
+    assert outcome.fields == {
+        "label": "clip",
+        "model": MODEL,
+        "scores": {"clip": 0.8, "static": 0.2},
     }
-    assert blob[4:8] == b"ftyp"
-    out = tmp_path / "loop.mp4"
-    out.write_bytes(blob)
-    assert media.stream_types(out) == ["video"]
+    assert outcome.parts == ()
     method, call = harness.engines.calls[-1]
     side, count = settings.vlm.frame_side, settings.vlm.frames
     assert method == "classify_frames"
     assert call["prompt"] == PROMPT
-    assert call["labels"] == LABELS
+    assert call["labels"] == ANSWERS == ("clip", "static")
     assert call["frames"] == (count, side, side, 3)
 
 
@@ -123,22 +114,27 @@ async def test_a_static_answer_is_a_plain_verdict(harness: Harness) -> None:
     assert (outcome.status, outcome.fields["label"], outcome.parts) == (Status.OK, "static", ())
 
 
-async def test_a_clip_answer_returns_the_cut_piece_in_parts(harness: Harness) -> None:
-    harness.engines.frame_verdict = FrameVerdict("clip", {"clip": 0.95})
+async def test_a_known_loop_label_cuts_the_file_in_parts_even_from_an_mpegts_source(
+    harness: Harness, tmp_path: Path
+) -> None:
+    harness.server.body = media.make_mpegts(tmp_path / "stream.mp4", seconds=4)
 
-    outcome = await harness.run(offset_ms=500, duration_ms=3000)
+    outcome = await harness.run(label="loop", prompt=None)
 
     assert outcome.status is Status.OK
+    assert harness.engines.calls == []
     blob = b"".join(outcome.parts)
-    clip = outcome.fields["clip"]
-    assert outcome.fields["label"] == "clip"
-    assert clip == {
+    assert outcome.fields["label"] == "loop"
+    assert outcome.fields["clip"] == {
         "bytes": len(blob),
         "sha256": hashlib.sha256(blob).hexdigest(),
         "parts": len(outcome.parts),
     }
     assert len(outcome.parts) > 1
     assert blob[4:8] == b"ftyp"
+    out = tmp_path / "loop.mp4"
+    out.write_bytes(blob)
+    assert media.stream_types(out) == ["video"]
     duration = outcome.fields["duration_ms"]
     assert isinstance(duration, int)
     assert 3000 <= duration <= 4500

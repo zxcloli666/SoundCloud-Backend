@@ -5,24 +5,25 @@ use super::queue::Held;
 
 const STATIC: &str = "static - no real filmed footage: one still picture or a few photos, album art, a logo, a drawn cover, a fan edit of photos, a screen recording, or a lyric video (song words on screen over a background, even a moving one). Effects on a still are not footage: zoom, pan, shake, flashes, glow, rain, particles, grain, color shifts, a waveform.";
 
-const LOOP: &str = "loop - one short piece of real motion, filmed or animated, that repeats. A file under 15 s with real motion is a loop. A file of 15 to 30 s is a loop only if the same few seconds of motion visibly come back.";
-
-const CLIP: &str = "clip - real filmed footage or real animation that goes on and changes: people or the camera move, shots change. A phone video of a person or a concert is a clip even if the framing barely changes.";
-
 const MOTION: &str = "clip - real filmed footage or real animation, however short and even if it repeats: people or the camera move, shots change. A phone video of a person or a concert is a clip even if the framing barely changes.";
 
 const RULES: &str = "Rules: lyrics written over the picture means static. The same background in every frame with only the text changing is static.";
 
-const LONG: &str = "This video is longer than 30 s, so it is clip or static, never loop: the frames cannot show a repeat, and one filmed take that barely changes is a clip.";
-
-const LOOP_MAX_S: f64 = 30.0;
-
 const JSON_REPLY: &str =
     r#"Reply as JSON: {"reason": "<one short sentence>", "label": "static|clip"}"#;
 
-const WORD_REPLY: &str = "Answer with one word: clip, loop or static.";
+const LOCAL_INTRO: &str =
+    "These images are frames from one music video, in time order, spread evenly over the video.";
 
-const WORD_REPLY_LONG: &str = "Answer with one word: clip or static.";
+const LOCAL_STATIC: &str = "static - no real filmed footage. One still picture or a few photos, album art, a logo, a drawn cover, a fan edit of photos, or a lyric video (song words on screen over a background). Effects on a still are not footage: zoom, pan, shake, flashes, glow, rain, particles, grain, color shifts, a moving waveform.";
+
+const LOCAL_CLIP: &str = "clip - real filmed footage or real animation that goes on and changes over time: people move, the camera moves, shots and scenes change. A phone video of a person or a concert is a clip, even if the framing barely changes.";
+
+const LOCAL_RULES: &str = "If song lyrics are written over the picture, it is static.";
+
+const LOCAL_REPLY: &str = "Answer with one word: static or clip.";
+
+const LOOP_MAX_S: f64 = 30.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Features {
@@ -40,10 +41,6 @@ impl Features {
             cuts_per_min: number("cuts_per_min"),
             motion_med: number("motion_med"),
         }
-    }
-
-    fn long(&self) -> bool {
-        self.duration_s.is_some_and(|s| s > LOOP_MAX_S)
     }
 
     pub fn kind(&self, label: VideoLabel) -> VideoLabel {
@@ -80,18 +77,20 @@ pub fn remote(frames: usize, features: &Features) -> String {
 }
 
 pub fn local(features: &Features) -> String {
-    let intro = "These are frames from one video, in time order, spread evenly over its length.";
-    let mut lines = vec![intro.to_owned()];
-    lines.extend(features.line());
-    lines.extend(["Classify the video:", STATIC, LOOP, CLIP, RULES].map(str::to_owned));
-    if features.long() {
-        lines.push(LONG.to_owned());
-    }
-    let reply = if features.long() {
-        WORD_REPLY_LONG
-    } else {
-        WORD_REPLY
+    let intro = match features.duration_s {
+        Some(seconds) => format!("{LOCAL_INTRO} The video is {seconds:.0} s long."),
+        None => LOCAL_INTRO.to_owned(),
     };
-    lines.push(reply.to_owned());
+    let mut lines = vec![intro];
+    lines.extend(
+        [
+            "Classify the video as one of:",
+            LOCAL_STATIC,
+            LOCAL_CLIP,
+            LOCAL_RULES,
+            LOCAL_REPLY,
+        ]
+        .map(str::to_owned),
+    );
     lines.join("\n")
 }

@@ -82,3 +82,42 @@ def test_broken_vlm_settings_are_named() -> None:
 
     for word in ("vlm.file", "vlm.sha256", "vlm.frames", "vlm.frame_side"):
         assert word in problems
+
+
+def test_the_cpu_profile_runs_the_4b_q4_model_on_the_cpu_with_the_benched_settings() -> None:
+    loaded = settings()
+    vlm = loaded.vlm
+
+    assert loaded.slots[s.VLM_SLOT].model == "Qwen/Qwen3-VL-4B-Instruct-GGUF"
+    assert (vlm.file, vlm.mmproj) == (
+        "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+        "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+    )
+    assert (vlm.gpu_layers, vlm.context_tokens, vlm.frames, vlm.frame_side) == (0, 4096, 8, 448)
+
+
+class FakeLlama:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def create_chat_completion(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return {"choices": [{"message": {"content": "static"}}]}
+
+    def tokenize(self, text: bytes, add_bos: bool, special: bool) -> list[int]:
+        return [len(text)]
+
+
+def test_the_answer_is_greedy_without_a_repeat_penalty() -> None:
+    slot = VlmSlot()
+    llama = FakeLlama()
+    slot._llm = llama  # type: ignore[assignment]
+    frames = np.zeros((2, 32, 32, 3), dtype=np.uint8)
+
+    _, reply = slot.invoke(
+        "classify", {"frames": frames}, {"prompt": "p", "labels": ["clip", "static"]}
+    )
+
+    assert reply["label"] == "static"
+    call = llama.calls[0]
+    assert (call["temperature"], call["repeat_penalty"]) == (0.0, 1.0)

@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use super::VideoVlm;
 use super::haiku::Vision;
-use super::queue::{self, Held};
+use super::queue::{self, Held, Known};
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::{Pacing, final_key};
 use crate::handlers::video_gen::Lanes;
@@ -35,6 +35,7 @@ pub(super) struct Frames {
 #[derive(Debug, PartialEq)]
 pub(super) enum Verdict {
     Labelled(Box<Answer>),
+    Answered(Box<Known>),
     Frames(Box<Frames>),
     Drop(WorkerReason),
     Again(WorkerReason),
@@ -48,6 +49,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         let track = result.sc_track_id.as_str();
         match judge(&result).map_err(JobError::permanent)? {
             Verdict::Labelled(answer) => self.labelled(track, attempt, &result, &answer).await,
+            Verdict::Answered(answer) => self.answered(track, attempt, &answer).await,
             Verdict::Frames(frames) => self.framed(track, attempt, &frames).await,
             Verdict::Drop(reason) => self.dropped(track, attempt, reason).await,
             Verdict::Again(reason) => self.again(track, attempt, reason).await,
@@ -306,7 +308,9 @@ struct Judged {
 fn judged_by(answer: &Answer, held: &Held) -> anyhow::Result<Judged> {
     let (model, scores) = match (&answer.model, &held.haiku) {
         (Some(model), _) => (model.clone(), answer.scores.clone()),
-        (None, Some(known)) if known.label == answer.label => (known.model.clone(), json!({})),
+        (None, Some(known)) if known.label == answer.label => {
+            (known.model.clone(), Value::Object(known.scores.clone()))
+        }
         _ => bail!("VLM {} answer names no model", answer.label.as_str()),
     };
     Ok(Judged {
@@ -392,8 +396,20 @@ fn labelled(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
         (None, None) => None,
         _ => bail!("VLM result carries half a file"),
     };
-    if label == VideoLabel::Loop && file.is_none() {
-        return Ok(Verdict::Again(WorkerReason::InternalError));
+    if label != VideoLabel::Static && file.is_none() {
+        let Some(model) = model else {
+            bail!("VLM {} answer names no model", label.as_str());
+        };
+        return Ok(Verdict::Answered(Box::new(Known {
+            label,
+            model,
+            scores: result
+                .scores
+                .iter()
+                .flatten()
+                .map(|(name, score)| (name.clone(), json!(score)))
+                .collect(),
+        })));
     }
     ensure!(
         file.is_some() == (label != VideoLabel::Static),

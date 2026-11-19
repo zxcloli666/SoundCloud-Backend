@@ -16,6 +16,7 @@ from worker.settings import VLM_METHOD, VLM_SLOT
 
 JPEG_QUALITY = 90
 ANSWER_TOKENS = 4
+REPEAT_PENALTY = 1.0
 WARMUP_SIDE = 224
 
 
@@ -89,6 +90,7 @@ class VlmSlot:
         reply: Any = self._llm.create_chat_completion(
             messages=messages,
             temperature=0.0,
+            repeat_penalty=REPEAT_PENALTY,
             max_tokens=ANSWER_TOKENS,
             grammar=grammar,
             logits_processor=LogitsProcessorList([first]),

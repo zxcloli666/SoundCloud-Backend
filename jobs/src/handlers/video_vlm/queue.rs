@@ -3,7 +3,7 @@ use std::time::Duration;
 use backend_contracts::admin_video::VideoSource;
 use backend_contracts::pipeline::VideoLabel;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sqlx::PgPool;
 use tracing::warn;
 
@@ -28,6 +28,8 @@ pub(super) struct Held {
 pub(super) struct Known {
     pub(super) label: VideoLabel,
     pub(super) model: String,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub(super) scores: Map<String, Value>,
 }
 
 #[derive(Debug, PartialEq)]
