@@ -721,6 +721,9 @@ pub struct VideoCandidate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String", length(max = MAX_VIDEO_NAME_CHARS))]
     pub source_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub kept: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]

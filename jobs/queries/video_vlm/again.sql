@@ -8,7 +8,16 @@ WITH tried AS (
     FOR UPDATE
 )
 UPDATE track_video_dispatch AS dispatch
-SET stage = CASE WHEN tried.tries >= $4 THEN 'none' ELSE 'pending_vlm' END,
+SET stage = CASE
+        WHEN tried.tries < $4 THEN 'pending_vlm'
+        WHEN EXISTS (
+            SELECT 1
+            FROM track_videos AS video
+            WHERE video.sc_track_id = dispatch.sc_track_id
+              AND video.kind IN ('clip', 'loop')
+        ) THEN 'found'
+        ELSE 'none'
+    END,
     next_at = now() + make_interval(
         secs => CASE WHEN tried.tries >= $4 THEN $6::float8 ELSE $3::float8 * tried.tries END
     ),

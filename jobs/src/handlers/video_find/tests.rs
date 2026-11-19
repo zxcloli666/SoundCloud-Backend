@@ -23,6 +23,8 @@ use crate::handlers::video_accounts::check::mock::{Answer, Mock};
 use crate::handlers::video_accounts::{Seal, SpotifyKey, store};
 use crate::objects::{Blobs, Listed, ObjectsError};
 
+mod research;
+
 const PAUSE: Duration = Duration::from_secs(3_600);
 
 pub(crate) fn config() -> VideoFindConfig {
@@ -37,6 +39,9 @@ pub(crate) fn config() -> VideoFindConfig {
         max_attempts: 3,
         none_recheck: Duration::from_secs(30 * 86_400),
         static_recheck: Duration::from_secs(90 * 86_400),
+        research_fresh: Duration::from_secs(30 * 86_400),
+        research_old: Duration::from_secs(90 * 86_400),
+        research_fresh_age: Duration::from_secs(180 * 86_400),
         max_candidates: 8,
         download_timeout: Duration::from_secs(10),
         stage_timeout: Duration::from_secs(1_800),
@@ -240,6 +245,7 @@ async fn staged_claim(
             kind: VideoCandidateKind::Video,
             source_ref: Some(format!("ref{index}")),
             key,
+            kept: false,
         });
     }
     let marked = queue::stage(pool, &claim, &staged)
@@ -486,7 +492,10 @@ async fn candidates_are_fetched_into_temp_keys_and_a_paused_youtube_account_stop
         },
     ];
 
-    let staged = video.bring_all(&claim, leads, &youtube).await.unwrap();
+    let staged = video
+        .bring_all(&claim, Vec::new(), leads, &youtube)
+        .await
+        .unwrap();
 
     assert_eq!(
         blobs.keys(),
@@ -510,7 +519,10 @@ async fn candidates_are_fetched_into_temp_keys_and_a_paused_youtube_account_stop
         url: "https://www.youtube.com/watch?v=bbb".to_owned(),
         source_ref: Some("bbb".to_owned()),
     }];
-    let none = video.bring_all(&claim, more, &youtube).await.unwrap();
+    let none = video
+        .bring_all(&claim, Vec::new(), more, &youtube)
+        .await
+        .unwrap();
     let paused: (bool,) =
         sqlx::query_as("SELECT paused_until > now() FROM video_accounts WHERE name = 'yt1'")
             .fetch_one(&pool)
@@ -752,7 +764,7 @@ async fn the_sweep_deletes_only_temp_files_past_their_three_days(
 }
 
 #[test]
-fn a_result_naming_no_candidate_or_no_window_is_refused() {
+fn a_result_naming_no_candidate_or_no_window_is_refused_and_one_without_a_file_is_bare() {
     let mut nameless = done("11", 1, None);
     nameless.candidate = None;
     assert!(result::judge(&nameless).is_err());
@@ -761,10 +773,13 @@ fn a_result_naming_no_candidate_or_no_window_is_refused() {
     assert!(result::judge(&windowless).is_err());
     let mut clip_without_file = done("11", 1, None);
     clip_without_file.kind = Some(VideoKind::Clip);
-    assert!(result::judge(&clip_without_file).is_err());
+    assert!(matches!(
+        result::judge(&clip_without_file),
+        Ok(Verdict::Bare(..))
+    ));
     assert!(matches!(
         result::judge(&done("11", 1, None)),
-        Ok(Verdict::Retry(WorkerReason::InternalError))
+        Ok(Verdict::Bare(..))
     ));
     assert!(matches!(
         result::judge(&loop_message("11", 1, b"ab", &[b"ab"], 0)),

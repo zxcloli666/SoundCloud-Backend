@@ -42,6 +42,22 @@ WITH ranked AS (
         ORDER BY 2 DESC, track.sc_track_id
         LIMIT $1
     )
+    UNION ALL
+    (
+        SELECT track.sc_track_id,
+               floor((COALESCE(track.play_count_sc, 0) + 10 * COALESCE(track.likes_count_sc, 0)) * $2::float8)::bigint
+        FROM track_video_dispatch AS dispatch
+        JOIN star_track_tiers AS tier ON tier.sc_track_id = dispatch.sc_track_id AND tier.tier = 1
+        JOIN tracks AS track ON track.sc_track_id = dispatch.sc_track_id
+        WHERE dispatch.stage = 'found'
+          AND dispatch.next_at <= now()
+          AND track.sharing = 'public'
+          AND track.storage_state = 'ok'
+          AND track.superseded_by IS NULL
+          AND track.deleted_at IS NULL
+        ORDER BY 2 DESC, track.sc_track_id
+        LIMIT $1
+    )
 ), due AS (
     SELECT sc_track_id
     FROM ranked

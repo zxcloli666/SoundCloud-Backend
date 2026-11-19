@@ -48,6 +48,23 @@ pub(crate) struct Pacing {
     pub(crate) max_attempts: u32,
     pub(crate) none_recheck: Duration,
     pub(crate) static_recheck: Duration,
+    pub(crate) research_fresh: Duration,
+    pub(crate) research_old: Duration,
+    pub(crate) research_fresh_age: Duration,
+}
+
+impl Pacing {
+    pub(crate) fn of(config: &VideoFindConfig) -> Self {
+        Self {
+            retry_base: config.retry_base,
+            max_attempts: config.max_attempts,
+            none_recheck: config.none_recheck,
+            static_recheck: config.static_recheck,
+            research_fresh: config.research_fresh,
+            research_old: config.research_old,
+            research_fresh_age: config.research_fresh_age,
+        }
+    }
 }
 
 pub struct VideoFind<F, B, T> {
@@ -74,17 +91,11 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         tube: T,
         seal: Seal,
     ) -> Self {
-        let pacing = Pacing {
-            retry_base: config.retry_base,
-            max_attempts: config.max_attempts,
-            none_recheck: config.none_recheck,
-            static_recheck: config.static_recheck,
-        };
         Self {
             pool,
             storage_url,
+            pacing: Pacing::of(&config),
             config,
-            pacing,
             sources: Sources::new(fetch, spotify),
             blobs,
             tube,
@@ -184,14 +195,15 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
             isrc: claim.isrc.clone(),
             duration_ms: claim.duration_ms,
         };
+        let kept = queue::kept(&self.pool, &claim.sc_track_id).await?;
         let leads = self.leads(&wanted, &youtube).await;
-        let staged = self.bring_all(claim, leads, &youtube).await?;
-        if staged.candidates.is_empty() {
+        let staged = self.bring_all(claim, kept, leads, &youtube).await?;
+        if !staged.has_new() {
             result::settle(
                 &self.pool,
+                &self.pacing,
                 &claim.sc_track_id,
                 claim.attempt,
-                self.pacing.none_recheck,
                 WorkerReason::NoVideoFound,
             )
             .await?;

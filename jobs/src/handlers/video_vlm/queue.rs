@@ -133,6 +133,7 @@ pub(super) async fn release(pool: &PgPool, track: &str, attempt: i32, wait: Dura
 
 pub(super) async fn settle(
     pool: &PgPool,
+    pacing: &Pacing,
     track: &str,
     attempt: i32,
     stage: &str,
@@ -145,7 +146,10 @@ pub(super) async fn settle(
         attempt,
         stage,
         wait.as_secs_f64(),
-        why
+        why,
+        pacing.research_fresh.as_secs_f64(),
+        pacing.research_old.as_secs_f64(),
+        pacing.research_fresh_age.as_secs_f64()
     )
     .fetch_optional(pool)
     .await

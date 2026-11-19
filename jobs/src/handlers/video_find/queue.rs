@@ -1,9 +1,11 @@
 use std::time::Duration;
 
+use backend_contracts::admin_video::VideoSource;
+use backend_contracts::pipeline::VideoCandidateKind;
 use sqlx::PgPool;
 use tracing::warn;
 
-use super::stage::Staged;
+use super::stage::{Staged, StagedCandidate};
 use crate::queue::{JobError, JobResult};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -48,6 +50,7 @@ pub(super) async fn busy(pool: &PgPool) -> JobResult<i64> {
 
 const FILL_BATCH: i64 = 5_000;
 const RESCORE_BATCH: i64 = 2_000;
+const RESEARCH_WEIGHT: f64 = 0.25;
 
 pub(super) async fn keep_pool(pool: &PgPool) -> JobResult {
     loop {
@@ -67,10 +70,38 @@ pub(super) async fn keep_pool(pool: &PgPool) -> JobResult {
 }
 
 pub(super) async fn claim(pool: &PgPool, limit: i64) -> JobResult<Vec<Claimed>> {
-    sqlx::query_file_as!(Claimed, "queries/video_find/claim.sql", limit)
+    sqlx::query_file_as!(
+        Claimed,
+        "queries/video_find/claim.sql",
+        limit,
+        RESEARCH_WEIGHT
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(JobError::retryable)
+}
+
+pub(super) async fn kept(pool: &PgPool, track: &str) -> JobResult<Vec<StagedCandidate>> {
+    let rows = sqlx::query_file!("queries/video_find/kept.sql", track)
         .fetch_all(pool)
         .await
-        .map_err(JobError::retryable)
+        .map_err(JobError::retryable)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| Some((VideoSource::parse(&row.source)?, row)))
+        .enumerate()
+        .map(|(index, (source, row))| StagedCandidate {
+            index: u32::try_from(index).unwrap_or(u32::MAX),
+            source,
+            kind: match source {
+                VideoSource::Spotify => VideoCandidateKind::Canvas,
+                _ => VideoCandidateKind::Video,
+            },
+            source_ref: row.source_ref,
+            key: row.s3_key,
+            kept: true,
+        })
+        .collect())
 }
 
 pub(super) async fn stage(pool: &PgPool, claim: &Claimed, staged: &Staged) -> JobResult<bool> {
