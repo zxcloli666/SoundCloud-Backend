@@ -324,13 +324,16 @@ impl SoundCloudError {
             })
     }
 
-    pub fn is_terminal_follow_refusal(&self, action_type: &str) -> bool {
+    pub fn is_terminal_refusal(&self, action_type: &str) -> bool {
         let Self::Api { status, .. } = self else {
             return false;
         };
         let refused = match action_type {
             "follow_user" => matches!(*status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN),
             "unfollow_user" => *status == StatusCode::FORBIDDEN,
+            "like_track" | "unlike_track" | "like_playlist" | "unlike_playlist" => {
+                matches!(*status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN)
+            }
             _ => false,
         };
         refused && !self.is_invalid_grant() && !self.is_app_credentials_error()

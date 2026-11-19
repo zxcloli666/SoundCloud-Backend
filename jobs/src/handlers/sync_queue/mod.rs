@@ -5,6 +5,8 @@ mod create_check;
 #[cfg(test)]
 mod follow_refusal_tests;
 #[cfg(test)]
+mod like_refusal_tests;
+#[cfg(test)]
 mod gate_tests;
 #[cfg(test)]
 mod intent_tests;
@@ -829,7 +831,7 @@ impl SyncQueueHandler {
                     .await?;
             }
             ActionError::SoundCloud(error)
-                if error.is_terminal_follow_refusal(&mutation.action_type) =>
+                if error.is_terminal_refusal(&mutation.action_type) =>
             {
                 self.close_refused(mutation, &error.to_string()).await?;
             }

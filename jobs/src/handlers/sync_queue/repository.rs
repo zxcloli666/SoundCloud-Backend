@@ -319,18 +319,9 @@ impl SyncQueueRepository {
         sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
             .fetch_one(&mut *transaction)
             .await?;
-        if mutation.action_type == "follow_user" {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/refuse_follow.sql",
-                actions::extract_sc_id(&mutation.user_id),
-                mutation.target_urn
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
-        actions::settle_mirror(
+        actions::settle_refused(
             &mut transaction,
-            "unfollow_user",
+            &mutation.action_type,
             &mutation.user_id,
             &mutation.target_urn,
         )
