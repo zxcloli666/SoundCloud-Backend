@@ -341,7 +341,10 @@ fn the_schema_asks_for_a_reason_next_to_the_label() {
 #[test]
 fn a_video_over_30_s_cannot_be_a_loop() {
     let schema = haiku::schema(&measured());
-    assert_eq!(schema["properties"]["label"]["enum"], json!(["clip", "static"]));
+    assert_eq!(
+        schema["properties"]["label"]["enum"],
+        json!(["clip", "static"])
+    );
 
     let text = prompt::remote(8, &measured());
     assert!(text.contains("longer than 30 s, so it is clip or static, never loop"));
@@ -362,9 +365,11 @@ fn the_text_with_features_has_the_measured_line_and_the_json_reply() {
         "Measured on the file: duration 212 s, scene cuts per minute 3.3, median share of moving pixels 0.041."
     ));
     assert!(text.contains("static - no real filmed footage"));
-    assert!(text.ends_with(
-        r#"Reply as JSON: {"reason": "<one short sentence>", "label": "static|clip"}"#
-    ));
+    assert!(
+        text.ends_with(
+            r#"Reply as JSON: {"reason": "<one short sentence>", "label": "static|clip"}"#
+        )
+    );
 }
 
 #[test]

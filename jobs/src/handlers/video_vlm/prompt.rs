@@ -68,12 +68,20 @@ impl Features {
 }
 
 pub fn remote(frames: usize, features: &Features) -> String {
-    let reply = if features.long() { JSON_REPLY_LONG } else { JSON_REPLY };
+    let reply = if features.long() {
+        JSON_REPLY_LONG
+    } else {
+        JSON_REPLY
+    };
     build(Some(frames), features, reply)
 }
 
 pub fn local(features: &Features) -> String {
-    let reply = if features.long() { WORD_REPLY_LONG } else { WORD_REPLY };
+    let reply = if features.long() {
+        WORD_REPLY_LONG
+    } else {
+        WORD_REPLY
+    };
     build(None, features, reply)
 }
 
