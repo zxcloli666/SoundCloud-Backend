@@ -15,37 +15,43 @@ ON it.sc_track_id = rl.sc_track_id
 ORDER BY ta.artist_id
     LIMIT 100
     ),
+    edges AS (
+SELECT e.b_id AS co_id, e.weight
+FROM user_artists ua
+         CROSS JOIN LATERAL (SELECT b_id, weight
+                             FROM artist_coplay
+                             WHERE a_id = ua.artist_id
+                               AND b_id NOT IN (SELECT artist_id FROM user_artists)
+                             ORDER BY weight DESC, b_id
+                             LIMIT $2) e
+UNION ALL
+SELECT e.a_id, e.weight
+FROM user_artists ua
+         CROSS JOIN LATERAL (SELECT a_id, weight
+                             FROM artist_coplay
+                             WHERE b_id = ua.artist_id
+                               AND a_id NOT IN (SELECT artist_id FROM user_artists)
+                             ORDER BY weight DESC, a_id
+                             LIMIT $2) e
+    ),
     co AS (
-SELECT
-    (CASE WHEN ac.a_id IN (SELECT artist_id FROM user_artists)
-    THEN ac.b_id ELSE ac.a_id END) AS co_id, MAX (ac.weight) AS w
-FROM artist_coplay ac
-WHERE (ac.a_id IN (SELECT artist_id FROM user_artists)
-   OR ac.b_id IN (SELECT artist_id FROM user_artists))
-  AND NOT (
-    ac.a_id IN (SELECT artist_id FROM user_artists)
-  AND ac.b_id IN (SELECT artist_id FROM user_artists)
-    )
+SELECT co_id, MAX (weight) AS w
+FROM edges
 GROUP BY co_id
 ORDER BY w DESC, co_id
     LIMIT $2
     ),
     ranked AS (
 SELECT
-    ta.artist_id, it.sc_track_id, ROW_NUMBER() OVER (
-    PARTITION BY ta.artist_id
+    p.artist_id, p.sc_track_id, ROW_NUMBER() OVER (
+    PARTITION BY p.artist_id
     ORDER BY
-    CASE WHEN it.sc_track_id = ANY ($3) THEN 1 ELSE 0 END, COALESCE (c.play_count, 0) DESC
+    CASE WHEN p.sc_track_id = ANY ($3) THEN 1 ELSE 0 END, COALESCE (c.play_count, 0) DESC
     ) AS rn, co.w
 FROM co
-    JOIN track_artists ta
-ON ta.artist_id = co.co_id AND ta.role = 'primary'
-    JOIN tracks it ON it.id = ta.track_id
-    LEFT JOIN sc_track_counters c ON c.sc_track_id = it.sc_track_id
-WHERE it.sharing = 'public'
-  AND it.superseded_by IS NULL
-  AND it.storage_state = 'ok'
-  AND it.needs_duration_resolve = false
+    JOIN artist_playable_tracks p
+ON p.artist_id = co.co_id AND p.ready_home
+    LEFT JOIN sc_track_counters c ON c.sc_track_id = p.sc_track_id
     )
 SELECT a.id AS "artist_id!", a.name AS "artist_name!", a.avatar_url, r.sc_track_id AS "sc_track_id!"
 FROM ranked r
