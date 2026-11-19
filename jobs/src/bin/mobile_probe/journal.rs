@@ -29,7 +29,7 @@ pub struct Sent {
 pub(crate) struct Row {
     pub(crate) step: String,
     pub(crate) status: Option<u16>,
-    plan: Option<String>,
+    pub(crate) plan: Option<String>,
     pub(crate) outcome: Outcome,
     pub(crate) notes: Vec<String>,
 }
