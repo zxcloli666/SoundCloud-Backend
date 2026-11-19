@@ -9,6 +9,8 @@ use backend_contracts::pipeline::{
     AudioIndexResult, EncodeResult, HighlightResult, LyricsEmbeddingResult, StorageTrackRejected,
     StorageTrackUploaded, TranscriptionResult, VideoFindResult, VideoVlmResult,
 };
+use backend_contracts::video_gen::VideoGenResult;
+use backend_contracts::worker_contract::WorkerLane;
 use backend_contracts::{ImpressionBatch, JobCommand};
 use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
@@ -228,6 +230,7 @@ pub async fn run() -> anyhow::Result<()> {
     );
     let video_bus = bus.clone();
     let video_vlm_bus = bus.clone();
+    let video_gen_bus = bus.clone();
     let video_accounts = handlers.video_accounts();
     supervisor.spawn(
         "admin video RPC",
@@ -315,6 +318,30 @@ pub async fn run() -> anyhow::Result<()> {
         supervisor.spawn(
             "video VLM sweep",
             video_vlm.sweep(video_vlm_bus, cancellation.clone()),
+        );
+    }
+    if let Some(video_gen) = handlers
+        .video_gen(databases.main.bulk.clone(), &config, video_gen_bus.clone())
+        .await?
+    {
+        for lane in [
+            WorkerLane::VideoKeyframe,
+            WorkerLane::VideoShot,
+            WorkerLane::VideoAssemble,
+        ] {
+            let results = video_gen_bus.video_gen_results(&config.nats, lane).await?;
+            let receiver = video_gen.clone();
+            supervisor.spawn(
+                "video generation result consumer",
+                results.run_raw(cancellation.clone(), move |result: VideoGenResult| {
+                    let video_gen = receiver.clone();
+                    async move { video_gen.finish(lane, result).await }
+                }),
+            );
+        }
+        supervisor.spawn(
+            "video generation sweep",
+            video_gen.sweep(cancellation.clone()),
         );
     }
     let lyrics_handlers = handlers.clone();

@@ -75,6 +75,35 @@ pub trait Blobs: Send + Sync {
     fn list(&self, prefix: &str) -> impl Future<Output = Result<Vec<Listed>, ObjectsError>> + Send;
 }
 
+impl Objects {
+    pub async fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>, ObjectsError> {
+        let answer = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await;
+        let object = match answer {
+            Ok(object) => object,
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|error| error.is_no_such_key()) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(failed("get", key, error)),
+        };
+        let bytes = object
+            .body
+            .collect()
+            .await
+            .map_err(|error| failed("read", key, error))?;
+        Ok(Some(bytes.into_bytes().to_vec()))
+    }
+}
+
 impl Blobs for Objects {
     async fn put_file(&self, key: &str, path: &Path) -> Result<(), ObjectsError> {
         let body = ByteStream::from_path(path)

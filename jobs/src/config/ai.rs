@@ -39,7 +39,7 @@ impl AiConfig {
     }
 }
 
-fn load(path: &Path) -> Result<Settings, ConfigError> {
+pub(super) fn load(path: &Path) -> Result<Settings, ConfigError> {
     Settings::load::<NoHostSections>(path)
         .map(|(settings, _)| settings)
         .map_err(|error| ConfigError::Invalid {

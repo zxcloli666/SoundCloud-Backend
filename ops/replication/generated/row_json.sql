@@ -1126,6 +1126,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.track_video_dispatch t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_track_video_gen(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_track_videos(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1426,6 +1438,30 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.video_flags t WHERE t.kind = (k ->> 'kind')::text AND t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_video_gen_pause(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_video_gen_spend(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_wanted_track_albums(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1668,6 +1704,8 @@ BEGIN
             RETURN public.scd_row_json_track_sync_stamps(k);
         WHEN 'track_video_dispatch' THEN
             RETURN public.scd_row_json_track_video_dispatch(k);
+        WHEN 'track_video_gen' THEN
+            RETURN public.scd_row_json_track_video_gen(k);
         WHEN 'track_videos' THEN
             RETURN public.scd_row_json_track_videos(k);
         WHEN 'track_work_aliases' THEN
@@ -1718,6 +1756,10 @@ BEGIN
             RETURN public.scd_row_json_video_accounts(k);
         WHEN 'video_flags' THEN
             RETURN public.scd_row_json_video_flags(k);
+        WHEN 'video_gen_pause' THEN
+            RETURN public.scd_row_json_video_gen_pause(k);
+        WHEN 'video_gen_spend' THEN
+            RETURN public.scd_row_json_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             RETURN public.scd_row_json_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN

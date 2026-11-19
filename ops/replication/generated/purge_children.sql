@@ -1077,6 +1077,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_track_video_gen(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_track_videos(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1337,6 +1352,36 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_video_gen_pause(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_video_gen_spend(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_wanted_track_albums(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1545,6 +1590,8 @@ BEGIN
             PERFORM public.scd_purge_track_sync_stamps(k);
         WHEN 'track_video_dispatch' THEN
             PERFORM public.scd_purge_track_video_dispatch(k);
+        WHEN 'track_video_gen' THEN
+            PERFORM public.scd_purge_track_video_gen(k);
         WHEN 'track_videos' THEN
             PERFORM public.scd_purge_track_videos(k);
         WHEN 'track_work_aliases' THEN
@@ -1577,6 +1624,10 @@ BEGIN
             PERFORM public.scd_purge_video_accounts(k);
         WHEN 'video_flags' THEN
             PERFORM public.scd_purge_video_flags(k);
+        WHEN 'video_gen_pause' THEN
+            PERFORM public.scd_purge_video_gen_pause(k);
+        WHEN 'video_gen_spend' THEN
+            PERFORM public.scd_purge_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             PERFORM public.scd_purge_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN

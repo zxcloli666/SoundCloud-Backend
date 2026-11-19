@@ -28,6 +28,7 @@ use async_nats::jetstream::stream::{
     StorageType,
 };
 use async_nats::{Client, ConnectOptions, HeaderMap, Subscriber};
+use backend_contracts::worker_contract::WorkerLane;
 use backend_contracts::{
     IMPRESSION_CONSUMER, IMPRESSION_STREAM, IMPRESSION_SUBJECT, JOB_INGRESS_CONSUMER,
     JOB_INGRESS_STREAM, JOB_INGRESS_SUBJECT,
@@ -409,6 +410,31 @@ impl Bus {
             VIDEO_VLM_RESULT_CONSUMER,
             DONE_VIDEO_VLM,
             VIDEO_VLM_RESULT_DEAD_LETTER_SUBJECT,
+            2,
+            config.retry_delay,
+        )
+        .await
+    }
+
+    pub async fn video_gen_results(
+        &self,
+        config: &NatsConfig,
+        lane: WorkerLane,
+    ) -> anyhow::Result<WorkConsumer> {
+        let done_stream = self
+            .jetstream
+            .get_stream(DONE_STREAM.name)
+            .await
+            .context("NATS pipeline result stream could not be loaded")?;
+        let done = lane
+            .spec()
+            .done_subject
+            .context("a generation lane has no done subject")?;
+        self.consumer(
+            done_stream,
+            &format!("jobs-done-{}", lane.as_str()),
+            done,
+            &format!("jobs.dead.{}_results", lane.as_str().replace('-', "_")),
             2,
             config.retry_delay,
         )
