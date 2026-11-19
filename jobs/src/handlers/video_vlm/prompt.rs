@@ -4,14 +4,23 @@ use super::queue::Held;
 
 const DEFINITIONS: &str = "Classify the video:
 static - no real filmed footage: one still picture or a few photos, album art, a logo, a drawn cover, a fan edit of photos, a screen recording, or a lyric video (song words on screen over a background, even a moving one). Effects on a still are not footage: zoom, pan, shake, flashes, glow, rain, particles, grain, color shifts, a waveform.
-loop - one short piece of real motion, filmed or animated, that repeats. A file under 15 s with real motion is a loop. A long video is a loop only if the same few seconds of motion visibly come back.
+loop - one short piece of real motion, filmed or animated, that repeats. A file under 15 s with real motion is a loop. A file of 15 to 30 s is a loop only if the same few seconds of motion visibly come back.
 clip - real filmed footage or real animation that goes on and changes: people or the camera move, shots change. A phone video of a person or a concert is a clip even if the framing barely changes.
 Rules: lyrics written over the picture means static. The same background in every frame with only the text changing is static, not loop.";
+
+const LONG: &str = "This video is longer than 30 s, so it is clip or static, never loop: the frames cannot show a repeat, and one filmed take that barely changes is a clip.";
+
+const LOOP_MAX_S: f64 = 30.0;
 
 const JSON_REPLY: &str =
     r#"Reply as JSON: {"reason": "<one short sentence>", "label": "static|loop|clip"}"#;
 
+const JSON_REPLY_LONG: &str =
+    r#"Reply as JSON: {"reason": "<one short sentence>", "label": "static|clip"}"#;
+
 const WORD_REPLY: &str = "Answer with one word: clip, loop or static.";
+
+const WORD_REPLY_LONG: &str = "Answer with one word: clip or static.";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Features {
@@ -31,6 +40,18 @@ impl Features {
         }
     }
 
+    fn long(&self) -> bool {
+        self.duration_s.is_some_and(|s| s > LOOP_MAX_S)
+    }
+
+    pub fn labels(&self) -> &'static [&'static str] {
+        if self.long() {
+            &["clip", "static"]
+        } else {
+            &["clip", "loop", "static"]
+        }
+    }
+
     fn line(&self) -> Option<String> {
         let mut parts = Vec::new();
         if let Some(value) = self.duration_s {
@@ -47,11 +68,21 @@ impl Features {
 }
 
 pub fn remote(frames: usize, features: &Features) -> String {
-    build(Some(frames), features, JSON_REPLY)
+    let reply = if features.long() {
+        JSON_REPLY_LONG
+    } else {
+        JSON_REPLY
+    };
+    build(Some(frames), features, reply)
 }
 
 pub fn local(features: &Features) -> String {
-    build(None, features, WORD_REPLY)
+    let reply = if features.long() {
+        WORD_REPLY_LONG
+    } else {
+        WORD_REPLY
+    };
+    build(None, features, reply)
 }
 
 fn build(frames: Option<usize>, features: &Features, reply: &str) -> String {
@@ -65,6 +96,9 @@ fn build(frames: Option<usize>, features: &Features, reply: &str) -> String {
     let mut lines = vec![intro];
     lines.extend(features.line());
     lines.push(DEFINITIONS.to_owned());
+    if features.long() {
+        lines.push(LONG.to_owned());
+    }
     lines.push(reply.to_owned());
     lines.join("\n")
 }
