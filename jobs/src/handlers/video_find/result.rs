@@ -179,7 +179,7 @@ fn leftover(staged: &Staged, held: Option<u32>) -> Vec<String> {
     staged
         .candidates
         .iter()
-        .filter(|candidate| Some(candidate.index) != held)
+        .filter(|candidate| !candidate.kept && Some(candidate.index) != held)
         .map(|candidate| candidate.key.clone())
         .collect()
 }
