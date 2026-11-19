@@ -67,10 +67,9 @@ impl<B: Blobs + 'static> VideoVlm<B> {
             return Ok(());
         };
         match (answer.label, file) {
-            (VideoLabel::Clip, Some(file)) => {
-                self.keep_clip(track, attempt, &held, answer, file).await?
+            (VideoLabel::Clip | VideoLabel::Loop, Some(file)) => {
+                self.keep_file(track, attempt, &held, answer, file).await?
             }
-            (VideoLabel::Loop, _) => self.keep_loop(track, attempt, &held, answer).await?,
             (VideoLabel::Static, _) => {
                 let wait = self.pacing.static_recheck;
                 let why = Some(WorkerReason::StaticVideo.as_str());
@@ -82,9 +81,9 @@ impl<B: Blobs + 'static> VideoVlm<B> {
                     "VLM found a static video"
                 );
             }
-            (VideoLabel::Clip, None) => {
+            (_, None) => {
                 return Err(JobError::permanent(anyhow::anyhow!(
-                    "VLM clip carries no file"
+                    "VLM answer carries no file"
                 )));
             }
         }
@@ -92,7 +91,7 @@ impl<B: Blobs + 'static> VideoVlm<B> {
         Ok(())
     }
 
-    async fn keep_clip(
+    async fn keep_file(
         &self,
         track: &str,
         attempt: i32,
@@ -106,46 +105,18 @@ impl<B: Blobs + 'static> VideoVlm<B> {
             .await
             .map_err(JobError::retryable)?;
         let duration_ms = answer.duration_ms.unwrap_or(held.duration_ms);
+        let offset_ms = match answer.label {
+            VideoLabel::Loop => 0,
+            _ => held.offset_ms,
+        };
         let stored = store(
             &self.pool,
             track,
             attempt,
             Stored {
-                kind: VideoLabel::Clip,
-                offset_ms: held.offset_ms,
+                kind: answer.label,
+                offset_ms,
                 duration_ms,
-                key: &key,
-            },
-            held,
-            answer,
-        )
-        .await?;
-        if !stored {
-            let _ = self.blobs.delete(&key).await;
-        }
-        Ok(())
-    }
-
-    async fn keep_loop(
-        &self,
-        track: &str,
-        attempt: i32,
-        held: &Held,
-        answer: &Answer,
-    ) -> JobResult {
-        let key = final_key(track, attempt);
-        self.blobs
-            .copy(&held.s3_key, &key)
-            .await
-            .map_err(JobError::retryable)?;
-        let stored = store(
-            &self.pool,
-            track,
-            attempt,
-            Stored {
-                kind: VideoLabel::Loop,
-                offset_ms: 0,
-                duration_ms: held.duration_ms,
                 key: &key,
             },
             held,
@@ -303,7 +274,7 @@ pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
         "VLM result has a non-canonical track id"
     );
     match (result.status, result.reason) {
-        (WorkerStatus::Ok, None) => Ok(Verdict::Labelled(Box::new(answer(result)?))),
+        (WorkerStatus::Ok, None) => labelled(result),
         (WorkerStatus::Ok, Some(reason)) => {
             bail!("VLM ok result carries reason {}", reason.as_str())
         }
@@ -324,7 +295,7 @@ pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
     }
 }
 
-fn answer(result: &VideoVlmResult) -> anyhow::Result<Answer> {
+fn labelled(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
     let (Some(label), Some(model)) = (result.label, result.model.clone()) else {
         bail!("VLM ok result lacks its label or model");
     };
@@ -333,27 +304,31 @@ fn answer(result: &VideoVlmResult) -> anyhow::Result<Answer> {
         (None, None) => None,
         _ => bail!("VLM result carries half a file"),
     };
+    if label == VideoLabel::Loop && file.is_none() {
+        return Ok(Verdict::Again(WorkerReason::InternalError));
+    }
     ensure!(
-        file.is_some() == (label == VideoLabel::Clip),
+        file.is_some() == (label != VideoLabel::Static),
         "VLM {} result {} a file",
         label.as_str(),
-        if label == VideoLabel::Clip {
-            "lacks"
-        } else {
+        if label == VideoLabel::Static {
             "carries"
+        } else {
+            "lacks"
         }
     );
-    if label == VideoLabel::Clip {
+    if label != VideoLabel::Static {
         ensure!(
             result.duration_ms.is_some(),
-            "VLM clip result lacks its duration"
+            "VLM {} result lacks its duration",
+            label.as_str()
         );
     }
-    Ok(Answer {
+    Ok(Verdict::Labelled(Box::new(Answer {
         label,
         model,
         scores: serde_json::to_value(result.scores.clone().unwrap_or_default())?,
         duration_ms: result.duration_ms,
         file,
-    })
+    })))
 }

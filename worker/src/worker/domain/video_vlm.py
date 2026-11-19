@@ -21,7 +21,7 @@ from worker.settings import VideoSection, VlmSettings
 
 LANE = "video-vlm"
 LABELS = ("clip", "loop", "static")
-CLIP = "clip"
+STATIC = "static"
 MS = 1000.0
 PROMPT = (
     "You see frames from a music video, sampled evenly in time and shown in order.\n"
@@ -95,9 +95,9 @@ class VideoVlmLane:
                 extra={"label": verdict.label, "frames": int(frames.shape[0])},
             )
             scores = {name: round(value, 4) for name, value in verdict.scores.items()}
-            if verdict.label != CLIP:
+            if verdict.label == STATIC:
                 return Outcome.ok(label=verdict.label, model=self._model, scores=scores)
-            return await self._clip(path, folder, scores, deadline)
+            return await self._encoded(verdict.label, path, folder, scores, deadline)
 
     async def _download(self, job: Job, path: Path, deadline: Deadline) -> None:
         try:
@@ -107,8 +107,13 @@ class VideoVlmLane:
                 raise InputsGone(failure.detail or failure.reason.value) from failure
             raise
 
-    async def _clip(
-        self, path: Path, folder: Path, scores: Mapping[str, float], deadline: Deadline
+    async def _encoded(
+        self,
+        label: str,
+        path: Path,
+        folder: Path,
+        scores: Mapping[str, float],
+        deadline: Deadline,
     ) -> Outcome:
         target = folder / "out.mp4"
         await publish.encode(path, target, pad_s=0.0, settings=self._video, deadline=deadline)
@@ -117,7 +122,7 @@ class VideoVlmLane:
         parts = publish.split(blob, self._part_bytes)
         return Outcome.ok_in_parts(
             parts,
-            label=CLIP,
+            label=label,
             model=self._model,
             scores=scores,
             duration_ms=max(1, round(encoded.duration_s * MS)),

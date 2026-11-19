@@ -10,6 +10,7 @@ import pytest
 
 from tests.fakes.engines import FakeEngines
 from tests.fakes.http_audio import FakeAudioServer
+from tests.unit.video import media
 from worker.domain.audio.source import AudioSource
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import Outcome, Reason, Status
@@ -81,18 +82,27 @@ async def harness(settings: Settings, work_dir: Path, video_bytes: bytes) -> Asy
         yield Harness(server, session, settings, work_dir, 2048)
 
 
-async def test_a_loop_answer_carries_label_scores_and_model_without_a_file(
-    harness: Harness, settings: Settings
+async def test_a_loop_answer_returns_the_encoded_file_in_parts_even_from_an_mpegts_source(
+    harness: Harness, settings: Settings, tmp_path: Path
 ) -> None:
+    harness.server.body = media.make_mpegts(tmp_path / "stream.mp4", seconds=4)
+
     outcome = await harness.run()
 
     assert outcome.status is Status.OK
-    assert outcome.fields == {
-        "label": "loop",
-        "model": MODEL,
-        "scores": {"clip": 0.1, "loop": 0.8, "static": 0.1},
+    blob = b"".join(outcome.parts)
+    assert outcome.fields["label"] == "loop"
+    assert outcome.fields["model"] == MODEL
+    assert outcome.fields["scores"] == {"clip": 0.1, "loop": 0.8, "static": 0.1}
+    assert outcome.fields["clip"] == {
+        "bytes": len(blob),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        "parts": len(outcome.parts),
     }
-    assert outcome.parts == ()
+    assert blob[4:8] == b"ftyp"
+    out = tmp_path / "loop.mp4"
+    out.write_bytes(blob)
+    assert media.stream_types(out) == ["video"]
     method, call = harness.engines.calls[-1]
     side, count = settings.vlm.frame_side, settings.vlm.frames
     assert method == "classify_frames"

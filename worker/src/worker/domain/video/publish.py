@@ -33,6 +33,7 @@ async def encode(
         "-t", f"{cap_s:.3f}", "-an", "-vf", ",".join(filters),
         "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", str(settings.encode_crf),
         "-g", str(settings.encode_fps * KEYFRAME_S), "-sc_threshold", "0",
+        "-force_key_frames", f"expr:gte(t,n_forced*{KEYFRAME_S})",
         "-maxrate", f"{settings.encode_maxrate_kbps}k",
         "-bufsize", f"{settings.encode_maxrate_kbps * 2}k",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target),
