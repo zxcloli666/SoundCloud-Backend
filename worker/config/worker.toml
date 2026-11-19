@@ -26,6 +26,8 @@ allow_slow_lanes = false
 threads = 0
 isolate_encode = false
 memory_reserve_mib = 1536
+exclusive_slots = []
+exclusive_turn_s = 900
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]

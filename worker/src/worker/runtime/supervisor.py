@@ -67,6 +67,7 @@ class EnginePlan:
     nice: int = 0
     idle_unload_s: float = 0.0
     shares_budget: bool = False
+    exclusive: bool = False
     env: Mapping[str, str] = field(default_factory=dict)
 
     @property
@@ -509,11 +510,28 @@ class Supervisor:
         return matching or hosts
 
     def _idle_engines(self, hosts: list[Managed]) -> list[Managed]:
-        return [
+            return [
             m
             for m in hosts
-            if m.state == STATE_READY and m.client is not None and self._is_idle(m.client)
+            if m.state == STATE_READY
+            and m.client is not None
+            and self._is_idle(m.client)
+            and not self._rival_active(m)
         ]
+
+    def _rival_active(self, managed: Managed) -> bool:
+        return managed.plan.exclusive and any(
+            self._holds_memory(rival) for rival in self._rivals(managed)
+        )
+
+    def _rivals(self, managed: Managed) -> list[Managed]:
+        return [m for m in self._engines if m is not managed and m.plan.exclusive]
+
+    def _holds_memory(self, managed: Managed) -> bool:
+        client = managed.client
+        if client is None or not client.alive:
+            return False
+        return client.busy or client in self._leased or client in self._retiring
 
     def _fixed_threads(self, plan: EnginePlan) -> int:
         return plan.threads or self._policy.threads
@@ -592,7 +610,7 @@ class Supervisor:
             managed.state = STATE_LOADING
             self._notify()
             try:
-                await self._bring_up(client)
+                await self._bring_up(client, managed.plan)
             except TimeoutError:
                 self._log.error("engine_load_timeout", engine=client.name, pid=client.pid)
                 await client.kill(CAUSE_LOAD_TIMEOUT)
@@ -629,10 +647,10 @@ class Supervisor:
         managed.oom_times.clear()
         managed.recycle_wanted = False
 
-    async def _bring_up(self, client: EngineClient) -> None:
+    async def _bring_up(self, client: EngineClient, plan: EnginePlan) -> None:
         async with self._loads:
             await client.spawn()
-            for spec in client.specs:
+            for spec in () if plan.exclusive else client.specs:
                 state = await client.load(spec.name, self._policy.load_timeout_s)
                 if not state.loaded:
                     raise EngineCrashed(
@@ -640,7 +658,16 @@ class Supervisor:
                     )
         usage = client.usage()
         client.baseline_mib = usage.resident_mib
-        self._log.info("engine_ready", engine=client.name, pid=client.pid, **asdict(usage))
+        self._log.info(
+            "engine_ready",
+            engine=client.name,
+            pid=client.pid,
+            lazy=plan.exclusive,
+            **asdict(usage),
+        )
+
+    def _managed_of(self, client: EngineClient) -> Managed | None:
+        return next((m for m in self._engines if m.client is client), None)
 
     async def _await_current_exit(self, managed: Managed) -> EngineClient:
         while True:
@@ -822,7 +849,7 @@ class Supervisor:
     async def _replace(self, managed: Managed, old: EngineClient) -> bool:
         fresh = self._new_client(managed)
         try:
-            await self._bring_up(fresh)
+            await self._bring_up(fresh, managed.plan)
         except TimeoutError:
             self._recycle_failed(managed, "load timeout")
             await fresh.kill(CAUSE_RECYCLE)
@@ -875,6 +902,7 @@ class Supervisor:
                 )
 
     async def _load_on_demand(self, client: EngineClient, slot: str) -> bool:
+        await self._unload_rivals(client)
         self._log.info("slot_load_on_demand", engine=client.name, slot=slot)
         try:
             state = await client.load(slot, self._policy.load_timeout_s)
@@ -887,6 +915,28 @@ class Supervisor:
             return False
         self._notify()
         return state.loaded
+
+    async def _unload_rivals(self, client: EngineClient) -> None:
+        managed = self._managed_of(client)
+        if managed is None or not managed.plan.exclusive:
+            return
+        for rival in self._rivals(managed):
+            other = rival.client
+            if other is None or not other.alive:
+                continue
+            for slot in rival.plan.slot_names:
+                if not other.loaded(slot):
+                    continue
+                started = self._clock.now()
+                if await self._unload(other, slot):
+                    self._counters.inc("slot_switches_total", slot=slot)
+                    self._log.info(
+                        "slot_switch_unloaded",
+                        engine=other.name,
+                        slot=slot,
+                        to=client.name,
+                        seconds=round(self._clock.now() - started, 2),
+                    )
 
     async def _unload(self, client: EngineClient, slot: str) -> bool:
         try:

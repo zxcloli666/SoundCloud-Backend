@@ -24,6 +24,7 @@ from worker.bus.objects import ObjectStores
 from worker.bus.outbox import Outbox
 from worker.bus.rpc import RpcHandler, RpcMethod
 from worker.bus.status import StatusReporter
+from worker.bus.turn import EngineTurn
 from worker.contract import Contract, LaneSpec
 from worker.domain.audio.opus import OpusEncoder
 from worker.domain.audio.source import AudioSource
@@ -230,7 +231,9 @@ class Blueprint:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
         plans = [
-            vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+            exclusive_plan(
+                settings, vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+            )
             for plan in plan_engines(runtime.mode, specs, replicas, groups)
         ]
         if isolated:
@@ -525,6 +528,8 @@ class Node:
             AI_LANE: lambda: self.ai_methods(engines),
             SPEAK_LANE: lambda: self.speak_methods(engines),
         }
+        exclusive = set(settings.runtime.exclusive_slots)
+        turn = EngineTurn(self.clock, float(settings.runtime.exclusive_turn_s))
         for lane in self.blueprint.lanes:
             watch = watches[lane.name]
             watch.paused = True
@@ -571,6 +576,7 @@ class Node:
                 settings.lanes.capacity[lane.name],
                 self.counters,
                 self.clock,
+                turn if exclusive & set(LANE_GATES.get(lane.name, ())) else None,
             )
             self.lanes[lane.name] = ServedLane(lane, watch, runner)
         self.status = StatusReporter(
@@ -928,6 +934,12 @@ def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
         idle_unload_s=float(settings.tts.idle_unload_s),
         env={TTS_THREADS_ENV: str(threads)},
     )
+
+
+def exclusive_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    if not set(settings.runtime.exclusive_slots) & set(plan.slot_names):
+        return plan
+    return replace(plan, exclusive=True)
 
 
 def tts_threads(logical_cpus: int | None, affinity_cpus: int, quota: int | None) -> int:
