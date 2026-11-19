@@ -44,6 +44,9 @@ pub enum SoundCloudError {
     #[error("SoundCloud write held back before it was sent")]
     Paused(WriteHold),
 
+    #[error("SoundCloud mobile request failed: {0}")]
+    Mobile(String),
+
     #[error("SoundCloud response exceeded the size limit")]
     ResponseTooLarge,
 
@@ -194,6 +197,7 @@ fn retries_direct(method: &Method, error: &SoundCloudError) -> bool {
         SoundCloudError::Api { status, .. } => status.is_server_error(),
         SoundCloudError::ResponseTooLarge
         | SoundCloudError::InvalidTokenResponse
+        | SoundCloudError::Mobile(_)
         | SoundCloudError::Paused(_) => false,
     }
 }
@@ -357,7 +361,7 @@ async fn read_body(response: wreq::Response) -> Result<Vec<u8>, SoundCloudError>
     Ok(bytes)
 }
 
-fn api_error(
+pub(super) fn api_error(
     status: StatusCode,
     body: Vec<u8>,
     retry_after_seconds: Option<i64>,

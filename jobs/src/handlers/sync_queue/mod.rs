@@ -6,6 +6,10 @@ mod create_check;
 mod gate_tests;
 #[cfg(test)]
 mod intent_tests;
+mod mobile;
+mod mobile_flow;
+#[cfg(test)]
+mod mobile_tests;
 mod model;
 mod pause_group;
 #[cfg(test)]
@@ -38,6 +42,8 @@ use crate::queue::{JobError, JobResult};
 
 use self::actions::{ActionError, Remote};
 use self::client::{SoundCloudClient, SoundCloudError};
+use self::mobile::{MobileSender, Route};
+use self::mobile_flow::Flow;
 use self::model::ClaimedMutation;
 use self::pause_group::{AppReports, ESCALATION_USERS, actions_of, legacy_group};
 use self::repository::{FinalizeError, PACED_ACTIONS, SyncQueueRepository};
@@ -72,9 +78,11 @@ pub struct SyncQueueHandler {
     client: Arc<SoundCloudClient>,
     token_client: Arc<TokenRefreshClient>,
     storage: TrackStorage,
+    mobile: MobileSender,
     write_pauses: WritePauses<(uuid::Uuid, String)>,
     spacings: WritePauses<(uuid::Uuid, String)>,
     account_pauses: WritePauses<(String, String)>,
+    bot_checks: WritePauses<(String, String)>,
     app_reports: AppReports<(uuid::Uuid, String)>,
     like_interval: Duration,
     pauses_restored: tokio::sync::OnceCell<()>,
@@ -92,13 +100,15 @@ impl SyncQueueHandler {
                 pool.clone(),
                 config.sync_queue.lease_duration,
             )),
-            connections: Arc::new(ConnectionManager::new(pool)),
+            connections: Arc::new(ConnectionManager::new(pool.clone())),
             client: Arc::new(SoundCloudClient::new(&config.sync_queue)?),
             token_client: Arc::new(TokenRefreshClient::new(&config.oauth)?),
             storage: TrackStorage::new(&config.sync_queue)?,
+            mobile: MobileSender::new(pool, config.sync_queue.proxy_url.clone()),
             write_pauses: WritePauses::default(),
             spacings: WritePauses::default(),
             account_pauses: WritePauses::default(),
+            bot_checks: WritePauses::default(),
             app_reports: AppReports::default(),
             like_interval: config.sync_queue.like_interval,
             pauses_restored: tokio::sync::OnceCell::new(),
@@ -218,6 +228,16 @@ impl SyncQueueHandler {
                 .await?;
             return Ok(());
         }
+        let route = mobile::route(&mutation.action_type);
+        if route != Route::Apiv1
+            && let Flow::Done = self.send_mobile(&mutation, route).await?
+        {
+            return Ok(());
+        }
+        self.send_apiv1(mutation).await
+    }
+
+    async fn send_apiv1(&self, mutation: ClaimedMutation) -> Result<(), anyhow::Error> {
         let token = match self
             .connections
             .access_token(&self.token_client, &mutation.user_id)
@@ -239,50 +259,9 @@ impl SyncQueueHandler {
         } else {
             token
         };
-        if let Some(seconds) = self
-            .account_pauses
-            .remaining_seconds(&account_action(&mutation))
-        {
-            self.postpone_before_post(
-                &mutation,
-                "SoundCloud limits this action for the account",
-                seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-            )
-            .await?;
+        let Some(probing) = self.admit(&mutation, token.oauth_app_id).await? else {
             return Ok(());
-        }
-        let mut probing = false;
-        if let Some(oauth_app_id) = token.oauth_app_id {
-            let spaced = (oauth_app_id, mutation.action_type.clone());
-            if let Admission::Paused(seconds) = self.spacings.admit(&spaced) {
-                self.postpone_before_post(
-                    &mutation,
-                    "SoundCloud paused this action for the application",
-                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-                )
-                .await?;
-                return Ok(());
-            }
-            let action = (oauth_app_id, mutation.action_type.clone());
-            match self.write_pauses.admit(&action) {
-                Admission::Paused(seconds) => {
-                    self.postpone_before_post(
-                        &mutation,
-                        "SoundCloud paused this action for the application",
-                        seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-                Admission::Open => {
-                    if let Some(spacing) = self.spacing(&mutation.action_type) {
-                        self.spacings
-                            .pause(spaced, i64::try_from(spacing.as_secs()).unwrap_or(1));
-                    }
-                }
-                Admission::Probe => probing = true,
-            }
-        }
+        };
         if !self.repository.record_remote_attempt(&mutation).await? {
             self.repository.release(&mutation).await?;
             return Ok(());
@@ -346,6 +325,67 @@ impl SyncQueueHandler {
                 return Ok(());
             }
         };
+        self.finish(&mutation, remote, oauth_app_id).await
+    }
+
+    async fn admit(
+        &self,
+        mutation: &ClaimedMutation,
+        oauth_app_id: Option<uuid::Uuid>,
+    ) -> Result<Option<bool>, sqlx::Error> {
+        if let Some(seconds) = self
+            .account_pauses
+            .remaining_seconds(&account_action(mutation))
+        {
+            self.postpone_before_post(
+                mutation,
+                "SoundCloud limits this action for the account",
+                seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+            )
+            .await?;
+            return Ok(None);
+        }
+        let mut probing = false;
+        if let Some(oauth_app_id) = oauth_app_id {
+            let spaced = (oauth_app_id, mutation.action_type.clone());
+            if let Admission::Paused(seconds) = self.spacings.admit(&spaced) {
+                self.postpone_before_post(
+                    mutation,
+                    "SoundCloud paused this action for the application",
+                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+                )
+                .await?;
+                return Ok(None);
+            }
+            let action = (oauth_app_id, mutation.action_type.clone());
+            match self.write_pauses.admit(&action) {
+                Admission::Paused(seconds) => {
+                    self.postpone_before_post(
+                        mutation,
+                        "SoundCloud paused this action for the application",
+                        seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+                Admission::Open => {
+                    if let Some(spacing) = self.spacing(&mutation.action_type) {
+                        self.spacings
+                            .pause(spaced, i64::try_from(spacing.as_secs()).unwrap_or(1));
+                    }
+                }
+                Admission::Probe => probing = true,
+            }
+        }
+        Ok(Some(probing))
+    }
+
+    async fn finish(
+        &self,
+        mutation: &ClaimedMutation,
+        remote: Remote,
+        oauth_app_id: Option<uuid::Uuid>,
+    ) -> Result<(), anyhow::Error> {
         let remote_result = match remote {
             Remote::Written(result) => {
                 if let Some(oauth_app_id) = oauth_app_id {
@@ -367,13 +407,13 @@ impl SyncQueueHandler {
         };
         if !self
             .repository
-            .record_remote_success(&mutation, &remote_result)
+            .record_remote_success(mutation, &remote_result)
             .await?
         {
-            self.repository.release(&mutation).await?;
+            self.repository.release(mutation).await?;
             return Ok(());
         }
-        self.finalize(&mutation).await
+        self.finalize(mutation).await
     }
 
     async fn write_remote(

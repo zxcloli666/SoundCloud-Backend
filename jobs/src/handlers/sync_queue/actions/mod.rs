@@ -32,7 +32,7 @@ pub enum Remote {
     TargetMissing,
 }
 
-const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 8] = [
+const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 9] = [
     "like_track",
     "unlike_track",
     "like_playlist",
@@ -41,6 +41,7 @@ const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 8] = [
     "unfollow_user",
     "playlist_delete",
     "track_delete",
+    "comment_delete",
 ];
 
 pub async fn execute_remote(
@@ -169,12 +170,22 @@ pub async fn execute_remote(
         }
         action => return Err(ActionError::UnknownAction(action.to_owned())),
     };
+    written_or_closed(mutation, response)
+}
+
+pub fn written_or_closed(
+    mutation: &ClaimedMutation,
+    response: Result<Value, SoundCloudError>,
+) -> Result<Remote, ActionError> {
     match response {
         Err(SoundCloudError::Api {
             status: wreq::StatusCode::NOT_FOUND | wreq::StatusCode::GONE,
             ..
         }) if CLOSED_WHEN_TARGET_IS_MISSING.contains(&mutation.action_type.as_str()) => {
-            tracing::info!(%target, "soundcloud has no such target, the write is closed");
+            tracing::info!(
+                target = %mutation.target_urn,
+                "soundcloud has no such target, the write is closed"
+            );
             Ok(Remote::TargetMissing)
         }
         response => Ok(Remote::Written(response?)),
@@ -259,7 +270,7 @@ pub async fn apply_local(
             .execute(connection)
             .await?;
         }
-        "comment" => {}
+        "comment" | "comment_delete" | "track_reaction_set" | "track_reaction_remove" => {}
         action => return Err(ActionError::UnknownAction(action.to_owned())),
     }
     Ok(())
