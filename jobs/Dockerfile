@@ -25,6 +25,7 @@ COPY utils/llm-ladder /utils/llm-ladder
 COPY utils/redact /utils/redact
 COPY utils/repl-verify /utils/repl-verify
 COPY utils/sc-fingerprint /utils/sc-fingerprint
+COPY utils/sc-mobile /utils/sc-mobile
 COPY utils/sc-transport /utils/sc-transport
 COPY utils/tls-common /utils/tls-common
 COPY utils/write-through /utils/write-through
@@ -95,6 +96,7 @@ COPY --from=ytdlp /yt-dlp /usr/local/bin/yt-dlp
 COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=app /build/jobs/target/release/jobs /usr/local/bin/jobs
 COPY --from=app /build/jobs/target/release/migrate /usr/local/bin/migrate
+COPY --from=app /build/jobs/target/release/mobile_probe /usr/local/bin/mobile_probe
 
 USER jobs
 EXPOSE 3001

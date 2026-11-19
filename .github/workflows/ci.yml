@@ -287,6 +287,7 @@ jobs:
           cargo fetch --locked --manifest-path backend-contracts/Cargo.toml
           cargo fetch --locked --manifest-path jobs/Cargo.toml
           cargo fetch --locked --manifest-path utils/admin-catalog/Cargo.toml
+          cargo fetch --locked --manifest-path utils/sc-mobile/Cargo.toml
           sh scripts/ci-sqlx-template.sh jobs
 
       - name: System packages
@@ -314,6 +315,9 @@ jobs:
       - name: Admin catalog
         working-directory: utils/admin-catalog
         run: cargo nextest run --config "$RUNNER_TEMP/sqlx-template.toml" --all-targets
+
+      - name: Mobile client
+        run: cargo nextest run --manifest-path utils/sc-mobile/Cargo.toml --target-dir jobs/target --all-targets --locked
 
       - name: Save targets
         if: env.SAVE_TARGETS == 'true'
@@ -345,7 +349,9 @@ jobs:
         run: sh scripts/ci-toolchain.sh
 
       - name: Format
-        run: cargo fmt --manifest-path jobs/Cargo.toml --check
+        run: |
+          cargo fmt --manifest-path jobs/Cargo.toml --check
+          cargo fmt --manifest-path utils/sc-mobile/Cargo.toml --check
 
       - name: Restore targets
         id: targets
@@ -373,6 +379,9 @@ jobs:
       - name: Clippy
         working-directory: jobs
         run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Mobile client clippy
+        run: cargo clippy --manifest-path utils/sc-mobile/Cargo.toml --target-dir jobs/target --all-targets --locked -- -D warnings
 
       - name: Save targets
         if: env.SAVE_TARGETS == 'true'

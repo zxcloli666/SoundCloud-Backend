@@ -1,0 +1,22 @@
+[package]
+name = "sc-mobile"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "SoundCloud mobile client profile: OAuth with PKCE, REST and GraphQL calls for a signed-in user"
+
+[dependencies]
+base64 = "0.22"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false }
+getrandom = "0.3"
+redact = { path = "../redact" }
+sc-fingerprint = { path = "../sc-fingerprint" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+wreq = { version = "0.16.1", features = ["stream"] }
