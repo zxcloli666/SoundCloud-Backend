@@ -608,6 +608,9 @@ mod tests {
                     | WorkerLane::Highlight
                     | WorkerLane::VideoFind
                     | WorkerLane::VideoVlm
+                    | WorkerLane::VideoKeyframe
+                    | WorkerLane::VideoShot
+                    | WorkerLane::VideoAssemble
             );
             assert!(
                 !promises_reopen
