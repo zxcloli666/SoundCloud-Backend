@@ -78,6 +78,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_search;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_sync_stamps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_dispatch;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_gen;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_videos;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_keys;
@@ -94,6 +95,8 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_user_web_profiles;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_users;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_accounts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_flags;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_gen_pause;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_gen_spend;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_albums;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_work_aliases;
@@ -331,6 +334,7 @@ SELECT v.cls FROM (VALUES
     ('track_storage_failures', 'P'),
     ('track_sync_stamps', 'C'),
     ('track_video_dispatch', 'P'),
+    ('track_video_gen', 'P'),
     ('track_videos', 'C'),
     ('track_work_aliases', 'P'),
     ('track_work_keys', 'P'),
@@ -356,6 +360,8 @@ SELECT v.cls FROM (VALUES
     ('users', 'C'),
     ('video_accounts', 'P'),
     ('video_flags', 'P'),
+    ('video_gen_pause', 'P'),
+    ('video_gen_spend', 'P'),
     ('wanted_track_albums', 'C'),
     ('wanted_track_artists', 'C'),
     ('wanted_track_work_aliases', 'P'),
@@ -10396,6 +10402,50 @@ COMMIT;
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_track_video_gen(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempt, t.created_at, t.faults, t.next_at, t.plan, t.reason, t.redo, t.rejections, t.sc_track_id, t.sent_at, t.shot, t.stage, t.state, t.step, t.updated_at)::text) FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_track_video_gen(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_track_video_gen(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
+SELECT public.scd_keep_trigger('public.track_video_gen', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_video_gen FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_video_gen', 'cmd', 'migration', 'repl');$t$);
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION public.scd_row_hash_track_videos(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -13127,6 +13177,94 @@ COMMIT;
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_video_gen_pause(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.alerted_at, t.created_at, t.id, t.paused_until, t.reason, t.updated_at)::text) FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_video_gen_pause(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_video_gen_pause(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint;
+END
+$f$;
+
+SELECT public.scd_keep_trigger('public.video_gen_pause', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_gen_pause FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_gen_pause', 'cmd', 'migration', 'repl');$t$);
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_video_gen_spend(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.cache_read_tokens, t.cache_write_tokens, t.call, t.created_at, t.id, t.input_tokens, t.model, t.output_tokens, t.period, t.provider, t.sc_track_id, t.usd)::text) FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_video_gen_spend(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_video_gen_spend(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid;
+END
+$f$;
+
+SELECT public.scd_keep_trigger('public.video_gen_spend', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_gen_spend FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_gen_spend', 'cmd', 'migration', 'repl');$t$);
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION public.scd_row_hash_wanted_track_albums(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -13741,6 +13879,8 @@ BEGIN
             RETURN public.scd_row_hash_track_sync_stamps(k);
         WHEN 'track_video_dispatch' THEN
             RETURN public.scd_row_hash_track_video_dispatch(k);
+        WHEN 'track_video_gen' THEN
+            RETURN public.scd_row_hash_track_video_gen(k);
         WHEN 'track_videos' THEN
             RETURN public.scd_row_hash_track_videos(k);
         WHEN 'track_work_aliases' THEN
@@ -13791,6 +13931,10 @@ BEGIN
             RETURN public.scd_row_hash_video_accounts(k);
         WHEN 'video_flags' THEN
             RETURN public.scd_row_hash_video_flags(k);
+        WHEN 'video_gen_pause' THEN
+            RETURN public.scd_row_hash_video_gen_pause(k);
+        WHEN 'video_gen_spend' THEN
+            RETURN public.scd_row_hash_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             RETURN public.scd_row_hash_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN
@@ -14003,6 +14147,8 @@ BEGIN
             RETURN public.scd_row_json_track_sync_stamps(k);
         WHEN 'track_video_dispatch' THEN
             RETURN public.scd_row_json_track_video_dispatch(k);
+        WHEN 'track_video_gen' THEN
+            RETURN public.scd_row_json_track_video_gen(k);
         WHEN 'track_videos' THEN
             RETURN public.scd_row_json_track_videos(k);
         WHEN 'track_work_aliases' THEN
@@ -14053,6 +14199,10 @@ BEGIN
             RETURN public.scd_row_json_video_accounts(k);
         WHEN 'video_flags' THEN
             RETURN public.scd_row_json_video_flags(k);
+        WHEN 'video_gen_pause' THEN
+            RETURN public.scd_row_json_video_gen_pause(k);
+        WHEN 'video_gen_spend' THEN
+            RETURN public.scd_row_json_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             RETURN public.scd_row_json_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN
@@ -14211,6 +14361,8 @@ BEGIN
             PERFORM public.scd_purge_track_sync_stamps(k);
         WHEN 'track_video_dispatch' THEN
             PERFORM public.scd_purge_track_video_dispatch(k);
+        WHEN 'track_video_gen' THEN
+            PERFORM public.scd_purge_track_video_gen(k);
         WHEN 'track_videos' THEN
             PERFORM public.scd_purge_track_videos(k);
         WHEN 'track_work_aliases' THEN
@@ -14243,6 +14395,10 @@ BEGIN
             PERFORM public.scd_purge_video_accounts(k);
         WHEN 'video_flags' THEN
             PERFORM public.scd_purge_video_flags(k);
+        WHEN 'video_gen_pause' THEN
+            PERFORM public.scd_purge_video_gen_pause(k);
+        WHEN 'video_gen_spend' THEN
+            PERFORM public.scd_purge_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             PERFORM public.scd_purge_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN
@@ -14363,6 +14519,7 @@ FROM (VALUES
     ('guard', 'track_storage_failures', 'scd_guard_track_storage_failures'),
     ('guard', 'track_sync_stamps', 'scd_guard_track_sync_stamps'),
     ('guard', 'track_video_dispatch', 'scd_guard_track_video_dispatch'),
+    ('guard', 'track_video_gen', 'scd_guard_track_video_gen'),
     ('guard', 'track_videos', 'scd_guard_track_videos'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
     ('guard', 'track_work_keys', 'scd_guard_track_work_keys'),
@@ -14379,6 +14536,8 @@ FROM (VALUES
     ('guard', 'users', 'scd_guard_users'),
     ('guard', 'video_accounts', 'scd_guard_video_accounts'),
     ('guard', 'video_flags', 'scd_guard_video_flags'),
+    ('guard', 'video_gen_pause', 'scd_guard_video_gen_pause'),
+    ('guard', 'video_gen_spend', 'scd_guard_video_gen_spend'),
     ('guard', 'wanted_track_albums', 'scd_guard_wanted_track_albums'),
     ('guard', 'wanted_track_artists', 'scd_guard_wanted_track_artists'),
     ('guard', 'wanted_track_work_aliases', 'scd_guard_wanted_track_work_aliases'),
@@ -14691,6 +14850,7 @@ BEGIN
             ('track_sync_stamps', 'zz_owner'),
             ('track_sync_stamps', 'zzz_suppress'),
             ('track_video_dispatch', 'zz_guard'),
+            ('track_video_gen', 'zz_guard'),
             ('track_videos', 'zz_guard'),
             ('track_videos', 'zz_owner'),
             ('track_videos', 'zzz_suppress'),
@@ -14772,6 +14932,8 @@ BEGIN
             ('users', 'zzz_suppress'),
             ('video_accounts', 'zz_guard'),
             ('video_flags', 'zz_guard'),
+            ('video_gen_pause', 'zz_guard'),
+            ('video_gen_spend', 'zz_guard'),
             ('wanted_track_albums', 'zz_guard'),
             ('wanted_track_albums', 'zz_owner'),
             ('wanted_track_albums', 'zzz_suppress'),
