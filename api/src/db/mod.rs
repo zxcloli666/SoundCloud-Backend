@@ -48,7 +48,7 @@ pub(crate) async fn replicate_track_search(pool: &PgPool) -> anyhow::Result<()> 
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 454,
+    version: 456,
     description: "scd install",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
