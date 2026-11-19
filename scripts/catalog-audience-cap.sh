@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${PSQL:?PSQL must run psql on core, e.g. PSQL='docker exec -i core-db-1 psql -U scd -d scd'}"
+: "${PSQL:?PSQL must run psql on core, e.g. PSQL='docker exec core-db-1 psql -U soundcloud -d soundcloud_desktop'}"
 CAP="${CAP:-2000}"
 CHUNK="${CHUNK:-2000}"
 PAUSE="${PAUSE:-2}"
@@ -12,7 +12,7 @@ QUIET_HOURS="${QUIET_HOURS:-00 01 02}"
 AUDIENCE="'track-favoriters', 'track-reposters', 'playlist-reposters'"
 
 sql() {
-  $PSQL -AtqX -v ON_ERROR_STOP=1 -c "SET statement_timeout = '120s'; $1"
+  $PSQL -AtqX -v ON_ERROR_STOP=1 -c "SET statement_timeout = '120s'; $1" < /dev/null
 }
 
 wait_for_quiet_hours() {
