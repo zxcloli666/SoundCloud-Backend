@@ -326,6 +326,7 @@ pub struct QdrantCfg {
 #[derive(Clone, Debug)]
 pub struct StorageCfg {
     pub url: String,
+    pub public_url: String,
 }
 
 #[derive(Clone, Debug)]
@@ -461,6 +462,7 @@ impl AppConfig {
 
             storage: StorageCfg {
                 url: env_str("STORAGE_URL", "https://storage.scdinternal.site"),
+                public_url: env_str("STORAGE_PUBLIC_URL", "https://storage.scnative.dev"),
             },
 
             subscriptions: SubscriptionsCfg {
