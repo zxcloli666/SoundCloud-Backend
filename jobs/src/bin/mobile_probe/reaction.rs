@@ -1,7 +1,7 @@
 use sc_mobile::reactions::{self, TrackReaction};
 use sc_mobile::{Caller, MobileClient};
-use serde_json::Value;
 
+use crate::actions::answer;
 use crate::journal::{Journal, Sent, failure_note, json_of};
 
 const AT_SECOND: u64 = 5;
@@ -48,12 +48,4 @@ pub async fn probe(client: &MobileClient, caller: &Caller, journal: &mut Journal
         )
     });
     journal.reply("reaction.remove", Sent::of(&remove), &outcome, vec![note]);
-}
-
-fn answer(body: &Value, pointer: &str) -> Option<String> {
-    match body.pointer(pointer)? {
-        Value::Null => None,
-        Value::String(text) => Some(text.clone()),
-        other => Some(other.to_string()),
-    }
 }

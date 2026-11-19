@@ -53,7 +53,7 @@ async fn probe(
         "comment.post",
         Sent::of(&post),
         &outcome,
-        comment_apiv1::with_datadome(note, blocked),
+        datadome::with_datadome(note, blocked),
     );
     if blocked {
         return;

@@ -8,7 +8,11 @@ mod request;
 mod transport;
 
 pub mod comments;
+pub mod follows;
+pub mod interactions;
+pub mod likes;
 pub mod me;
+pub mod playlists;
 pub mod reactions;
 pub mod streams;
 

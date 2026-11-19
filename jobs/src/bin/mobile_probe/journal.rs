@@ -8,6 +8,7 @@ use url::Url;
 
 use crate::apiv1::Apiv1Request;
 use crate::scrub::Scrubber;
+use crate::verdict;
 
 const TEXT_KEPT_CHARS: usize = 4000;
 const HEAD_KEPT_BYTES: usize = 64;
@@ -25,16 +26,16 @@ pub struct Sent {
     body: Option<Value>,
 }
 
-struct Row {
-    step: String,
-    status: Option<u16>,
+pub(crate) struct Row {
+    pub(crate) step: String,
+    pub(crate) status: Option<u16>,
     plan: Option<String>,
-    outcome: Outcome,
-    notes: Vec<String>,
+    pub(crate) outcome: Outcome,
+    pub(crate) notes: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     Passed,
     Failed,
     Skipped,
@@ -175,6 +176,9 @@ impl Journal {
                 result,
                 self.scrubber.text(&row.notes.join("; "))
             );
+        }
+        for line in verdict::lines(&self.rows) {
+            println!("action {line}");
         }
     }
 
