@@ -1,15 +1,9 @@
 use sc_mobile::{MobileError, MobileReply};
 
-const CHALLENGE_HOST: &str = "captcha-delivery.com";
-
 pub const NOTE: &str = "datadome";
 
 pub fn is_datadome(outcome: &Result<MobileReply, MobileError>) -> bool {
-    matches!(
-        outcome,
-        Ok(reply) if reply.status == 403
-            && String::from_utf8_lossy(&reply.body).contains(CHALLENGE_HOST)
-    )
+    matches!(outcome, Ok(reply) if reply.is_captcha())
 }
 
 #[cfg(test)]
