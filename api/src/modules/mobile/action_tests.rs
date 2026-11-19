@@ -79,11 +79,17 @@ async fn an_unlinked_account_is_refused_at_once_and_nothing_is_queued(
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(code, "mobile_not_linked");
     }
-    let (status, code) = code_of(read.unwrap_err()).await;
-    assert_eq!(
-        (status, code.as_str()),
-        (StatusCode::NOT_FOUND, "mobile_not_linked")
-    );
+    let likes = fixture
+        .mobile
+        .comment_likes(fixture.session_id, ACCOUNT, TRACK, "9")
+        .await;
+    for refused in [read.map(|_| ()), likes.map(|_| ())] {
+        let (status, code) = code_of(refused.unwrap_err()).await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::NOT_FOUND, "mobile_not_linked")
+        );
+    }
     assert!(queued(&pool).await?.is_empty());
     Ok(())
 }
@@ -106,8 +112,12 @@ async fn a_relink_required_account_is_refused_with_its_own_code(
         .mobile
         .track_reactions(fixture.session_id, ACCOUNT, TRACK, "5")
         .await;
+    let likes = fixture
+        .mobile
+        .comment_likes(fixture.session_id, ACCOUNT, TRACK, "9")
+        .await;
 
-    for refused in [reaction.map(|_| ()), read.map(|_| ())] {
+    for refused in [reaction.map(|_| ()), read.map(|_| ()), likes.map(|_| ())] {
         let (status, code) = code_of(refused.unwrap_err()).await;
         assert_eq!(
             (status, code.as_str()),
@@ -136,7 +146,7 @@ async fn a_reaction_is_queued_on_its_moment_with_the_default_or_the_chosen_value
             ACCOUNT,
             TRACK,
             46,
-            Some("sc:interactiontypevalue:1f60d"),
+            Some("sc:interactiontypevalue:1f44f"),
         )
         .await?;
 
@@ -160,7 +170,7 @@ async fn a_reaction_is_queued_on_its_moment_with_the_default_or_the_chosen_value
             (
                 "track_reaction_set".to_owned(),
                 "soundcloud:tracks:123:moments:46".to_owned(),
-                Some(json!({ "value_urn": "sc:interactiontypevalue:1f60d" })),
+                Some(json!({ "value_urn": "sc:interactiontypevalue:1f44f" })),
                 false
             ),
         ]
@@ -206,6 +216,12 @@ async fn a_bad_track_second_or_value_is_a_plain_bad_request(pool: PgPool) -> any
         ("12x", 5, None, "invalid_track_urn"),
         (TRACK, 86_401, None, "invalid_reaction_second"),
         (TRACK, 5, Some("1f525"), "invalid_reaction_value"),
+        (
+            TRACK,
+            5,
+            Some("sc:interactiontypevalue:1f60d"),
+            "invalid_reaction_value",
+        ),
         (
             TRACK,
             5,
@@ -290,6 +306,64 @@ async fn reactions_are_read_with_the_owner_token_and_mapped_per_moment(
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn comment_likes_are_read_with_the_owner_token_and_mapped_per_comment(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let fixture = linked(&pool, Graph::CommentLikes).await?;
+
+    let read = fixture
+        .mobile
+        .comment_likes(fixture.session_id, ACCOUNT, "123", "9, 10")
+        .await?;
+
+    assert_eq!(read.track_urn, TRACK);
+    assert_eq!(
+        serde_json::to_value(&read.comments)?,
+        json!([
+            { "commentUrn": "soundcloud:comments:9", "liked": true, "count": 2 },
+            { "commentUrn": "soundcloud:comments:10", "liked": false, "count": 0 },
+        ])
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_bad_track_or_comment_list_is_a_plain_bad_request_before_any_call(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let fixture = linked(&pool, Graph::CommentLikes).await?;
+    let forty_one = (1..=41)
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let forty = (1..=40)
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let cases = [
+        ("soundcloud:users:1", "9", "invalid_track_urn"),
+        (TRACK, "", "invalid_comment_urn"),
+        (TRACK, "9,x", "invalid_comment_urn"),
+        (TRACK, forty_one.as_str(), "invalid_comment_urn"),
+    ];
+    for (track, comments, expected) in cases {
+        let refused = fixture
+            .mobile
+            .comment_likes(fixture.session_id, ACCOUNT, track, comments)
+            .await;
+        let (status, code) = code_of(refused.unwrap_err()).await;
+        assert_eq!((status, code.as_str()), (StatusCode::BAD_REQUEST, expected));
+    }
+    let accepted = fixture
+        .mobile
+        .comment_likes(fixture.session_id, ACCOUNT, TRACK, &forty)
+        .await?;
+    assert_eq!(accepted.comments.len(), 40);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_bot_check_and_a_dead_token_are_plain_errors_without_a_workaround(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -300,11 +374,18 @@ async fn a_bot_check_and_a_dead_token_are_plain_errors_without_a_workaround(
         .track_reactions(checked.session_id, ACCOUNT, TRACK, "5")
         .await;
 
-    let (status, code) = code_of(captcha.unwrap_err()).await;
-    assert_eq!(
-        (status, code.as_str()),
-        (StatusCode::SERVICE_UNAVAILABLE, "mobile_captcha")
-    );
+    let likes = checked
+        .mobile
+        .comment_likes(checked.session_id, ACCOUNT, TRACK, "9")
+        .await;
+
+    for refused in [captcha.map(|_| ()), likes.map(|_| ())] {
+        let (status, code) = code_of(refused.unwrap_err()).await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, "mobile_captcha")
+        );
+    }
     Ok(())
 }
 
@@ -319,11 +400,18 @@ async fn a_rejected_token_that_cannot_be_refreshed_is_unavailable_not_relinked(
         .track_reactions(fixture.session_id, ACCOUNT, TRACK, "5")
         .await;
 
-    let (status, code) = code_of(read.unwrap_err()).await;
-    assert_eq!(
-        (status, code.as_str()),
-        (StatusCode::BAD_GATEWAY, "mobile_unavailable")
-    );
+    let likes = fixture
+        .mobile
+        .comment_likes(fixture.session_id, ACCOUNT, TRACK, "9")
+        .await;
+
+    for refused in [read.map(|_| ()), likes.map(|_| ())] {
+        let (status, code) = code_of(refused.unwrap_err()).await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::BAD_GATEWAY, "mobile_unavailable")
+        );
+    }
     Ok(())
 }
 

@@ -131,6 +131,7 @@ fn mobile_counters_are_scraped_before_the_first_link() {
     assert!(rendered.contains("op=\"token\""));
     assert!(rendered.contains("op=\"me\""));
     assert!(rendered.contains("op=\"reactions_read\""));
+    assert!(rendered.contains("op=\"comment_likes_read\""));
 }
 
 #[test]

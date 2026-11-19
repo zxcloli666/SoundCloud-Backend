@@ -35,6 +35,7 @@ pub(super) enum Token {
 #[derive(Clone, Copy)]
 pub(super) enum Graph {
     Reactions,
+    CommentLikes,
     Captcha,
     Unauthorized,
 }
@@ -102,6 +103,16 @@ fn graphql(graph: Graph) -> Response {
                 "userInteraction": "sc:interactiontypevalue:1f525",
                 "interactionCounts": [
                     { "interactionTypeValueUrn": "sc:interactiontypevalue:1f525", "count": 3 }
+                ]
+            }] }
+        }))
+        .into_response(),
+        Graph::CommentLikes => axum::Json(json!({
+            "data": { "targetInteractions": [{
+                "targetUrn": "soundcloud:comments:9",
+                "userInteraction": "sc:interactiontypevalue:like",
+                "interactionCounts": [
+                    { "interactionTypeValueUrn": "sc:interactiontypevalue:like", "count": 2 }
                 ]
             }] }
         }))

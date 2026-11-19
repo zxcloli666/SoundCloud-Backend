@@ -1,6 +1,7 @@
 mod action_handlers;
 mod actions;
 mod caller;
+mod comment_likes;
 mod credential;
 mod dto;
 mod exchange;

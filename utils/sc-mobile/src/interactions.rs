@@ -44,6 +44,18 @@ pub fn read(interaction: &Interaction<'_>) -> MobileRequest {
     )
 }
 
+pub fn read_comment_likes(track_urn: &str, comment_urns: &[String]) -> MobileRequest {
+    MobileRequest::query(
+        REACTIONS_PER_TARGET,
+        json!({
+            "interactionTypeUrn": REACTION,
+            "limitPerTarget": LIMIT_PER_TARGET,
+            "parentUrn": track_urn,
+            "targetUrns": comment_urns,
+        }),
+    )
+}
+
 fn input(interaction: &Interaction<'_>) -> Value {
     let mut input = json!({
         "targetUrn": interaction.target_urn,
@@ -100,6 +112,27 @@ mod tests {
                 "limitPerTarget": 10,
                 "parentUrn": "soundcloud:tracks:1",
                 "targetUrns": ["soundcloud:comments:9"],
+            }))
+        );
+    }
+
+    #[test]
+    fn reading_comment_likes_is_one_query_over_the_comments_of_a_track() {
+        let comments = vec![
+            "soundcloud:comments:9".to_owned(),
+            "soundcloud:comments:10".to_owned(),
+        ];
+
+        let request = read_comment_likes("soundcloud:tracks:1", &comments);
+
+        assert_eq!(request.kind(), Kind::Query);
+        assert_eq!(
+            variables(&request),
+            Some(json!({
+                "interactionTypeUrn": "sc:interactiontype:reaction",
+                "limitPerTarget": 10,
+                "parentUrn": "soundcloud:tracks:1",
+                "targetUrns": ["soundcloud:comments:9", "soundcloud:comments:10"],
             }))
         );
     }

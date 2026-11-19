@@ -4,6 +4,32 @@ use crate::request::MobileRequest;
 
 pub const TRACK_REACTION: &str = "sc:interactiontype:trackreaction";
 pub const FIRE: &str = "sc:interactiontypevalue:1f525";
+pub const CLAP: &str = "sc:interactiontypevalue:1f44f";
+pub const CRY: &str = "sc:interactiontypevalue:1f979";
+
+pub struct ReactionValue {
+    pub value_urn: &'static str,
+    pub emoji: &'static str,
+}
+
+pub const VALUES: [ReactionValue; 3] = [
+    ReactionValue {
+        value_urn: FIRE,
+        emoji: "\u{1F525}",
+    },
+    ReactionValue {
+        value_urn: CLAP,
+        emoji: "\u{1F44F}",
+    },
+    ReactionValue {
+        value_urn: CRY,
+        emoji: "\u{1F979}",
+    },
+];
+
+pub fn is_value(value_urn: &str) -> bool {
+    VALUES.iter().any(|value| value.value_urn == value_urn)
+}
 
 pub const UPSERT_INTERACTION: &str = "mutation UpsertInteraction($input: InteractionInput!) {
   upsertInteraction(input: $input) {
@@ -155,6 +181,24 @@ mod tests {
         ] {
             assert_eq!(parse_moment_urn(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_value_set_is_the_client_set_in_its_order() {
+        let urns: Vec<&str> = VALUES.iter().map(|value| value.value_urn).collect();
+
+        assert_eq!(
+            urns,
+            [
+                "sc:interactiontypevalue:1f525",
+                "sc:interactiontypevalue:1f44f",
+                "sc:interactiontypevalue:1f979",
+            ]
+        );
+        assert_eq!(VALUES[0].emoji, "\u{1F525}");
+        assert!(is_value(CLAP));
+        assert!(!is_value("sc:interactiontypevalue:like"));
+        assert!(!is_value("1f525"));
     }
 
     #[test]
