@@ -138,7 +138,7 @@ impl Tube for Script {
         _exit: Exit,
     ) -> Result<std::path::PathBuf, Failure> {
         if *self.blocked.lock().unwrap() {
-            return Err(Failure::Paused("429".to_owned()));
+            return Err(Failure::Paused("429".to_owned(), None));
         }
         assert_eq!(cookies.is_some(), url.contains("youtube"));
         let path = stem.with_extension("mp4");
@@ -683,16 +683,168 @@ mod sources {
         }
     }
 
+    const TOKEN: &str = "https://open.spotify.com/api/token";
+    const SEARCH: &str = "https://api.spotify.com/v1/search";
+    const PATHFINDER: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
+
     fn spotify(mock: &std::sync::Arc<Mock>) -> Sources<std::sync::Arc<Mock>> {
         mock.route(
             "https://open.spotify.com/api/server-time",
             Answer::Body(r#"{"serverTime":1700000000}"#.to_owned()),
         );
-        mock.route(
-            "https://open.spotify.com/api/token",
-            Answer::Body(r#"{"accessToken":"tok","isAnonymous":false}"#.to_owned()),
-        );
+        token_expiring_in(mock, 3_600_000);
         Sources::new(mock.clone(), SpotifyKey::new(61, &[41, 41, 41]))
+    }
+
+    fn token_expiring_in(mock: &std::sync::Arc<Mock>, millis: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        mock.route(
+            TOKEN,
+            Answer::Body(format!(
+                r#"{{"accessToken":"tok","isAnonymous":false,"accessTokenExpirationTimestampMs":{}}}"#,
+                now + millis
+            )),
+        );
+    }
+
+    fn asked(mock: &std::sync::Arc<Mock>, prefix: &str) -> usize {
+        mock.requests()
+            .iter()
+            .filter(|(url, _)| url.starts_with(prefix))
+            .count()
+    }
+
+    fn hit(mock: &std::sync::Arc<Mock>) {
+        mock.route(
+            SEARCH,
+            Answer::Body(
+                r#"{"tracks":{"items":[{"uri":"spotify:track:abc","name":"Doja","duration_ms":96000,"artists":[{"name":"Central Cee"}]}]}}"#
+                    .to_owned(),
+            ),
+        );
+        mock.route(
+            PATHFINDER,
+            Answer::Body(
+                r#"{"data":{"trackUnion":{"canvas":{"url":"https://canvaz.scdn.co/upload/a.cnvs.mp4"}}}}"#
+                    .to_owned(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn one_lookup_is_one_token_one_search_and_one_canvas_query() {
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        hit(&mock);
+
+        assert!(sources.canvas("dc", &wanted()).await.unwrap().is_some());
+
+        assert_eq!(asked(&mock, TOKEN), 1);
+        assert_eq!(asked(&mock, SEARCH), 1);
+        assert_eq!(asked(&mock, PATHFINDER), 1);
+    }
+
+    #[tokio::test]
+    async fn an_isrc_without_a_hit_is_one_search_and_no_canvas_query() {
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        mock.route(
+            SEARCH,
+            Answer::Body(r#"{"tracks":{"items":[]}}"#.to_owned()),
+        );
+
+        assert_eq!(sources.canvas("dc", &wanted()).await, Ok(None));
+
+        assert_eq!(asked(&mock, SEARCH), 1);
+        assert_eq!(asked(&mock, PATHFINDER), 0);
+    }
+
+    #[tokio::test]
+    async fn the_token_is_reused_across_lookups_of_an_account_until_it_expires() {
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        hit(&mock);
+
+        for _ in 0..3 {
+            sources.canvas("dc", &wanted()).await.unwrap();
+        }
+        assert_eq!(asked(&mock, TOKEN), 1);
+
+        sources.canvas("other", &wanted()).await.unwrap();
+        assert_eq!(asked(&mock, TOKEN), 2);
+    }
+
+    #[tokio::test]
+    async fn a_token_close_to_its_expiry_is_fetched_again() {
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        token_expiring_in(&mock, 30_000);
+        hit(&mock);
+
+        sources.canvas("dc", &wanted()).await.unwrap();
+        sources.canvas("dc", &wanted()).await.unwrap();
+
+        assert_eq!(asked(&mock, TOKEN), 2);
+    }
+
+    #[tokio::test]
+    async fn a_401_on_a_cached_token_drops_it_and_fetches_one_new_token() {
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        hit(&mock);
+        sources.canvas("dc", &wanted()).await.unwrap();
+        mock.route(SEARCH, Answer::Status(401));
+
+        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+
+        assert!(matches!(failure, Failure::Rejected(_)), "{failure:?}");
+        assert_eq!(asked(&mock, TOKEN), 2);
+        assert_eq!(asked(&mock, SEARCH), 3);
+
+        hit(&mock);
+        sources.canvas("dc", &wanted()).await.unwrap();
+        sources.canvas("dc", &wanted()).await.unwrap();
+        assert_eq!(asked(&mock, TOKEN), 3);
+    }
+
+    #[tokio::test]
+    async fn a_failure_names_the_step_and_a_429_carries_its_retry_after() {
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        mock.route(SEARCH, Answer::Limited(120));
+
+        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+
+        assert_eq!(
+            failure,
+            Failure::Paused("Spotify search answered 429".to_owned(), Some(120))
+        );
+
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        mock.route(TOKEN, Answer::Status(429));
+
+        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+
+        assert_eq!(
+            failure,
+            Failure::Paused("Spotify token answered 429".to_owned(), None)
+        );
+
+        let mock = Mock::new();
+        let sources = spotify(&mock);
+        hit(&mock);
+        mock.route(PATHFINDER, Answer::Status(429));
+
+        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+
+        assert_eq!(
+            failure,
+            Failure::Paused("Spotify canvas answered 429".to_owned(), None)
+        );
     }
 
     #[tokio::test]
@@ -747,7 +899,11 @@ mod sources {
 
             let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
 
-            assert_eq!(matches!(failure, Failure::Paused(_)), paused, "{failure:?}");
+            assert_eq!(
+                matches!(failure, Failure::Paused(..)),
+                paused,
+                "{failure:?}"
+            );
             assert_eq!(
                 matches!(failure, Failure::Rejected(_)),
                 !paused,

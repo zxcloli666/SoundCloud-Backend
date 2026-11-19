@@ -14,6 +14,7 @@ use crate::objects::Blobs;
 
 const SEARCH_RESULTS: usize = 5;
 const PER_SEARCH: usize = 3;
+const MIN_PAUSE: Duration = Duration::from_secs(60);
 
 pub(super) struct Leased {
     pub(super) name: String,
@@ -50,9 +51,9 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                 .await
             {
                 Ok(found) => found,
-                Err(Failure::Paused(error)) => {
-                    self.account_out(&youtube.name, &error, Some(self.config.account_pause))
-                        .await;
+                Err(Failure::Paused(error, retry_after)) => {
+                    let pause = pause_for(self.config.account_pause, retry_after);
+                    self.account_out(&youtube.name, &error, Some(pause)).await;
                     break;
                 }
                 Err(Failure::Rejected(error)) => {
@@ -118,9 +119,9 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
     ) -> Option<V> {
         match answer {
             Ok(value) => Some(value),
-            Err(Failure::Paused(error)) => {
-                self.account_out(account, &error, Some(self.config.account_pause))
-                    .await;
+            Err(Failure::Paused(error, retry_after)) => {
+                let pause = pause_for(self.config.account_pause, retry_after);
+                self.account_out(account, &error, Some(pause)).await;
                 None
             }
             Err(Failure::Rejected(error)) => {
@@ -143,5 +144,26 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
             Ok(()) => warn!(account, error, "video account taken out of rotation"),
             Err(failure) => warn!(account, %failure, "video account state was not saved"),
         }
+    }
+}
+
+pub(super) fn pause_for(longest: Duration, retry_after: Option<u64>) -> Duration {
+    retry_after.map_or(longest, |seconds| {
+        Duration::from_secs(seconds).max(MIN_PAUSE).min(longest)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOUR: Duration = Duration::from_secs(3_600);
+
+    #[test]
+    fn a_retry_after_sets_the_pause_within_a_minute_and_the_configured_cap() {
+        assert_eq!(pause_for(HOUR, None), HOUR);
+        assert_eq!(pause_for(HOUR, Some(900)), Duration::from_secs(900));
+        assert_eq!(pause_for(HOUR, Some(5)), Duration::from_secs(60));
+        assert_eq!(pause_for(HOUR, Some(86_400)), HOUR);
     }
 }

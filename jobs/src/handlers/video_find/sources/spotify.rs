@@ -4,8 +4,9 @@ use bytes::Bytes;
 use catalog_match::{DurationMatch, artist_score, duration_match, title_score};
 use serde_json::{Value, json};
 
+use super::token::Tokens;
 use super::{Failure, Lead, Wanted, failure_of};
-use crate::handlers::video_accounts::{BROWSER_AGENT, Fetch, SpotifyKey, access_token, headers};
+use crate::handlers::video_accounts::{BROWSER_AGENT, Fetch, SpotifyKey, headers};
 
 const SEARCH: &str = "https://api.spotify.com/v1/search";
 const PATHFINDER: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
@@ -15,15 +16,33 @@ const ARTIST_MIN: f32 = 0.85;
 
 pub(super) async fn canvas<F: Fetch>(
     fetch: &F,
+    tokens: &Tokens,
     key: &SpotifyKey,
     sp_dc: &str,
     wanted: &Wanted,
 ) -> Result<Option<Lead>, Failure> {
-    let token = access_token(fetch, key, sp_dc).await?;
-    let Some(uri) = find_track(fetch, &token, wanted).await? else {
+    loop {
+        let (token, reused) = tokens.get(fetch, key, sp_dc).await?;
+        let answer = lookup(fetch, &token, wanted).await;
+        if matches!(answer, Err(Failure::Rejected(_))) {
+            tokens.forget(sp_dc).await;
+            if reused {
+                continue;
+            }
+        }
+        return answer;
+    }
+}
+
+async fn lookup<F: Fetch>(
+    fetch: &F,
+    token: &str,
+    wanted: &Wanted,
+) -> Result<Option<Lead>, Failure> {
+    let Some(uri) = find_track(fetch, token, wanted).await? else {
         return Ok(None);
     };
-    let reply = query_canvas(fetch, &token, &uri).await?;
+    let reply = query_canvas(fetch, token, &uri).await?;
     Ok(canvas_url(&reply).map(|url| Lead {
         source: VideoSource::Spotify,
         kind: VideoCandidateKind::Canvas,
@@ -39,9 +58,7 @@ async fn find_track<F: Fetch>(
 ) -> Result<Option<String>, Failure> {
     if let Some(isrc) = wanted.isrc.as_deref().filter(|isrc| !isrc.is_empty()) {
         let reply = search(fetch, token, &format!("isrc:{isrc}")).await?;
-        if let Some(uri) = tracks(&reply).first().map(|found| found.uri.clone()) {
-            return Ok(Some(uri));
-        }
+        return Ok(tracks(&reply).first().map(|found| found.uri.clone()));
     }
     let query = format!("track:{} artist:{}", wanted.title, wanted.artist);
     let reply = search(fetch, token, &query).await?;
@@ -61,8 +78,8 @@ async fn search<F: Fetch>(fetch: &F, token: &str, query: &str) -> Result<Value, 
     let body = fetch
         .get(&url, request)
         .await
-        .map_err(|error| failure_of("Spotify", &error))?;
-    parse(&body)
+        .map_err(|error| failure_of("Spotify search", &error))?;
+    parse("Spotify search", &body)
 }
 
 async fn query_canvas<F: Fetch>(fetch: &F, token: &str, uri: &str) -> Result<Value, Failure> {
@@ -82,13 +99,13 @@ async fn query_canvas<F: Fetch>(fetch: &F, token: &str, uri: &str) -> Result<Val
     let reply = fetch
         .post(PATHFINDER, request, Bytes::from(body.to_string()))
         .await
-        .map_err(|error| failure_of("Spotify", &error))?;
-    parse(&reply)
+        .map_err(|error| failure_of("Spotify canvas", &error))?;
+    parse("Spotify canvas", &reply)
 }
 
-fn parse(body: &Bytes) -> Result<Value, Failure> {
+fn parse(step: &str, body: &Bytes) -> Result<Value, Failure> {
     serde_json::from_slice(body)
-        .map_err(|_| Failure::Unavailable("Spotify answered with an unexpected body".to_owned()))
+        .map_err(|_| Failure::Unavailable(format!("{step} answered with an unexpected body")))
 }
 
 struct Found {

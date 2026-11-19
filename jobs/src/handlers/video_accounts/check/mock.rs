@@ -10,6 +10,7 @@ use super::Fetch;
 pub(crate) enum Answer {
     Body(String),
     Status(u16),
+    Limited(u64),
     Down,
 }
 
@@ -66,6 +67,11 @@ impl Mock {
                 status,
                 body: String::new(),
                 retry_after_seconds: None,
+            }),
+            Some(Answer::Limited(seconds)) => Err(SourceError::Status {
+                status: 429,
+                body: String::new(),
+                retry_after_seconds: Some(seconds),
             }),
             Some(Answer::Down) | None => Err(SourceError::Unreachable("down".to_owned())),
         }

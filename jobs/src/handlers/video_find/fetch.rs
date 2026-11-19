@@ -47,26 +47,30 @@ impl Pooled {
         };
         headers.remove(EGRESS_TAG);
         self.pool
-            .routed(exit, |proxy| {
-                let (method, headers, body) = (method.clone(), headers.clone(), body.clone());
-                async move {
-                    let http = match proxy {
-                        None => self.direct.clone(),
-                        Some(proxy) => client(Some(&proxy)).map_err(|_| {
-                            SourceError::Unreachable("proxy client did not build".to_owned())
-                        })?,
-                    };
-                    let mut request = http.request(method, url).headers(headers);
-                    if let Some(body) = body {
-                        request = request.body(body);
+            .routed(
+                exit,
+                |error| !account_limited(error),
+                |proxy| {
+                    let (method, headers, body) = (method.clone(), headers.clone(), body.clone());
+                    async move {
+                        let http = match proxy {
+                            None => self.direct.clone(),
+                            Some(proxy) => client(Some(&proxy)).map_err(|_| {
+                                SourceError::Unreachable("proxy client did not build".to_owned())
+                            })?,
+                        };
+                        let mut request = http.request(method, url).headers(headers);
+                        if let Some(body) = body {
+                            request = request.body(body);
+                        }
+                        let response = request
+                            .send()
+                            .await
+                            .map_err(|error| SourceError::Unreachable(error.to_string()))?;
+                        read(response).await
                     }
-                    let response = request
-                        .send()
-                        .await
-                        .map_err(|error| SourceError::Unreachable(error.to_string()))?;
-                    read(response).await
-                }
-            })
+                },
+            )
             .await
     }
 }
@@ -81,6 +85,20 @@ impl Fetch for Pooled {
     }
 }
 
+fn account_limited(error: &SourceError) -> bool {
+    matches!(error.status_code(), Some(401 | 429))
+}
+
+fn retry_after(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 fn client(proxy: Option<&str>) -> anyhow::Result<wreq::Client> {
     let mut builder = sc_fingerprint::builder(None)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -93,6 +111,7 @@ fn client(proxy: Option<&str>) -> anyhow::Result<wreq::Client> {
 
 async fn read(response: wreq::Response) -> SourceResult<Bytes> {
     let status = response.status().as_u16();
+    let headers = response.headers().clone();
     if response
         .content_length()
         .is_some_and(|length| length > PAGE_LIMIT as u64)
@@ -112,7 +131,7 @@ async fn read(response: wreq::Response) -> SourceResult<Bytes> {
         return Err(SourceError::Status {
             status,
             body: String::from_utf8_lossy(&bytes).chars().take(200).collect(),
-            retry_after_seconds: None,
+            retry_after_seconds: retry_after(&headers),
         });
     }
     Ok(Bytes::from(bytes))
@@ -121,6 +140,19 @@ async fn read(response: wreq::Response) -> SourceResult<Bytes> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_is_read_as_seconds() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(retry_after(&headers), None);
+        headers.insert("retry-after", "120".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(120));
+        headers.insert(
+            "retry-after",
+            "Wed, 21 Oct 2026 07:28:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(retry_after(&headers), None);
+    }
 
     #[test]
     fn socks_proxies_build_a_client_and_garbage_does_not() {

@@ -140,9 +140,11 @@ impl YtDlp {
         timeout: Duration,
     ) -> Result<Vec<u8>, Failure> {
         self.pool
-            .routed(exit, |proxy| async move {
-                self.run(args, cookies, proxy.as_deref(), timeout).await
-            })
+            .routed(
+                exit,
+                |_| true,
+                |proxy| async move { self.run(args, cookies, proxy.as_deref(), timeout).await },
+            )
             .await
     }
 }
@@ -245,7 +247,7 @@ pub(super) fn classify(stderr: &str) -> Failure {
     let lowered = stderr.to_lowercase();
     let tail = tail(stderr);
     if RATE_LIMIT.iter().any(|marker| lowered.contains(marker)) {
-        Failure::Paused(format!("youtube: {tail}"))
+        Failure::Paused(format!("youtube: {tail}"), None)
     } else if AUTH.iter().any(|marker| lowered.contains(marker)) {
         Failure::Rejected(format!("youtube: {tail}"))
     } else {
@@ -289,7 +291,7 @@ mod tests {
     fn a_bot_check_pauses_the_account_and_a_login_wall_kills_it() {
         assert!(matches!(
             classify("ERROR: Sign in to confirm you're not a bot"),
-            Failure::Paused(_)
+            Failure::Paused(..)
         ));
         assert!(matches!(
             classify("ERROR: The provided YouTube account cookies are no longer valid"),
