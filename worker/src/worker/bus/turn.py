@@ -38,7 +38,7 @@ class EngineTurn:
 
     def _hand(self, lane: str | None) -> None:
         if lane is not None:
-            log.info("engine_turn", extra={"from_lane": self.owner, "to_lane": lane})
+            log.debug("engine_turn", extra={"from_lane": self.owner, "to_lane": lane})
         if lane in self._waiting:
             self._waiting.remove(lane)
         self.owner = lane
