@@ -1122,6 +1122,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_track_video_pool(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.track_video_pool t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.track_video_pool t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_track_videos(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1596,6 +1611,8 @@ BEGIN
             PERFORM public.scd_purge_track_video_dispatch(k);
         WHEN 'track_video_gen' THEN
             PERFORM public.scd_purge_track_video_gen(k);
+        WHEN 'track_video_pool' THEN
+            PERFORM public.scd_purge_track_video_pool(k);
         WHEN 'track_videos' THEN
             PERFORM public.scd_purge_track_videos(k);
         WHEN 'track_work_aliases' THEN

@@ -217,6 +217,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 150. `0464_scd_install`: the generated SQL again, on top of 0462: the two renamed tables get their registry, purge entries and guard; every other trigger is kept.
 151. `0465_catalog_audience_ids_publish`: `scd_cmd_cold_refresh_clear` lists the `catalog_audience_ids` rows it clears in `touched`.
 152. `0466_scd_install`: the generated SQL again, on top of 0464: `catalog_audience_ids` is class C now. It gets its owner, suppress trigger and publication list (every column); every other trigger is kept. No schema change.
+153. `0467_video_pool`: `track_video_pool` (class P): the ranked shelf of tier-1 tracks that have no dispatch row, with a popularity score; jobs fills and rescores it, the video claim reads it by score and drains it. Plus a partial index of `track_video_dispatch` on `next_at` for the open stages. Small tables, plain `CREATE INDEX IF NOT EXISTS`.
+154. `0468_scd_install`: the generated SQL again, on top of 0466: `track_video_pool` gets its registry, purge entry, row hash and guard; every other trigger is kept.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -259,6 +261,8 @@ Order for 0459-0462: only after 0455-0456. Core, main and star in any order (not
 Order for 0463-0464: core, main and star in any order (P), then jobs of this release on core. A jobs of 0457 on a core with 0463 fails the generation sweep, and only when `VIDEO_GEN_IN_FLIGHT` is on.
 
 Order for 0465-0466: only after the `PASS=check` of 0453-0454 ended with 0 and 0. Core, main and star to 0466 in any order, then `scd_sync_publications()` on core. Before the refresh check on main and star that `catalog_audience_ids` is the only `scd_core_pub` table missing from `pg_subscription_rel` of `main_from_core` / `star_from_core`: a refresh with copy_data copies every table it adds. Then `ALTER SUBSCRIPTION main_from_core REFRESH PUBLICATION WITH (copy_data = true)` on main, and after it is `r` the same for `star_from_core` on star. The tablesync worker copies the ~42.7M rows next to the apply worker and catches up from its own slot; the api nodes had an empty table, so nothing conflicts. Check on each node: `srsubstate` of the table is `r`, its row count equals core's (jobs keeps writing, so compare a few subjects or a count taken in one minute), `apply_error_count` does not move. `VACUUM ANALYZE catalog_audience_ids` on main and star after it.
+
+Order for 0467-0468: core, main and star in any order (P), then jobs of this release on core. A jobs of the old release keeps working on core with 0467 (it ignores the table). The new jobs fills the shelf on its first tick, which takes about a minute.
 
 Order for 0446 and the 0442 rewrite: any node, any time. `jobs-migrate` of this release drops the two foreign keys of a host that applied the old 0442 (5 s lock timeout on `tracks`; on a timeout it fails and is run again).
 

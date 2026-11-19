@@ -195,9 +195,22 @@ async fn account(pool: &PgPool, name: &str, source: &str) -> anyhow::Result<()> 
 }
 
 async fn claim(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<queue::Claimed>> {
+    queue::keep_pool(pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     queue::claim(pool, limit)
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+async fn claim_ids(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<(String, i32)>> {
+    let claimed = queue::claim(pool, limit)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(claimed
+        .into_iter()
+        .map(|claim| (claim.sc_track_id, claim.attempt))
+        .collect())
 }
 
 async fn stage(pool: &PgPool, id: &str) -> anyhow::Result<(String, i32, Option<String>)> {
@@ -353,6 +366,67 @@ async fn only_tier_one_tracks_without_a_video_are_claimed_most_played_first(
         claim(&pool, 10).await?.is_empty(),
         "claimed tracks are in flight"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_shelf_follows_new_tracks_new_counts_and_leavers_and_a_due_retry_ranks_by_its_live_count(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    star_track(&pool, "11", 10, 1).await?;
+    star_track(&pool, "12", 500, 1).await?;
+    star_track(&pool, "13", 50, 1).await?;
+    star_track(&pool, "14", 5, 1).await?;
+    queue::keep_pool(&pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    sqlx::query("UPDATE tracks SET play_count_sc = 9000 WHERE sc_track_id = '11'")
+        .execute(&pool)
+        .await?;
+    sqlx::query("UPDATE tracks SET storage_state = 'pending' WHERE sc_track_id = '12'")
+        .execute(&pool)
+        .await?;
+    sqlx::query("UPDATE track_video_pool SET scored_at = now() - interval '1 day'")
+        .execute(&pool)
+        .await?;
+    star_track(&pool, "15", 100, 1).await?;
+    sqlx::query(
+        "INSERT INTO track_video_dispatch (sc_track_id, stage, attempts, next_at)
+         VALUES ('14', 'retry', 1, now() - interval '1 hour')",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("UPDATE tracks SET likes_count_sc = 20 WHERE sc_track_id = '14'")
+        .execute(&pool)
+        .await?;
+
+    queue::keep_pool(&pool)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let shelf: Vec<(String, i64)> =
+        sqlx::query_as("SELECT sc_track_id, score FROM track_video_pool ORDER BY score DESC")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        shelf,
+        [
+            ("11".to_string(), 9_000),
+            ("15".to_string(), 100),
+            ("13".to_string(), 50)
+        ]
+    );
+
+    let mut top = claim_ids(&pool, 2).await?;
+    top.sort();
+    assert_eq!(top, [("11".to_string(), 1), ("14".to_string(), 2)]);
+    let mut rest = claim_ids(&pool, 10).await?;
+    rest.sort();
+    assert_eq!(rest, [("13".to_string(), 1), ("15".to_string(), 1)]);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM track_video_pool")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
     Ok(())
 }
 

@@ -1186,6 +1186,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.track_video_gen t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_track_video_pool(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.track_video_pool t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_track_videos(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1738,6 +1750,8 @@ BEGIN
             RETURN public.scd_row_json_track_video_dispatch(k);
         WHEN 'track_video_gen' THEN
             RETURN public.scd_row_json_track_video_gen(k);
+        WHEN 'track_video_pool' THEN
+            RETURN public.scd_row_json_track_video_pool(k);
         WHEN 'track_videos' THEN
             RETURN public.scd_row_json_track_videos(k);
         WHEN 'track_work_aliases' THEN

@@ -1,27 +1,55 @@
-WITH due AS (
-    SELECT track.sc_track_id
-    FROM star_track_tiers AS tier
-    JOIN tracks AS track ON track.sc_track_id = tier.sc_track_id
-    LEFT JOIN track_video_dispatch AS dispatch ON dispatch.sc_track_id = track.sc_track_id
-    WHERE tier.tier = 1
-      AND track.sharing = 'public'
-      AND track.storage_state = 'ok'
-      AND track.superseded_by IS NULL
-      AND track.deleted_at IS NULL
-      AND NOT EXISTS (
-          SELECT 1
-          FROM track_videos AS video
-          WHERE video.sc_track_id = track.sc_track_id
-            AND video.kind IN ('clip', 'loop')
-      )
-      AND (
-          dispatch.sc_track_id IS NULL
-          OR (dispatch.stage NOT IN ('dispatched', 'pending_vlm', 'vlm_dispatched', 'found')
-              AND dispatch.next_at <= now())
-      )
-    ORDER BY COALESCE(track.play_count_sc, 0) + 10 * COALESCE(track.likes_count_sc, 0) DESC,
-             track.sc_track_id
+WITH ranked AS (
+    (
+        SELECT pool.sc_track_id, pool.score
+        FROM track_video_pool AS pool
+        JOIN star_track_tiers AS tier ON tier.sc_track_id = pool.sc_track_id AND tier.tier = 1
+        JOIN tracks AS track ON track.sc_track_id = pool.sc_track_id
+        WHERE track.sharing = 'public'
+          AND track.storage_state = 'ok'
+          AND track.superseded_by IS NULL
+          AND track.deleted_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM track_video_dispatch AS dispatch WHERE dispatch.sc_track_id = pool.sc_track_id
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM track_videos AS video
+              WHERE video.sc_track_id = pool.sc_track_id
+                AND video.kind IN ('clip', 'loop')
+          )
+        ORDER BY pool.score DESC, pool.sc_track_id
+        LIMIT $1
+    )
+    UNION ALL
+    (
+        SELECT track.sc_track_id,
+               COALESCE(track.play_count_sc, 0) + 10 * COALESCE(track.likes_count_sc, 0)
+        FROM track_video_dispatch AS dispatch
+        JOIN star_track_tiers AS tier ON tier.sc_track_id = dispatch.sc_track_id AND tier.tier = 1
+        JOIN tracks AS track ON track.sc_track_id = dispatch.sc_track_id
+        WHERE dispatch.stage NOT IN ('dispatched', 'pending_vlm', 'vlm_dispatched', 'found')
+          AND dispatch.next_at <= now()
+          AND track.sharing = 'public'
+          AND track.storage_state = 'ok'
+          AND track.superseded_by IS NULL
+          AND track.deleted_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM track_videos AS video
+              WHERE video.sc_track_id = track.sc_track_id
+                AND video.kind IN ('clip', 'loop')
+          )
+        ORDER BY 2 DESC, track.sc_track_id
+        LIMIT $1
+    )
+), due AS (
+    SELECT sc_track_id
+    FROM ranked
+    ORDER BY score DESC, sc_track_id
     LIMIT $1
+), taken AS (
+    DELETE FROM track_video_pool
+    WHERE sc_track_id IN (SELECT sc_track_id FROM due)
 ), held AS (
     INSERT INTO track_video_dispatch AS dispatch (sc_track_id, stage, attempts, next_at)
     SELECT due.sc_track_id, 'dispatched', 1, now()

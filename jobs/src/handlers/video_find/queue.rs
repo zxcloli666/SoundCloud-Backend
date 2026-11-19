@@ -38,6 +38,26 @@ pub(super) async fn busy(pool: &PgPool) -> JobResult<i64> {
     Ok(row.busy)
 }
 
+const FILL_BATCH: i64 = 5_000;
+const RESCORE_BATCH: i64 = 2_000;
+
+pub(super) async fn keep_pool(pool: &PgPool) -> JobResult {
+    loop {
+        let added = sqlx::query_file!("queries/video_find/pool_fill.sql", FILL_BATCH)
+            .execute(pool)
+            .await
+            .map_err(JobError::retryable)?;
+        if added.rows_affected() < FILL_BATCH as u64 {
+            break;
+        }
+    }
+    sqlx::query_file!("queries/video_find/pool_rescore.sql", RESCORE_BATCH)
+        .execute(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(())
+}
+
 pub(super) async fn claim(pool: &PgPool, limit: i64) -> JobResult<Vec<Claimed>> {
     sqlx::query_file_as!(Claimed, "queries/video_find/claim.sql", limit)
         .fetch_all(pool)
