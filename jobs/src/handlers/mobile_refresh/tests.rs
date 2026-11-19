@@ -10,6 +10,8 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::json;
 use tokio::task::JoinSet;
 
+use backend_contracts::auth::token_fingerprint;
+
 use super::*;
 
 const ACCOUNT: &str = "4242";
@@ -146,7 +148,7 @@ async fn parallel_refreshes_spend_the_refresh_token_once_and_keep_the_rotated_pa
     let mut callers = JoinSet::new();
     for _ in 0..20 {
         let refresher = refresher.clone();
-        callers.spawn(async move { refresher.refresh(connection_id).await });
+        callers.spawn(async move { refresher.refresh(connection_id, None).await });
     }
     let mut outcomes = Vec::new();
     while let Some(answer) = callers.join_next().await {
@@ -173,11 +175,69 @@ async fn a_fresh_credential_is_not_refreshed(pool: PgPool) -> anyhow::Result<()>
     let (refresher, calls) = refresher(&pool, Answer::Rotated).await?;
     let connection_id = linked(&pool, "6 days").await?;
 
-    let answer = refresher.refresh(connection_id).await?;
+    let answer = refresher.refresh(connection_id, None).await?;
 
     assert_eq!(answer.outcome, RefreshOutcome::AlreadyFresh);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(answer.state.is_some_and(|state| state.status == "active"));
+    assert!(answer.state.is_some_and(
+        |state| state.status == "active" && state.access_token.as_deref() == Some("old-access")
+    ));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_fresh_token_the_caller_saw_rejected_is_refreshed_once(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (refresher, calls) = refresher(&pool, Answer::Rotated).await?;
+    let connection_id = linked(&pool, "6 days").await?;
+    let rejected = token_fingerprint("old-access");
+
+    let first = refresher.refresh(connection_id, Some(&rejected)).await?;
+    let second = refresher.refresh(connection_id, Some(&rejected)).await?;
+
+    assert_eq!(first.outcome, RefreshOutcome::Refreshed);
+    assert!(
+        first
+            .state
+            .is_some_and(|state| state.access_token.as_deref() == Some("fake-access-1"))
+    );
+    assert_eq!(second.outcome, RefreshOutcome::AlreadyFresh);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_fingerprint_of_another_token_keeps_the_fresh_one(pool: PgPool) -> anyhow::Result<()> {
+    let (refresher, calls) = refresher(&pool, Answer::Rotated).await?;
+    let connection_id = linked(&pool, "6 days").await?;
+    let rejected = token_fingerprint("older-access");
+
+    let answer = refresher.refresh(connection_id, Some(&rejected)).await?;
+
+    assert_eq!(answer.outcome, RefreshOutcome::AlreadyFresh);
+    assert!(
+        answer
+            .state
+            .is_some_and(|state| state.access_token.as_deref() == Some("old-access"))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_relinked_credential_hands_out_no_token(pool: PgPool) -> anyhow::Result<()> {
+    let (refresher, _) = refresher(&pool, Answer::InvalidGrant).await?;
+    let connection_id = linked(&pool, "-1 minute").await?;
+
+    let answer = refresher.refresh(connection_id, None).await?;
+
+    assert_eq!(answer.outcome, RefreshOutcome::ReauthorizationRequired);
+    assert!(
+        answer
+            .state
+            .is_some_and(|state| state.access_token.is_none())
+    );
     Ok(())
 }
 
@@ -188,8 +248,8 @@ async fn a_rejected_refresh_token_asks_for_a_relink_and_stops_refreshing(
     let (refresher, calls) = refresher(&pool, Answer::InvalidGrant).await?;
     let connection_id = linked(&pool, "-1 minute").await?;
 
-    let first = refresher.refresh(connection_id).await?;
-    let second = refresher.refresh(connection_id).await?;
+    let first = refresher.refresh(connection_id, None).await?;
+    let second = refresher.refresh(connection_id, None).await?;
 
     assert_eq!(first.outcome, RefreshOutcome::ReauthorizationRequired);
     assert_eq!(second.outcome, RefreshOutcome::ReauthorizationRequired);
@@ -206,8 +266,8 @@ async fn a_captcha_is_a_refusal_retried_later_without_a_relink(pool: PgPool) -> 
     let (refresher, calls) = refresher(&pool, Answer::Captcha).await?;
     let connection_id = linked(&pool, "-1 minute").await?;
 
-    let first = refresher.refresh(connection_id).await?;
-    let second = refresher.refresh(connection_id).await?;
+    let first = refresher.refresh(connection_id, None).await?;
+    let second = refresher.refresh(connection_id, None).await?;
 
     assert_eq!(first.outcome, RefreshOutcome::RetryLater);
     assert!(first.retry_after_sec.is_some_and(|seconds| seconds >= 30));
@@ -226,7 +286,7 @@ async fn a_rejected_client_cools_the_app_down_and_keeps_the_link(
     let (refresher, calls) = refresher(&pool, Answer::InvalidClient).await?;
     let connection_id = linked(&pool, "-1 minute").await?;
 
-    let answer = refresher.refresh(connection_id).await?;
+    let answer = refresher.refresh(connection_id, None).await?;
 
     assert_eq!(answer.outcome, RefreshOutcome::RetryLater);
     assert!(
@@ -245,7 +305,7 @@ async fn a_rejected_client_cools_the_app_down_and_keeps_the_link(
 async fn a_session_without_a_mobile_link_is_not_connected(pool: PgPool) -> anyhow::Result<()> {
     let (refresher, calls) = refresher(&pool, Answer::Rotated).await?;
 
-    let answer = refresher.refresh(Uuid::now_v7()).await?;
+    let answer = refresher.refresh(Uuid::now_v7(), None).await?;
 
     assert_eq!(answer.outcome, RefreshOutcome::NotConnected);
     assert!(answer.state.is_none());

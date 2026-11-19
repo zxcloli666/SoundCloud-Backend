@@ -430,7 +430,7 @@ fn extract_cookie_hydration_data(html: &str) -> Option<(CookieHydrationSound, St
 
 #[cfg(test)]
 mod tests {
-    use super::{Transcoding, plain_in_order};
+    use super::{Transcoding, is_full, plain_in_order};
 
     fn transcoding(preset: &str, quality: &str, protocol: &str) -> Transcoding {
         serde_json::from_value(serde_json::json!({
@@ -447,6 +447,22 @@ mod tests {
             .iter()
             .map(|t| t.format.as_ref().unwrap().protocol.clone().unwrap())
             .collect()
+    }
+
+    #[test]
+    fn a_snipped_or_preview_transcoding_is_never_full() {
+        let mut snipped = transcoding("mp3_1_0", "sq", "hls");
+        snipped.snipped = Some(true);
+        let preview: Transcoding = serde_json::from_value(serde_json::json!({
+            "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/a/preview/hls",
+            "preset": "mp3_1_0",
+            "quality": "sq",
+        }))
+        .unwrap();
+
+        assert!(!is_full(&snipped));
+        assert!(!is_full(&preview));
+        assert!(is_full(&transcoding("mp3_1_0", "sq", "hls")));
     }
 
     #[test]

@@ -788,6 +788,26 @@ mod tests {
     }
 
     #[test]
+    fn a_preview_never_ranks_and_a_snip_policy_closes_the_track() {
+        let transcodings: Vec<Transcoding> = serde_json::from_value(serde_json::json!([
+            { "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/a/stream/progressive", "preset": "mp3_1_0", "quality": "sq", "snipped": true, "format": { "protocol": "progressive", "mime_type": "audio/mpeg" } },
+            { "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/b/preview/hls", "preset": "mp3_1_0", "quality": "sq", "format": { "protocol": "hls", "mime_type": "audio/mpeg" } }
+        ]))
+        .unwrap();
+
+        assert!(ranked_transcodings(&transcodings, quality::SQ).is_empty());
+        for (policy, closed) in [("SNIP", true), ("BLOCK", true), ("ALLOW", false)] {
+            let track = ResolvedTrack {
+                permalink_url: None,
+                track_authorization: None,
+                media: None,
+                policy: Some(policy.to_owned()),
+            };
+            assert_eq!(track.closed_here(), closed, "{policy}");
+        }
+    }
+
+    #[test]
     fn asking_for_hq_leaves_only_aac_160k_and_better() {
         let transcodings: Vec<Transcoding> = serde_json::from_value(serde_json::json!([
             { "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/a/stream/progressive", "preset": "mp3_1_0", "quality": "sq", "format": { "protocol": "progressive", "mime_type": "audio/mpeg" } },

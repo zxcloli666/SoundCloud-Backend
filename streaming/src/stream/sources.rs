@@ -12,6 +12,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{info, warn};
 
 use super::free_hq::FreeSlot;
+use super::mobile::{Found, Link};
 use super::quality;
 use super::restricted::RestrictedSource;
 use crate::AppState;
@@ -204,73 +205,113 @@ pub(super) async fn try_restricted(
 ) -> Option<(Response, &'static str)> {
     super::trace::source("restricted", at_least, async move {
         let src = restricted_source(state, track_urn, tag, at_least, premium).await?;
-        let quality = src.quality;
+        serve_restricted(state, track_urn, tag, src, upload, slot).await
+    })
+    .await
+}
 
-        if let (Some(wvd_url), Some(wvd_token)) = (
-            state.config.edge_wvd_url.as_deref(),
-            state.config.edge_wvd_token.as_deref(),
-        ) && let Some(audio) = crate::stream::proxy::hls_decrypt_via_relay(
-            &src.manifest,
-            &src.token,
-            wvd_url,
-            wvd_token,
-        )
-        .await
-        {
-            let bytes = Bytes::from(audio);
-            if upload.takes(quality) && bytes.len() > 8192 {
-                state.storage.upload_in_background_with_quality(
-                    track_urn.to_string(),
-                    bytes.clone(),
-                    quality,
-                );
+pub(super) async fn try_mobile(
+    state: &AppState,
+    link: Option<&Link>,
+    track_urn: &str,
+    tag: &str,
+    tier: &'static str,
+    upload: UploadRule,
+    slot: Option<Arc<FreeSlot>>,
+) -> Option<(Response, &'static str)> {
+    let mobile = state.mobile.as_deref()?;
+    let link = link.filter(|link| link.serves(tier))?;
+    super::trace::source("mobile", tier, async move {
+        let found = mobile.find(link, track_urn, tier).await;
+        link.keep_plan(&state.pg);
+        match found {
+            Found::Clear(fetched) => {
+                let quality = fetched.2;
+                respond_with_data(state, track_urn, fetched, upload)
+                    .ok()
+                    .map(|response| (response, quality))
             }
-            return Some((
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("content-type", src.content_type)
-                    .header("x-audio-quality", quality)
-                    .body(Body::from(bytes))
-                    .unwrap(),
-                quality,
-            ));
+            Found::Encrypted(src) => {
+                serve_restricted(state, track_urn, tag, src, upload, slot).await
+            }
+            Found::Miss(outcome) => {
+                info!("{tag} {track_urn} mobile has no full stream at {tier}: {outcome}");
+                crate::metrics::record_source("mobile", outcome);
+                super::trace::failed(outcome, outcome);
+                None
+            }
         }
+    })
+    .await
+}
 
-        let engine = state.decryptor.as_ref()?;
-        let fetcher: Arc<dyn decrypt::Fetcher> =
-            Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-                client: state.http_client.clone(),
-                proxy_url: state.config.sc_proxy_url.clone(),
-            });
-        let stream = match engine
-            .process_stream(&src.manifest, &src.token, fetcher)
+async fn serve_restricted(
+    state: &AppState,
+    track_urn: &str,
+    tag: &str,
+    src: RestrictedSource,
+    upload: UploadRule,
+    slot: Option<Arc<FreeSlot>>,
+) -> Option<(Response, &'static str)> {
+    let quality = src.quality;
+
+    if let (Some(wvd_url), Some(wvd_token)) = (
+        state.config.edge_wvd_url.as_deref(),
+        state.config.edge_wvd_token.as_deref(),
+    ) && let Some(audio) =
+        crate::stream::proxy::hls_decrypt_via_relay(&src.manifest, &src.token, wvd_url, wvd_token)
             .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("{tag} {track_urn} restricted decode failed: {e}");
-                return None;
-            }
-        };
-
-        let keep = upload.takes(quality).then(|| {
-            let storage = state.storage.clone();
-            let urn = track_urn.to_string();
-            Box::new(move |whole: Bytes| {
-                storage.upload_in_background_with_quality(urn, whole, quality)
-            }) as Keep
-        });
-        Some((
+    {
+        let bytes = Bytes::from(audio);
+        if upload.takes(quality) && bytes.len() > 8192 {
+            state.storage.upload_in_background_with_quality(
+                track_urn.to_string(),
+                bytes.clone(),
+                quality,
+            );
+        }
+        return Some((
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", src.content_type)
                 .header("x-audio-quality", quality)
-                .body(decrypt_to_the_end(stream, keep, slot))
+                .body(Body::from(bytes))
                 .unwrap(),
             quality,
-        ))
-    })
-    .await
+        ));
+    }
+
+    let engine = state.decryptor.as_ref()?;
+    let fetcher: Arc<dyn decrypt::Fetcher> = Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
+        client: state.http_client.clone(),
+        proxy_url: state.config.sc_proxy_url.clone(),
+    });
+    let stream = match engine
+        .process_stream(&src.manifest, &src.token, fetcher)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("{tag} {track_urn} restricted decode failed: {e}");
+            return None;
+        }
+    };
+
+    let keep = upload.takes(quality).then(|| {
+        let storage = state.storage.clone();
+        let urn = track_urn.to_string();
+        Box::new(move |whole: Bytes| storage.upload_in_background_with_quality(urn, whole, quality))
+            as Keep
+    });
+    Some((
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", src.content_type)
+            .header("x-audio-quality", quality)
+            .body(decrypt_to_the_end(stream, keep, slot))
+            .unwrap(),
+        quality,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

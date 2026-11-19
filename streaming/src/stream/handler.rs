@@ -8,10 +8,11 @@ use axum::response::{IntoResponse, Redirect, Response};
 use tracing::{info, warn};
 
 use super::free_hq::{FreeSlot, Gate};
+use super::mobile::Link;
 use super::quality;
 use super::sources::{
-    UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_relay_track,
-    try_restricted, try_session_oauth,
+    UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_mobile,
+    try_relay_track, try_restricted, try_session_oauth,
 };
 use crate::AppState;
 use crate::db::postgres::SessionInfo;
@@ -96,11 +97,16 @@ async fn stream_inner(
 ) -> Result<Response, AppError> {
     let track_urn = super::storage::canonical_track_urn(&track_urn).ok_or(AppError::NotFound)?;
     let access = extract_stream_access(&state, &track_urn, &query)?;
-    let session = state
+    let mut session = state
         .pg
         .get_session(&access.session_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
+    let mobile = state
+        .mobile
+        .as_ref()
+        .zip(session.mobile.take())
+        .and_then(|(mobile, linked)| mobile.link(linked));
 
     let is_premium = check_is_premium(&state, &session).await;
     let hq = access.high_quality;
@@ -137,6 +143,7 @@ async fn stream_inner(
         secret_token,
         is_premium,
         stored_quality,
+        mobile: mobile.as_ref(),
         upload: UploadRule {
             cacheable: policy.cacheable,
             kept: kept_quality,
@@ -165,12 +172,17 @@ struct StreamRequest<'a> {
     secret_token: Option<&'a str>,
     is_premium: bool,
     stored_quality: Option<&'static str>,
+    mobile: Option<&'a Link>,
     upload: UploadRule,
 }
 
 impl StreamRequest<'_> {
     fn uq_live(&self) -> bool {
-        self.is_premium && self.state.cookies.as_ref().is_some_and(|c| c.serves_uq())
+        self.is_premium && (self.cookies_uq() || self.mobile.is_some_and(Link::serves_uq))
+    }
+
+    fn cookies_uq(&self) -> bool {
+        self.state.cookies.as_ref().is_some_and(|c| c.serves_uq())
     }
 }
 
@@ -182,12 +194,19 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
         access_token,
         secret_token,
         is_premium,
+        mobile,
         upload,
         ..
     } = *req;
 
     if tier == quality::UQ {
-        if req.uq_live()
+        if let Some((r, q)) =
+            try_mobile(state, mobile, track_urn, tag, quality::UQ, upload, None).await
+        {
+            served(tag, track_urn, "mobile", q);
+            return Ok(r);
+        }
+        if req.cookies_uq()
             && let Some(r) = try_cookies(state, track_urn, tag, true, is_premium).await
         {
             served(tag, track_urn, "cookies_hq", r.2);
@@ -200,6 +219,12 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
             HqTry::Missed => {}
         }
     } else {
+        if let Some((r, q)) =
+            try_mobile(state, mobile, track_urn, tag, quality::SQ, upload, None).await
+        {
+            served(tag, track_urn, "mobile", q);
+            return Ok(r);
+        }
         if let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
             served(tag, track_urn, "relay_track", r.2);
             return respond_with_data(state, track_urn, r, upload);
@@ -255,6 +280,7 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
         secret_token,
         is_premium,
         stored_quality,
+        mobile,
         upload,
         ..
     } = *req;
@@ -273,13 +299,31 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
         return Ok(response);
     }
 
+    if !hq
+        && let Some((r, q)) =
+            try_mobile(state, mobile, track_urn, tag, quality::SQ, upload, None).await
+    {
+        served(tag, track_urn, "mobile", q);
+        return Ok(r);
+    }
+
     if !hq && let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
         served(tag, track_urn, "relay_track", r.2);
         return respond_with_data(state, track_urn, r, upload);
     }
 
     if hq {
-        if uq_live && let Some(r) = try_cookies(state, track_urn, tag, true, is_premium).await {
+        if uq_live
+            && let Some((r, q)) =
+                try_mobile(state, mobile, track_urn, tag, quality::UQ, upload, None).await
+        {
+            served(tag, track_urn, "mobile", q);
+            return Ok(r);
+        }
+        if uq_live
+            && req.cookies_uq()
+            && let Some(r) = try_cookies(state, track_urn, tag, true, is_premium).await
+        {
             served(tag, track_urn, "cookies_hq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
@@ -298,6 +342,12 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
             && let Some(response) = from_storage(req, tag).await
         {
             return Ok(response);
+        }
+        if let Some((r, q)) =
+            try_mobile(state, mobile, track_urn, tag, quality::SQ, upload, None).await
+        {
+            served(tag, track_urn, "mobile", q);
+            return Ok(r);
         }
         if let Some(r) = try_session_oauth(
             state,
@@ -389,6 +439,7 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
         access_token,
         secret_token,
         is_premium,
+        mobile,
         upload,
         ..
     } = *req;
@@ -398,6 +449,21 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
         Ok(slot) => slot,
         Err(answer) => return Ok(HqTry::Refused(answer)),
     };
+
+    if let Some((r, q)) = try_mobile(
+        state,
+        mobile,
+        track_urn,
+        tag,
+        quality::HQ,
+        upload,
+        slot.clone(),
+    )
+    .await
+    {
+        served(tag, track_urn, "mobile", q);
+        return Ok(HqTry::Served(r));
+    }
 
     let mut anon_has_no_hq = false;
     for source in live_hq_order(is_premium) {
@@ -592,7 +658,8 @@ mod tests {
     use crate::stream::free_hq::{BUSY_RETRY_AFTER, FreeHq, SHUT_RETRY_AFTER};
     use axum::http::{HeaderValue, StatusCode, header};
 
-    const SOURCES: [&str; 11] = [
+    const SOURCES: [&str; 12] = [
+        "mobile",
         "cdn_proxy",
         "cdn_redirect",
         "relay_track",

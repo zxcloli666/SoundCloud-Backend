@@ -58,6 +58,8 @@ pub struct MobileState {
     pub refresh_lease_expires_at_unix_ms: Option<i64>,
     pub retry_at_unix_ms: Option<i64>,
     pub last_refresh_error_kind: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -133,6 +135,20 @@ mod tests {
 
         assert_eq!(request.target, RefreshTarget::Mobile);
         assert!(reply.mobile.is_none());
+    }
+
+    #[test]
+    fn mobile_state_from_an_old_core_has_no_token() {
+        let state: MobileState = serde_json::from_value(serde_json::json!({
+            "status": "active",
+            "expiresAtUnixMs": 1,
+            "refreshLeaseExpiresAtUnixMs": null,
+            "retryAtUnixMs": null,
+            "lastRefreshErrorKind": null,
+        }))
+        .expect("an old state decodes");
+
+        assert!(state.access_token.is_none());
     }
 
     #[test]

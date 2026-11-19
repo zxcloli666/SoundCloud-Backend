@@ -1,4 +1,4 @@
-use backend_contracts::auth::{MobileState, RefreshOutcome};
+use backend_contracts::auth::{MobileState, RefreshOutcome, token_fingerprint};
 use chrono::{DateTime, TimeDelta, Utc};
 use redact::Secret;
 use sc_mobile::{MobileApp, MobileError, TokenSet};
@@ -9,6 +9,7 @@ use super::Standing;
 
 const LEASE_SECONDS: i32 = 60;
 const REFRESH_DUE_BUFFER: TimeDelta = TimeDelta::minutes(5);
+const ACTIVE: &str = "active";
 const RELINK_REQUIRED: &str = "relink_required";
 const RATE_LIMITED: &str = "rate_limited";
 const MESSAGE_LIMIT: usize = 200;
@@ -74,12 +75,12 @@ impl Credential {
         }))
     }
 
-    pub(super) fn standing(&self) -> Option<Standing> {
+    pub(super) fn standing(&self, rejected: Option<&str>) -> Option<Standing> {
         let now = Utc::now();
         if self.status == RELINK_REQUIRED {
             return Some((RefreshOutcome::ReauthorizationRequired, None));
         }
-        if self.expires_at > now + REFRESH_DUE_BUFFER {
+        if self.expires_at > now + REFRESH_DUE_BUFFER && !self.rejected(rejected) {
             return Some((RefreshOutcome::AlreadyFresh, None));
         }
         if let Some(seconds) = self.lease_seconds(now) {
@@ -102,6 +103,7 @@ impl Credential {
             refresh_lease_expires_at_unix_ms: lease_expires_at.map(|at| at.timestamp_millis()),
             retry_at_unix_ms: self.retry_at.map(|at| at.timestamp_millis()),
             last_refresh_error_kind: self.last_refresh_error_kind.clone(),
+            access_token: (self.status == ACTIVE).then(|| self.access_token.expose().clone()),
         }
     }
 
@@ -191,6 +193,11 @@ impl Credential {
         .execute(pool)
         .await?;
         Ok(recorded.rows_affected() > 0)
+    }
+
+    fn rejected(&self, fingerprint: Option<&str>) -> bool {
+        fingerprint
+            .is_some_and(|fingerprint| fingerprint == token_fingerprint(self.access_token.expose()))
     }
 
     fn lease_seconds(&self, now: DateTime<Utc>) -> Option<i64> {

@@ -37,6 +37,8 @@ pub struct Config {
     pub edge_wvd_url: Option<String>,
     pub ready_canary_track: Option<String>,
     pub hq_upgrade: bool,
+    pub mobile_streaming: bool,
+    pub nats_url: String,
 }
 
 impl Config {
@@ -111,6 +113,8 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             hq_upgrade: hq_upgrade_from_env(env::var("STREAMING_HQ_UPGRADE").ok().as_deref()),
+            mobile_streaming: env::var("MOBILE_STREAMING").is_ok_and(|v| v.trim() == "on"),
+            nats_url: env::var("NATS_URL").unwrap_or_default(),
         }
     }
 
