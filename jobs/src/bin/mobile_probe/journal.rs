@@ -150,7 +150,9 @@ impl Journal {
     }
 
     pub fn failed(&self) -> bool {
-        self.rows.iter().any(|row| row.outcome == Outcome::Failed)
+        self.rows.iter().enumerate().any(|(index, row)| {
+            row.outcome == Outcome::Failed && !verdict::is_superseded(&self.rows, index)
+        })
     }
 
     pub fn print_summary(&self) {

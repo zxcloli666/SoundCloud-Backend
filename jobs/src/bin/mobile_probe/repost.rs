@@ -1,16 +1,23 @@
 use sc_mobile::{Caller, MobileClient, reposts};
 use serde_json::Value;
 
-use crate::actions::{LEFT, is_item, step};
+use crate::actions::{Answer, LEFT, is_item, step};
 use crate::comment::items_of;
 use crate::journal::Journal;
 
 pub async fn run(client: &MobileClient, caller: &Caller, journal: &mut Journal, track: &str) {
     let add = reposts::add(track);
-    let added = step(client, caller, journal, "repost.add", &add, |_| {
+    let mut added = step(client, caller, journal, "repost.add#post", &add, |_| {
         "reposted".to_owned()
     })
     .await;
+    if refused_shape(&added) {
+        let put = reposts::add_put(track);
+        added = step(client, caller, journal, "repost.add#put", &put, |_| {
+            "reposted".to_owned()
+        })
+        .await;
+    }
     if !added.ok {
         return;
     }
@@ -43,6 +50,10 @@ pub async fn run(client: &MobileClient, caller: &Caller, journal: &mut Journal, 
         |body| listed(body, track, false),
     )
     .await;
+}
+
+fn refused_shape(answer: &Answer) -> bool {
+    !answer.ok && !answer.blocked && matches!(answer.status, Some(404 | 405))
 }
 
 fn listed(body: &Value, track: &str, expected: bool) -> String {

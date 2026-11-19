@@ -6,6 +6,10 @@ pub fn add(track_urn: &str) -> MobileRequest {
     MobileRequest::post(&["reposts", "tracks", track_urn], &json!({}))
 }
 
+pub fn add_put(track_urn: &str) -> MobileRequest {
+    MobileRequest::put(&["reposts", "tracks", track_urn], &json!({}))
+}
+
 pub fn remove(track_urn: &str) -> MobileRequest {
     MobileRequest::delete(&["reposts", "tracks", track_urn])
 }
@@ -44,6 +48,17 @@ mod tests {
         assert_eq!(removed.body(), None);
         assert_eq!(
             path(&removed).as_deref(),
+            Some("/reposts/tracks/soundcloud:tracks:1")
+        );
+    }
+
+    #[test]
+    fn a_repost_can_also_be_put_on_the_same_path() {
+        let added = add_put("soundcloud:tracks:1");
+
+        assert_eq!(added.method(), &Method::PUT);
+        assert_eq!(
+            path(&added).as_deref(),
             Some("/reposts/tracks/soundcloud:tracks:1")
         );
     }

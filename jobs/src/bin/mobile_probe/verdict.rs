@@ -14,7 +14,13 @@ fn verdict(rows: &[Row], action: &str) -> Option<String> {
     let prefix = format!("{action}.");
     let own: Vec<&Row> = rows
         .iter()
-        .filter(|row| row.step.starts_with(&prefix) && row.outcome != Outcome::Skipped)
+        .enumerate()
+        .filter(|(index, row)| {
+            row.step.starts_with(&prefix)
+                && row.outcome != Outcome::Skipped
+                && !is_superseded(rows, *index)
+        })
+        .map(|(_, row)| row)
         .collect();
     if own.is_empty() {
         return None;
@@ -33,7 +39,35 @@ fn verdict(rows: &[Row], action: &str) -> Option<String> {
         || own
             .iter()
             .any(|row| row.notes.iter().any(|note| note.starts_with("unclear")));
-    Some(if unclear { "unclear" } else { "ok" }.to_owned())
+    if unclear {
+        return Some("unclear".to_owned());
+    }
+    Some(match winners(&own, &prefix) {
+        Some(won) => format!("ok ({won})"),
+        None => "ok".to_owned(),
+    })
+}
+
+fn winners(own: &[&Row], prefix: &str) -> Option<String> {
+    let won: Vec<String> = own
+        .iter()
+        .filter(|row| row.outcome == Outcome::Passed && row.step.contains('#'))
+        .filter_map(|row| row.step.strip_prefix(prefix))
+        .map(|step| step.replace('#', ": "))
+        .collect();
+    (!won.is_empty()).then(|| won.join(", "))
+}
+
+pub fn is_superseded(rows: &[Row], index: usize) -> bool {
+    let row = &rows[index];
+    let Some((stem, _)) = row.step.split_once('#') else {
+        return false;
+    };
+    row.outcome == Outcome::Failed
+        && rows[index + 1..].iter().any(|later| {
+            later.outcome == Outcome::Passed
+                && later.step.split_once('#').map(|(later_stem, _)| later_stem) == Some(stem)
+        })
 }
 
 #[cfg(test)]
@@ -69,5 +103,43 @@ mod tests {
                 "playlist: unclear"
             ]
         );
+    }
+
+    #[test]
+    fn a_refused_shape_is_dropped_when_a_later_one_wins() {
+        let rows = [
+            row("playlist.create#flat", Some(400), Outcome::Failed, "answer"),
+            row(
+                "playlist.create#wrapped",
+                Some(200),
+                Outcome::Passed,
+                "created",
+            ),
+            row("repost.add#post", Some(405), Outcome::Failed, "answer"),
+            row("repost.add#put", Some(200), Outcome::Passed, "reposted"),
+        ];
+
+        assert!(is_superseded(&rows, 0));
+        assert!(!is_superseded(&rows, 1));
+        assert_eq!(
+            lines(&rows),
+            vec!["repost: ok (add: put)", "playlist: ok (create: wrapped)"]
+        );
+    }
+
+    #[test]
+    fn every_shape_refused_stays_refused() {
+        let rows = [
+            row("playlist.create#flat", Some(400), Outcome::Failed, "answer"),
+            row(
+                "playlist.create#wrapped",
+                Some(422),
+                Outcome::Failed,
+                "answer",
+            ),
+        ];
+
+        assert!(!is_superseded(&rows, 0));
+        assert_eq!(lines(&rows), vec!["playlist: refused 400"]);
     }
 }

@@ -12,6 +12,7 @@ pub struct Answer {
     pub body: Value,
     pub ok: bool,
     pub blocked: bool,
+    pub status: Option<u16>,
 }
 
 pub async fn run(client: &MobileClient, args: &Args, caller: &Caller, journal: &mut Journal) {
@@ -53,6 +54,7 @@ pub async fn step(
 ) -> Answer {
     let outcome = client.call(caller, request).await;
     let blocked = datadome::is_datadome(&outcome);
+    let status = outcome.as_ref().ok().map(|reply| reply.status);
     let body = json_of(&outcome).unwrap_or(Value::Null);
     let failure = failure_note(&outcome);
     let note = failure.clone().unwrap_or_else(|| describe(&body));
@@ -62,6 +64,7 @@ pub async fn step(
         body,
         ok: failure.is_none(),
         blocked,
+        status,
     }
 }
 
