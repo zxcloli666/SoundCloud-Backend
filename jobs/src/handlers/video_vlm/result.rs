@@ -106,6 +106,17 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         if held.file == HeldFile::Stored {
             return self.drop_stored(track, attempt, held, model).await;
         }
+        if !held.next.is_empty() && queue::advance(&self.pool, track, attempt).await? {
+            info!(
+                track,
+                attempt,
+                model,
+                left = held.next.len(),
+                "VLM found the video static; the next candidate goes to the check"
+            );
+            self.drop_temp(&held.s3_key).await;
+            return Ok(());
+        }
         let wait = self.pacing.static_recheck;
         let why = Some(WorkerReason::StaticVideo.as_str());
         queue::settle(
@@ -119,7 +130,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         )
         .await?;
         info!(track, attempt, model, "VLM found a static video");
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(held).await;
         Ok(())
     }
 
@@ -195,7 +206,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             Some(Some(replaced)) if replaced != key => self.drop_replaced(&replaced).await,
             Some(_) => {}
         }
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(held).await;
         Ok(())
     }
 
@@ -224,7 +235,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             reason = reason.as_str(),
             "VLM check failed for good"
         );
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(&held).await;
         Ok(())
     }
 
@@ -244,7 +255,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         match (held.file, stage.as_deref()) {
             (_, None | Some("pending_vlm")) => {}
             (HeldFile::Stored, _) => self.mark_stored(track, &held, reason).await?,
-            _ => self.drop_temp(&held.s3_key).await,
+            _ => self.drop_temps(&held).await,
         }
         Ok(())
     }
@@ -263,8 +274,14 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             track,
             attempt, stage, "held video is gone; the search starts over"
         );
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(&held).await;
         Ok(())
+    }
+
+    async fn drop_temps(&self, held: &Held) {
+        for key in held.temps() {
+            self.drop_temp(key).await;
+        }
     }
 
     pub(super) async fn drop_temp(&self, key: &str) {

@@ -211,6 +211,14 @@ async def test_a_known_clip_label_returns_the_cut_piece_without_the_model(
     assert media.stream_types(out) == ["video"]
 
 
+async def test_a_cut_with_a_pad_starts_that_much_later(harness: Harness) -> None:
+    plain = await harness.run(label="clip", prompt=None)
+    padded = await harness.run(label="clip", prompt=None, pad_ms=2000)
+
+    grown = int(padded.fields["duration_ms"]) - int(plain.fields["duration_ms"])  # type: ignore[call-overload]
+    assert 1800 <= grown <= 2200
+
+
 async def test_a_known_static_label_needs_neither_the_file_nor_the_model(
     harness: Harness,
 ) -> None:

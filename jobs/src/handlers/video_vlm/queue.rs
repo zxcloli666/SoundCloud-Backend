@@ -21,9 +21,25 @@ pub(super) struct Held {
     #[serde(default)]
     pub(super) file: HeldFile,
     #[serde(default)]
+    pub(super) pad_ms: i32,
+    #[serde(default)]
+    pub(super) next: Vec<Next>,
+    #[serde(default)]
     pub(super) vlm_sent: i64,
     #[serde(default)]
     pub(super) haiku: Option<Known>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct Next {
+    pub(super) s3_key: String,
+}
+
+impl Held {
+    pub(super) fn temps(&self) -> Vec<&str> {
+        let next = self.next.iter().map(|next| next.s3_key.as_str());
+        std::iter::once(self.s3_key.as_str()).chain(next).collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -131,6 +147,14 @@ pub(super) async fn next(
         held: serde_json::from_value(row.payload).ok(),
         duration_ms: row.duration_ms,
     }))
+}
+
+pub(super) async fn advance(pool: &PgPool, track: &str, attempt: i32) -> JobResult<bool> {
+    let advanced = sqlx::query_file!("queries/video_vlm/advance.sql", track, attempt)
+        .fetch_optional(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(advanced.is_some())
 }
 
 pub(super) async fn release(pool: &PgPool, track: &str, attempt: i32, wait: Duration, why: &str) {

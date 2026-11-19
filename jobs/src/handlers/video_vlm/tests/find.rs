@@ -1,11 +1,13 @@
-use backend_contracts::pipeline::VideoLabel;
+use std::collections::BTreeMap;
+
+use backend_contracts::pipeline::{VideoKind, VideoLabel, VideoNext};
 use backend_contracts::reasons::WorkerReason;
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
 use super::fakes::HAIKU;
-use super::haiku::frames_result;
+use super::haiku::{cut_part, frames_result};
 use super::{Rig, answer, bench_on, finish, stage, stored, vlm_config};
 use crate::handlers::video_find::tests::research::{research, videos, wait_days, with_video};
 use crate::handlers::video_find::tests::{self as find, Memory};
@@ -186,5 +188,132 @@ async fn the_search_takes_no_track_while_the_vlm_backlog_is_full(
         .execute(&pool)
         .await?;
     assert_eq!(free().await?, 2);
+    Ok(())
+}
+
+fn runner_up(candidate: u32) -> VideoNext {
+    VideoNext {
+        candidate,
+        kind: VideoKind::Clip,
+        offset_ms: 1_000,
+        pad_ms: 2_000,
+        duration_ms: 120_000,
+        looped: false,
+        scores: BTreeMap::from([("ber".to_owned(), 0.05)]),
+    }
+}
+
+async fn found_with_runners_up(
+    pool: &PgPool,
+    staged: u32,
+    next: &[u32],
+) -> anyhow::Result<(Rig, Memory, super::fakes::Wire, super::fakes::Eyes)> {
+    find::star_track(pool, "11", 1, 1).await?;
+    let (finder, _, blobs, _) = find::rig(pool);
+    find::staged_claim(pool, &blobs, "11", staged).await?;
+    let mut result = find::part_message("11", 1, CUT, &[CUT], 0);
+    result.next = Some(next.iter().copied().map(runner_up).collect());
+    find::finish(&finder, &result).await?;
+    let (vlm, _, wire, eyes, _) = bench_on(pool, vlm_config(true), blobs.clone());
+    Ok((vlm, blobs, wire, eyes))
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn when_the_first_candidate_is_static_the_next_one_is_checked_at_once_and_stored(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (vlm, blobs, wire, eyes) = found_with_runners_up(&pool, 2, &[0]).await?;
+    assert_eq!(
+        blobs.keys(),
+        ["video-tmp/11-1-0.mp4", "video-tmp/11-1-cut.mp4"]
+    );
+
+    tick(&vlm).await;
+    eyes.answers(Ok(VideoLabel::Static));
+    finish(&vlm, frames_result("11", 1)).await?;
+    assert_eq!(stage(&pool, "11").await?.0, "pending_vlm");
+    assert_eq!(blobs.keys(), ["video-tmp/11-1-0.mp4"]);
+
+    tick(&vlm).await;
+    let (request, id) = wire.requests().pop().unwrap();
+    assert_eq!(
+        request["video_url"],
+        "https://storage.test/video-tmp/11-1-0.mp4"
+    );
+    assert_eq!(
+        (request["frames"].clone(), id.as_str()),
+        (json!(true), "video_vlm:11:1:2")
+    );
+    eyes.answers(Ok(VideoLabel::Clip));
+    finish(&vlm, frames_result("11", 1)).await?;
+    let (request, id) = wire.requests().pop().unwrap();
+    assert_eq!(
+        (
+            request["label"].clone(),
+            request["pad_ms"].clone(),
+            request["offset_ms"].clone()
+        ),
+        (json!("clip"), json!(2_000), json!(1_000))
+    );
+    assert_eq!(id, "video_vlm:11:1:3");
+    finish(&vlm, cut_part(VideoLabel::Clip, "11", b"the second cut")).await?;
+
+    let row = stored(&pool, "11").await?.unwrap();
+    assert_eq!(
+        (row.0.as_str(), row.1.as_str(), row.2, row.3),
+        ("clip", "video/11-1.mp4", 1_000, false)
+    );
+    assert_eq!(row.5["ber"], f64::from(0.05_f32));
+    assert_eq!(row.5["vlm"]["model"], HAIKU);
+    assert_eq!(blobs.keys(), ["video/11-1.mp4"]);
+    assert_eq!(
+        blobs.get("video/11-1.mp4").as_deref(),
+        Some(&b"the second cut"[..])
+    );
+    assert_eq!(stage(&pool, "11").await?.0, "found");
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn at_most_three_candidates_go_to_the_vlm_and_all_static_settles_static(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (vlm, blobs, wire, eyes) = found_with_runners_up(&pool, 4, &[0, 2, 3]).await?;
+    assert_eq!(
+        blobs.keys(),
+        [
+            "video-tmp/11-1-0.mp4",
+            "video-tmp/11-1-2.mp4",
+            "video-tmp/11-1-cut.mp4"
+        ]
+    );
+
+    for _ in 0..3 {
+        tick(&vlm).await;
+        eyes.answers(Ok(VideoLabel::Static));
+        finish(&vlm, frames_result("11", 1)).await?;
+    }
+    tick(&vlm).await;
+
+    let urls: Vec<Value> = wire
+        .requests()
+        .into_iter()
+        .map(|(request, _)| request["video_url"].clone())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://storage.test/video-tmp/11-1-cut.mp4",
+            "https://storage.test/video-tmp/11-1-0.mp4",
+            "https://storage.test/video-tmp/11-1-2.mp4"
+        ]
+    );
+    assert_eq!(stored(&pool, "11").await?, None);
+    assert!(blobs.keys().is_empty());
+    assert_eq!(
+        stage(&pool, "11").await?,
+        ("static".to_owned(), 1, Some("static_video".to_owned()))
+    );
+    assert_eq!(wait_days(&pool, "11").await?, ("static".to_owned(), 90));
     Ok(())
 }

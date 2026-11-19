@@ -109,7 +109,7 @@ async def test_a_confident_loop_is_encoded_and_returned_in_parts_like_a_clip(
     media.make_mpegts(source, seconds=4)
     best = evaluated(source, Verdict("loop", False, "loop_score"))
 
-    outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(120))
+    outcome = await harness.lane._deliver(best, [], harness.folder, Deadline.after(120))
 
     blob = b"".join(outcome.parts)
     assert outcome.status is Status.OK
@@ -129,10 +129,39 @@ async def test_an_uncertain_loop_is_encoded_like_a_confident_one_and_says_so(
     media.make_mpegts(source, seconds=2)
     best = evaluated(source, Verdict("loop", True, "loop_score"))
 
-    outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(60))
+    outcome = await harness.lane._deliver(best, [], harness.folder, Deadline.after(60))
 
     assert b"".join(outcome.parts)[4:8] == b"ftyp"
     assert (outcome.fields["kind"], outcome.fields["uncertain"]) == ("loop", True)
+
+
+async def test_the_runners_up_ride_along_with_their_window_and_the_pad_a_late_start_needs(
+    harness: Harness,
+) -> None:
+    source = harness.folder / "c1.mp4"
+    media.make_mpegts(source, seconds=2)
+    runner = harness.folder / "c2.mp4"
+    media.make_mpegts(runner, seconds=3)
+    best = evaluated(source, Verdict("clip", False, "motion"))
+    late = replace(
+        evaluated(runner, Verdict("clip", True, "motion")),
+        candidate=Candidate(2, "video", "u"),
+        offset_ms=-1500,
+    )
+
+    outcome = await harness.lane._deliver(best, [late], harness.folder, Deadline.after(120))
+
+    assert outcome.fields["candidate"] == 1
+    [runner_up] = outcome.fields["next"]  # type: ignore[misc]
+    assert {key: runner_up[key] for key in ("candidate", "kind", "offset_ms", "pad_ms", "loop")} == {
+        "candidate": 2,
+        "kind": "clip",
+        "offset_ms": 0,
+        "pad_ms": 1500,
+        "loop": False,
+    }
+    assert 2500 <= runner_up["duration_ms"] <= 3500
+    assert runner_up["scores"]["ber"] == 0.02
 
 
 async def test_a_kept_video_that_wins_comes_back_without_a_file(harness: Harness) -> None:
@@ -141,7 +170,7 @@ async def test_a_kept_video_that_wins_comes_back_without_a_file(harness: Harness
     kept = Candidate(0, "video", "u", kept=True)
     best = replace(evaluated(source, Verdict("clip", False, "motion")), candidate=kept)
 
-    outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(60))
+    outcome = await harness.lane._deliver(best, [], harness.folder, Deadline.after(60))
 
     assert outcome.parts == ()
     assert (outcome.fields["candidate"], outcome.fields["uncertain"]) == (0, False)

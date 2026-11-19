@@ -1,5 +1,7 @@
 use anyhow::{bail, ensure};
-use backend_contracts::pipeline::{VideoClip, VideoFindResult, VideoKind, VideoPart};
+use backend_contracts::pipeline::{
+    MAX_VIDEO_NEXT, VideoClip, VideoFindResult, VideoKind, VideoNext, VideoPart,
+};
 use backend_contracts::reasons::{FailureClass, WorkerReason, WorkerStatus};
 use backend_contracts::worker_contract::WorkerLane;
 use serde_json::{Value, json};
@@ -21,6 +23,7 @@ pub(super) struct Found {
     pub(super) duration_ms: i32,
     pub(super) looped: bool,
     pub(super) scores: Value,
+    pub(super) next: Vec<VideoNext>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -65,7 +68,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         let held = self
             .settle_verdict(track, attempt, verdict, &staged, result)
             .await?;
-        self.drop_temps(&leftover(&staged, held)).await;
+        self.drop_temps(&leftover(&staged, &held)).await;
         Ok(())
     }
 
@@ -97,13 +100,15 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
             track,
             attempt,
             found,
-            candidate,
+            &staged,
             &key,
-        );
-        if !held.await? {
+        )
+        .await?;
+        let Some(held) = held else {
             self.drop_temps(std::slice::from_ref(&key)).await;
-        }
-        self.drop_temps(&staged.keys()).await;
+            return Ok(());
+        };
+        self.drop_temps(&leftover(&staged, &held)).await;
         Ok(())
     }
 
@@ -114,29 +119,22 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         verdict: &Verdict,
         staged: &Staged,
         result: &VideoFindResult,
-    ) -> JobResult<Option<u32>> {
+    ) -> JobResult<Vec<u32>> {
         let detail = result.detail.as_deref();
         match verdict {
             Verdict::Bare(found) if candidate_of(staged, found.candidate)?.kept => {
                 keep(&self.pool, &self.pacing, track, attempt).await?;
-                Ok(None)
+                Ok(Vec::new())
             }
             Verdict::Bare(found) => {
-                let candidate = candidate_of(staged, found.candidate)?;
-                let key = &candidate.key;
-                hold(
-                    &self.pool,
-                    &self.pacing,
-                    track,
-                    attempt,
-                    found,
-                    candidate,
-                    key,
-                )
-                .await?;
-                Ok(Some(found.candidate))
+                let key = &candidate_of(staged, found.candidate)?.key;
+                let held =
+                    hold(&self.pool, &self.pacing, track, attempt, found, staged, key).await?;
+                let mut held = held.unwrap_or_default();
+                held.push(found.candidate);
+                Ok(held)
             }
-            Verdict::Found(..) => Ok(None),
+            Verdict::Found(..) => Ok(Vec::new()),
             Verdict::Settle(reason) => {
                 settle(&self.pool, &self.pacing, track, attempt, *reason).await?;
                 info!(
@@ -146,7 +144,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     detail,
                     "video search settled"
                 );
-                Ok(None)
+                Ok(Vec::new())
             }
             Verdict::Retry(reason) => {
                 retry(&self.pool, &self.pacing, track, attempt, *reason).await?;
@@ -157,17 +155,17 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     detail,
                     "video search failed"
                 );
-                Ok(None)
+                Ok(Vec::new())
             }
         }
     }
 }
 
-fn leftover(staged: &Staged, held: Option<u32>) -> Vec<String> {
+fn leftover(staged: &Staged, held: &[u32]) -> Vec<String> {
     staged
         .candidates
         .iter()
-        .filter(|candidate| !candidate.kept && Some(candidate.index) != held)
+        .filter(|candidate| !candidate.kept && !held.contains(&candidate.index))
         .map(|candidate| candidate.key.clone())
         .collect()
 }
@@ -212,10 +210,20 @@ async fn hold(
     track: &str,
     attempt: i32,
     found: &Found,
-    candidate: &StagedCandidate,
+    staged: &Staged,
     key: &str,
-) -> JobResult<bool> {
+) -> JobResult<Option<Vec<u32>>> {
+    let candidate = candidate_of(staged, found.candidate)?;
     let cut = key != candidate.key;
+    let next: Vec<(u32, Value)> = found
+        .next
+        .iter()
+        .filter_map(|next| {
+            let candidate = staged.candidate(next.candidate).filter(|one| !one.kept)?;
+            Some((next.candidate, held_next(next, candidate)))
+        })
+        .take(MAX_VIDEO_NEXT as usize)
+        .collect();
     let payload = json!({
         "kind": found.kind.as_str(),
         "s3_key": key,
@@ -226,6 +234,7 @@ async fn hold(
         "source": candidate.source.as_str(),
         "source_ref": candidate.source_ref,
         "scores": found.scores,
+        "next": next.iter().map(|(_, next)| next).collect::<Vec<_>>(),
     });
     let held = sqlx::query_file!(
         "queries/video_find/settle.sql",
@@ -242,16 +251,32 @@ async fn hold(
     .fetch_optional(pool)
     .await
     .map_err(JobError::retryable)?;
-    if held.is_some() {
-        info!(
-            track,
-            attempt,
-            kind = found.kind.as_str(),
-            cut,
-            "video waits for the VLM check"
-        );
+    if held.is_none() {
+        return Ok(None);
     }
-    Ok(held.is_some())
+    info!(
+        track,
+        attempt,
+        kind = found.kind.as_str(),
+        cut,
+        next = next.len(),
+        "video waits for the VLM check"
+    );
+    Ok(Some(next.into_iter().map(|(index, _)| index).collect()))
+}
+
+fn held_next(next: &VideoNext, candidate: &StagedCandidate) -> Value {
+    json!({
+        "kind": next.kind.as_str(),
+        "s3_key": candidate.key,
+        "offset_ms": next.offset_ms,
+        "pad_ms": next.pad_ms,
+        "duration_ms": next.duration_ms,
+        "loop": next.looped,
+        "source": candidate.source.as_str(),
+        "source_ref": candidate.source_ref,
+        "scores": next.scores,
+    })
 }
 
 pub(super) async fn settle(
@@ -359,6 +384,7 @@ fn found(result: &VideoFindResult) -> anyhow::Result<Verdict> {
         duration_ms,
         looped: result.looped.unwrap_or(kind == VideoKind::Loop),
         scores: serde_json::to_value(result.scores.clone().unwrap_or_default())?,
+        next: result.next.clone().unwrap_or_default(),
     });
     Ok(match file {
         Some(file) => Verdict::Found(window, file),

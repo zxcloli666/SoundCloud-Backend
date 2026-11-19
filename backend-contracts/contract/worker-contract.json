@@ -3498,6 +3498,53 @@
           ],
           "type": "string"
         },
+        "VideoNext": {
+          "properties": {
+            "candidate": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "duration_ms": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/$defs/VideoKind"
+            },
+            "loop": {
+              "type": "boolean"
+            },
+            "offset_ms": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pad_ms": {
+              "default": 0,
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "scores": {
+              "additionalProperties": {
+                "format": "float",
+                "type": "number"
+              },
+              "default": {},
+              "type": "object"
+            }
+          },
+          "required": [
+            "candidate",
+            "kind",
+            "offset_ms",
+            "duration_ms",
+            "loop"
+          ],
+          "type": "object"
+        },
         "VideoPart": {
           "properties": {
             "data": {
@@ -3714,6 +3761,13 @@
         },
         "loop": {
           "type": "boolean"
+        },
+        "next": {
+          "items": {
+            "$ref": "#/$defs/VideoNext"
+          },
+          "maxItems": 2,
+          "type": "array"
         },
         "offset_ms": {
           "format": "int32",
@@ -5536,6 +5590,11 @@
         "offset_ms": {
           "format": "int32",
           "minimum": 0,
+          "type": "integer"
+        },
+        "pad_ms": {
+          "format": "int32",
+          "minimum": 1,
           "type": "integer"
         },
         "prompt": {

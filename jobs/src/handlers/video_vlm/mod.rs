@@ -181,6 +181,9 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             video_url: url.to_string(),
             duration_ms: claim.duration_ms.filter(|duration| *duration > 0),
             offset_ms: Some(held.offset_ms),
+            pad_ms: matches!(step, Step::Cut(_))
+                .then_some(held.pad_ms)
+                .filter(|pad| *pad > 0),
             frames: (step == Step::Frames).then_some(true),
             label: match step {
                 Step::Cut(label) => Some(label),

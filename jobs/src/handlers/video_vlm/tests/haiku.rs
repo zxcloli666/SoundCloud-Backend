@@ -49,7 +49,7 @@ pub(super) fn frames_result(id: &str, attempt: i64) -> VideoVlmResult {
     result
 }
 
-fn cut_part(label: VideoLabel, id: &str, file: &[u8]) -> VideoVlmResult {
+pub(super) fn cut_part(label: VideoLabel, id: &str, file: &[u8]) -> VideoVlmResult {
     let mut result = file_part(label, id, 1, file, &[file], 0);
     result.model = None;
     result.scores = None;

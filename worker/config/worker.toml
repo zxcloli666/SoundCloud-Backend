@@ -161,7 +161,7 @@ fingerprint_s = 120
 
 [video]
 analysis_s = 180.0
-max_verified = 2
+max_verified = 3
 max_candidate_s = 600.0
 max_download_mib = 96
 download_timeout_s = 240
