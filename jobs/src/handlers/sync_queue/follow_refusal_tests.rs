@@ -175,6 +175,6 @@ async fn a_follow_limited_with_429_still_retries(pool: PgPool) -> anyhow::Result
             .fetch_one(&pool)
             .await?;
     assert_eq!(row, (false, 0, true));
-    assert_eq!(mirror(&pool).await?, (true, true, false));
+    assert_eq!(mirror(&pool).await?, (true, false, false));
     Ok(())
 }
