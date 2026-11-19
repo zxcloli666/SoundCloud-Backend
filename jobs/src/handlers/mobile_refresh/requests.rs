@@ -2,7 +2,7 @@ use sc_mobile::{MobileError, TokenSet};
 
 const REQUESTS: &str = "sc_mobile_requests_total";
 
-pub(super) fn refresh(answer: &Result<TokenSet, MobileError>) {
+pub(super) fn record(answer: &Result<TokenSet, MobileError>) {
     let status_class = match answer {
         Ok(_) => "2xx",
         Err(error) => error.status_class(),

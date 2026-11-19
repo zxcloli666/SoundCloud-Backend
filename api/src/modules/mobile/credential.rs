@@ -32,7 +32,7 @@ impl MobileService {
             .await?;
         match link_v {
             Some(link_v) => {
-                wt::call(
+                let applied = wt::call(
                     &mut transaction,
                     &wt::MobileCredentialLink {
                         soundcloud_user_id: account,
@@ -47,6 +47,11 @@ impl MobileService {
                     },
                 )
                 .await?;
+                if !applied {
+                    return Err(AppError::internal(
+                        "mobile credential changed while linking",
+                    ));
+                }
             }
             None => {
                 sqlx::query_file!(

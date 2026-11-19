@@ -1,6 +1,6 @@
 mod credential;
 mod failure;
-mod metrics;
+mod requests;
 
 use backend_contracts::auth::{MobileState, RefreshOutcome};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -87,7 +87,7 @@ impl MobileRefresh {
             }
             Err(error) => Err(error),
         };
-        metrics::refresh(&answer);
+        requests::record(&answer);
         let recorded = match answer {
             Ok(tokens) => self.complete(&credential, &claim, tokens).await?,
             Err(error) => self.fail(&credential, &claim, &error).await?,

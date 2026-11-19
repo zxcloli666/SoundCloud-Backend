@@ -1,4 +1,4 @@
-SELECT connection.username,
+SELECT coalesce(nullif(connection.username, ''), catalog.username, '') AS "username!",
        catalog.avatar_url AS "avatar_url?"
 FROM sessions AS session
 JOIN soundcloud_connections AS connection
