@@ -45,6 +45,7 @@ sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/exercise.log"
 . "$here/lookups.sh"
 . "$here/verify_hash.sh"
 . "$here/pressure.sh"
+. "$here/copy_sync.sh"
 
 say "three nodes on real logical replication"
 val postgres "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname = 'scd_repl'" | grep -q 1 || sql -d postgres -c "CREATE ROLE scd_repl NOLOGIN"
@@ -171,7 +172,6 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 . "$here/keep.sh"
 . "$here/lyrics_race.sh"
 . "$here/receipts.sh"
-. "$here/copy_sync.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do
