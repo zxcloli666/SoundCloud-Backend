@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import math
 from dataclasses import replace
 
 import numpy as np
@@ -9,26 +8,37 @@ import pytest
 
 from tests.conftest import BASE_ENV, CONFIG_DIR
 from worker import settings as s
-from worker.models.vlm import VlmSlot, data_uri, scores_of
+from worker.models.vlm import FirstStep, VlmSlot, data_uri, scores_of
 from worker.runtime.protocol import BadInput
 
 LABELS = ["clip", "loop", "static"]
 
 
-def top(*pairs: tuple[str, float]) -> dict[str, object]:
-    entries = [{"token": token, "logprob": math.log(p)} for token, p in pairs]
-    return {"content": [{"token": pairs[0][0], "top_logprobs": entries}]}
+STARTS = {"clip": 1, "loop": 2, "static": 3}
 
 
-def test_scores_are_the_normalized_mass_of_the_tokens_that_start_each_label() -> None:
-    scores = scores_of(top(("lo", 0.6), ("clip", 0.3), ("st", 0.05), (" ", 0.05)), LABELS)
+def test_scores_are_the_softmax_of_the_first_token_of_each_label() -> None:
+    logits = np.log(np.array([0.5, 0.3, 0.15, 0.05]))
 
-    assert scores == pytest.approx({"clip": 0.3 / 0.95, "loop": 0.6 / 0.95, "static": 0.05 / 0.95})
+    scores = scores_of(logits, STARTS)
+
+    assert scores == pytest.approx({"clip": 0.3 / 0.5, "loop": 0.15 / 0.5, "static": 0.05 / 0.5})
 
 
-def test_without_logprobs_there_are_no_scores() -> None:
-    assert scores_of(None, LABELS) == {}
-    assert scores_of(top(("xyz", 0.9)), LABELS) == {}
+def test_without_the_first_step_there_are_no_scores() -> None:
+    assert scores_of(None, STARTS) == {}
+    assert scores_of(np.zeros(2), STARTS) == {}
+
+
+def test_the_first_step_keeps_the_logits_it_saw_first() -> None:
+    first = FirstStep()
+    row = np.array([1.0, 2.0])
+
+    assert first(np.zeros(0), row) is row
+    first(np.zeros(0), np.array([9.0, 9.0]))
+
+    assert first.logits is not None
+    assert first.logits.tolist() == [1.0, 2.0]
 
 
 def test_a_frame_goes_out_as_a_jpeg_data_uri() -> None:

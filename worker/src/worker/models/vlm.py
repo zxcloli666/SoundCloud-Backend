@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import base64
-import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import cv2
 import numpy as np
 from huggingface_hub import hf_hub_download
-from llama_cpp import Llama
+from llama_cpp import Llama, LogitsProcessorList
 from llama_cpp.llama_chat_format import Qwen25VLChatHandler
 from llama_cpp.llama_grammar import LlamaGrammar
 
@@ -17,7 +16,6 @@ from worker.settings import VLM_METHOD, VLM_SLOT
 
 JPEG_QUALITY = 90
 ANSWER_TOKENS = 4
-TOP_LOGPROBS = 20
 WARMUP_SIDE = 224
 
 
@@ -87,35 +85,42 @@ class VlmSlot:
         grammar = LlamaGrammar.from_string(
             "root ::= " + " | ".join(f'"{label}"' for label in labels), verbose=False
         )
+        first = FirstStep()
         reply: Any = self._llm.create_chat_completion(
             messages=messages,
             temperature=0.0,
             max_tokens=ANSWER_TOKENS,
             grammar=grammar,
-            logprobs=True,
-            top_logprobs=TOP_LOGPROBS,
+            logits_processor=LogitsProcessorList([first]),
         )
         choice = reply["choices"][0]
         label = str(choice["message"]["content"]).strip().lower()
         if label not in labels:
             raise BadInput(f"the model answered {label!r}")
-        return {"label": label, "scores": scores_of(choice.get("logprobs"), labels)}
+        starts = {name: self._first_token(name) for name in labels}
+        return {"label": label, "scores": scores_of(first.logits, starts)}
+
+    def _first_token(self, label: str) -> int:
+        assert self._llm is not None
+        return self._llm.tokenize(label.encode(), add_bos=False, special=False)[0]
 
 
-def scores_of(logprobs: Mapping[str, Any] | None, labels: Sequence[str]) -> dict[str, float]:
-    content = (logprobs or {}).get("content") or []
-    if not content:
+class FirstStep:
+    def __init__(self) -> None:
+        self.logits: np.ndarray | None = None
+
+    def __call__(self, _ids: np.ndarray, logits: np.ndarray) -> np.ndarray:
+        if self.logits is None:
+            self.logits = np.array(logits, dtype=np.float64)
+        return logits
+
+
+def scores_of(logits: np.ndarray | None, starts: Mapping[str, int]) -> dict[str, float]:
+    if logits is None or any(token >= logits.shape[0] for token in starts.values()):
         return {}
-    weights = dict.fromkeys(labels, 0.0)
-    for entry in content[0]["top_logprobs"]:
-        token = str(entry["token"]).strip().lower()
-        if not token:
-            continue
-        for label in labels:
-            if label.startswith(token):
-                weights[label] += math.exp(float(entry["logprob"]))
-    total = sum(weights.values())
-    return {label: weight / total for label, weight in weights.items()} if total > 0 else {}
+    picked = np.array([logits[token] for token in starts.values()])
+    weights = np.exp(picked - picked.max())
+    return dict(zip(starts, (weights / weights.sum()).tolist(), strict=True))
 
 
 def data_uri(frame: np.ndarray) -> str:
