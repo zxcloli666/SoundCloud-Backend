@@ -207,6 +207,8 @@ fn inverse(action_type: &str) -> Option<&'static str> {
         "unlike_track" => Some("like_track"),
         "like_playlist" => Some("unlike_playlist"),
         "unlike_playlist" => Some("like_playlist"),
+        "track_reaction_set" => Some("track_reaction_remove"),
+        "track_reaction_remove" => Some("track_reaction_set"),
         "follow_user" => Some("unfollow_user"),
         "unfollow_user" => Some("follow_user"),
         _ => None,
