@@ -590,7 +590,7 @@ async fn a_confident_loop_arrives_in_parts_and_waits_for_the_vlm_as_a_cut_file_w
             "loop": true,
             "source": "youtube",
             "source_ref": "ref1",
-            "scores": {"ber": 0.02},
+            "scores": {"ber": f64::from(0.02_f32)},
         })
     );
     Ok(())

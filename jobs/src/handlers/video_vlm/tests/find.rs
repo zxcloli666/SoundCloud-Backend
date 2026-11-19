@@ -55,7 +55,7 @@ async fn a_confident_clip_is_stored_from_its_search_cut_only_after_haiku_says_cl
         (row.0.as_str(), row.1.as_str(), row.2, row.3, row.4),
         ("clip", "video/11-1.mp4", 3_839, false, 96_000)
     );
-    assert_eq!(row.5["ber"], 0.02);
+    assert_eq!(row.5["ber"], f64::from(0.02_f32));
     assert_eq!(
         row.5["vlm"],
         json!({"label": "clip", "model": HAIKU, "scores": {}})
