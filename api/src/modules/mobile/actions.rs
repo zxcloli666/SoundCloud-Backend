@@ -46,11 +46,19 @@ impl MobileService {
         let urn = validate::comment_urn(comment)?;
         self.require_active(account).await?;
         let id = urn.rsplit(':').next().unwrap_or_default();
-        let owner = sqlx::query_file_scalar!("queries/mobile/comment_owner.sql", id)
+        let authority = sqlx::query_file!("queries/mobile/comment_authority.sql", id)
             .fetch_optional(&self.pool)
             .await?;
-        if owner.is_some_and(|owner| owner != author_urn(account)) {
-            return Err(AppError::forbidden("Only your own comment can be deleted"));
+        if let Some(authority) = authority {
+            let me = author_urn(account);
+            let owns_track = authority.uploader_urn.as_deref() == Some(me.as_str())
+                || authority.uploader_sc_user_id.as_deref()
+                    == Some(crate::common::sc_ids::extract_sc_id(account));
+            if authority.author != me && !owns_track {
+                return Err(AppError::forbidden(
+                    "Only your own comment or a comment on your own track can be deleted",
+                ));
+            }
         }
         queue.enqueue(account, COMMENT_DELETE, &urn, None).await?;
         Ok(queued(COMMENT_DELETE, &urn))

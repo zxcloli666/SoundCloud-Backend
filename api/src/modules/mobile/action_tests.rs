@@ -326,3 +326,100 @@ async fn a_rejected_token_that_cannot_be_refreshed_is_unavailable_not_relinked(
     );
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_track_owner_may_delete_a_foreign_comment_on_their_track(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let fixture = linked(&pool, Graph::Reactions).await?;
+    let queue = queue(&pool)?;
+    for (track, uploader) in [("200", ACCOUNT), ("201", "7777")] {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms,
+                                 uploader_sc_user_id)
+             VALUES ($1, $2, 't', 't', 1000, $3)",
+        )
+        .bind(track)
+        .bind(format!("soundcloud:tracks:{track}"))
+        .bind(uploader)
+        .execute(&pool)
+        .await?;
+    }
+    for (comment, track) in [("60", "200"), ("61", "201")] {
+        sqlx::query(
+            "INSERT INTO track_comments (id, sc_track_id, sc_comment_id, user_urn, body)
+             VALUES ($1, $2, $3, 'soundcloud:users:9999', 'hi')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(track)
+        .bind(comment)
+        .execute(&pool)
+        .await?;
+    }
+
+    let on_own_track = fixture.mobile.delete_comment(&queue, ACCOUNT, "60").await?;
+    let on_foreign_track = fixture.mobile.delete_comment(&queue, ACCOUNT, "61").await;
+    let unknown = fixture.mobile.delete_comment(&queue, ACCOUNT, "62").await?;
+
+    assert_eq!(on_own_track["targetUrn"], "soundcloud:comments:60");
+    assert_eq!(
+        status_of(on_foreign_track.unwrap_err()),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(unknown["targetUrn"], "soundcloud:comments:62");
+    let targets: Vec<String> = queued(&pool).await?.into_iter().map(|row| row.1).collect();
+    assert_eq!(
+        targets,
+        vec!["soundcloud:comments:60", "soundcloud:comments:62"]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_second_rejection_marks_the_rejected_credential_for_relink(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let fixture = linked(&pool, Graph::Reactions).await?;
+
+    let stale = fixture
+        .mobile
+        .require_relink(ACCOUNT, "an-older-token")
+        .await;
+    let after_stale = credential_status(&pool).await?;
+    let rejected = fixture
+        .mobile
+        .require_relink(ACCOUNT, "old-mobile-access")
+        .await;
+    let after_match = credential_status(&pool).await?;
+    let again = fixture
+        .mobile
+        .require_relink(ACCOUNT, "old-mobile-access")
+        .await;
+
+    for error in [stale, rejected, again] {
+        let (status, code) = code_of(error).await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::CONFLICT, "mobile_relink_required")
+        );
+    }
+    assert_eq!(after_stale, ("active".to_owned(), 0));
+    assert_eq!(after_match, ("relink_required".to_owned(), 1));
+    assert_eq!(credential_status(&pool).await?, after_match);
+    let read = fixture
+        .mobile
+        .track_reactions(fixture.session_id, ACCOUNT, TRACK, "5")
+        .await;
+    assert_eq!(status_of(read.unwrap_err()), StatusCode::CONFLICT);
+    Ok(())
+}
+
+async fn credential_status(pool: &PgPool) -> anyhow::Result<(String, i32)> {
+    Ok(sqlx::query_as(
+        "SELECT status, refresh_failure_count FROM mobile_credentials
+         WHERE soundcloud_user_id = $1",
+    )
+    .bind(ACCOUNT)
+    .fetch_one(pool)
+    .await?)
+}

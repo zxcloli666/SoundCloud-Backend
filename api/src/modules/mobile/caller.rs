@@ -5,7 +5,7 @@ use sc_mobile::{Caller, MobileClient, MobileError, MobileReply, MobileRequest};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 use super::credential::RELINK_REQUIRED;
 use super::refusal::{captcha, not_linked, relink_required, unavailable};
@@ -62,9 +62,23 @@ impl MobileService {
             .ok_or_else(unavailable)?;
         let reply = send(&client, &standing, op, request).await?;
         if reply.status == UNAUTHORIZED {
-            return Err(relink_required());
+            return Err(self.require_relink(account, standing.token.expose()).await);
         }
         judged(reply)
+    }
+
+    pub(super) async fn require_relink(&self, account: &str, rejected_token: &str) -> AppError {
+        let marked = sqlx::query_file!(
+            "queries/mobile/relink_required.sql",
+            account,
+            rejected_token
+        )
+        .execute(&self.pool)
+        .await;
+        if let Err(error) = marked {
+            warn!(%error, "mobile credential was not marked for relink");
+        }
+        relink_required()
     }
 
     async fn connection_of(&self, session_id: Uuid) -> AppResult<Uuid> {
