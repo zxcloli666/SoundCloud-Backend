@@ -5,13 +5,16 @@ use axum::extract::MatchedPath;
 use axum::http::Method;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 
+pub(crate) mod mobile;
+
+pub use mobile::record_mobile_request;
+
 const HTTP_DURATION: &str = "streaming_http_request_duration_seconds";
 const HTTP_TOTAL: &str = "streaming_http_requests_total";
 const POOL_CONNECTIONS: &str = "streaming_pg_pool_connections";
 const POOL_WAIT: &str = "streaming_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "streaming_pg_pool_wait_last_seconds";
 const SOURCE_TOTAL: &str = "streaming_source_total";
-const MOBILE_REQUESTS: &str = "sc_mobile_requests_total";
 const STAR_PRIORITY_PICKED: &str = "streaming_star_priority_picked_total";
 const STAR_PRIORITY_WAITING: &str = "streaming_star_priority_waiting_seconds";
 
@@ -45,6 +48,7 @@ pub fn init() {
     match builder.install_recorder() {
         Ok(handle) => {
             if HANDLE.set(handle.clone()).is_ok() {
+                mobile::register();
                 start_upkeep(handle);
             }
         }
@@ -114,19 +118,6 @@ pub fn record_source(source: &'static str, outcome: &'static str) {
         return;
     }
     metrics::counter!(SOURCE_TOTAL, "source" => source, "outcome" => outcome).increment(1);
-}
-
-pub fn record_mobile_request(op: &'static str, status_class: &'static str) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(
-        MOBILE_REQUESTS,
-        "service" => "streaming",
-        "op" => op,
-        "status_class" => status_class
-    )
-    .increment(1);
 }
 
 pub fn record_star_priority_round(

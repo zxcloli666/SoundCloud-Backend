@@ -549,3 +549,15 @@ async fn a_blocked_track_is_refused() {
 
     assert_eq!(outcome(&found), Some(REFUSED));
 }
+
+#[test]
+fn every_outcome_and_op_the_source_records_is_scraped_from_the_start() {
+    use crate::metrics::mobile::{OPS, OUTCOMES};
+
+    for outcome in ["served", MISSED, PREVIEW, REFUSED, CAPTCHA, ERROR] {
+        assert!(OUTCOMES.contains(&outcome), "{outcome}");
+    }
+    for op in [TRANSCODINGS, super::MEDIA] {
+        assert!(OPS.contains(&op), "{op}");
+    }
+}
