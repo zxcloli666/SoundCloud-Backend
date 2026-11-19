@@ -87,6 +87,11 @@ def test_public_node_with_transcribe_fetches_every_public_lane_model(
     assert slots == {"muq", "mulan", "cpu-tools", "text", "sep", "asr", "align", "mms"}
 
 
+def test_video_node_fetches_only_the_generation_models(env: dict[str, str]) -> None:
+    slots = {item.slot for item in plan_for("gpu-video", env)}
+    assert slots == {s.IMAGE_EDIT_SLOT, s.IMAGE_TO_VIDEO_SLOT}
+
+
 def test_local_llm_weights_come_as_one_pinned_file_with_the_ai_lane(env: dict[str, str]) -> None:
     for profile in PROFILES:
         environ = {**env, s.PROFILE_ENV: profile}
