@@ -23,6 +23,17 @@ def test_rss_of_a_missing_process_is_an_error() -> None:
         memory.rss_mib(2**22 + 1)
 
 
+def test_cgroup_limit_is_read_in_mib_and_unlimited_is_none(tmp_path: Path) -> None:
+    limited = tmp_path / "memory.max"
+    limited.write_text(f"{21 << 30}\n", encoding="ascii")
+    unlimited = tmp_path / "unlimited"
+    unlimited.write_text("max\n", encoding="ascii")
+    missing = tmp_path / "missing"
+    assert memory.cgroup_limit_mib((missing, limited)) == 21 << 10
+    assert memory.cgroup_limit_mib((unlimited, limited)) is None
+    assert memory.cgroup_limit_mib((missing,)) is None
+
+
 def test_trim_returns_freed_heap_to_the_system() -> None:
     assert memory.trim()
 

@@ -12,6 +12,12 @@ SHMEM_FIELD = "RssShmem:"
 USAGE_FIELDS = frozenset({RSS_FIELD, ANON_FIELD, SHMEM_FIELD})
 PROC = Path("/proc")
 EXITED_STATES = frozenset({"Z", "X"})
+CGROUP_LIMIT_FILES = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+UNLIMITED_BYTES = 1 << 60
+BYTES_PER_MIB = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,18 @@ def tree_usage(pid: int) -> Usage:
     resident = sum(fields.get(RSS_FIELD, 0) for fields in tree)
     charged = sum(fields.get(ANON_FIELD, 0) + fields.get(SHMEM_FIELD, 0) for fields in tree)
     return Usage(resident // KIB_PER_MIB, charged // KIB_PER_MIB)
+
+
+def cgroup_limit_mib(files: tuple[Path, ...] = CGROUP_LIMIT_FILES) -> int | None:
+    for path in files:
+        try:
+            raw = path.read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        if raw == "max" or int(raw) >= UNLIMITED_BYTES:
+            return None
+        return int(raw) // BYTES_PER_MIB
+    return None
 
 
 def rss_kib(pid: int | str) -> int:

@@ -37,3 +37,4 @@ replicas = 1
 
 [slots.mms]
 replicas = 1
+max_batch = 1
