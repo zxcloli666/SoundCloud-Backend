@@ -132,7 +132,7 @@ const RELEASE_GRANTS: [(&str, &str, &str); 10] = [
     (
         "public.mobile_credentials",
         "SELECT",
-        "soundcloud_user_id,token_v",
+        "consent_v,plan_v,soundcloud_user_id,token_v",
     ),
     ("public.mobile_credentials", "UPDATE", "updated_at"),
     ("public.repl_purges", "INSERT", "pk,purged_v,tbl"),

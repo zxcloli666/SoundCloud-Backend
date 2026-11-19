@@ -61,7 +61,7 @@ DECLARE
     account text := args ->> 'soundcloud_user_id';
     seen bigint;
 BEGIN
-    SELECT credential.token_v INTO seen
+    SELECT greatest(credential.consent_v, credential.plan_v, credential.token_v) INTO seen
     FROM public.mobile_credentials AS credential
     WHERE credential.soundcloud_user_id = account;
     IF NOT FOUND OR NOT public.scd_purge_intent('mobile_credentials', jsonb_build_object('soundcloud_user_id', account), seen) THEN
@@ -103,7 +103,7 @@ BEGIN
         FROM public.soundcloud_connections AS other
         WHERE other.soundcloud_user_id = account
     ) THEN
-        SELECT credential.token_v INTO mobile_seen
+        SELECT greatest(credential.consent_v, credential.plan_v, credential.token_v) INTO mobile_seen
         FROM public.mobile_credentials AS credential
         WHERE credential.soundcloud_user_id = account;
         IF FOUND AND public.scd_purge_intent('mobile_credentials', jsonb_build_object('soundcloud_user_id', account), mobile_seen) THEN
@@ -257,4 +257,4 @@ END
 $f$;
 
 GRANT SELECT (soundcloud_user_id) ON public.soundcloud_connections TO chat_auth_release;
-GRANT SELECT (soundcloud_user_id, token_v), UPDATE (updated_at), DELETE ON public.mobile_credentials TO chat_auth_release;
+GRANT SELECT (soundcloud_user_id, token_v, plan_v, consent_v), UPDATE (updated_at), DELETE ON public.mobile_credentials TO chat_auth_release;

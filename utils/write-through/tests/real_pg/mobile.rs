@@ -57,6 +57,18 @@ async fn accounts(pool: &sqlx::PgPool) -> Vec<String> {
         .unwrap()
 }
 
+async fn plan_seen_after_the_link(pool: &sqlx::PgPool, account: &str) {
+    let newer: bool = sqlx::query_scalar(
+        "UPDATE public.mobile_credentials SET plan = 'none', plan_seen_at = now()
+         WHERE soundcloud_user_id = $1 RETURNING plan_v > token_v",
+    )
+    .bind(account)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(newer);
+}
+
 async fn receipts(pool: &sqlx::PgPool) -> Vec<String> {
     sqlx::query_scalar(
         "SELECT pk ->> 'soundcloud_user_id' FROM public.repl_purges
@@ -107,6 +119,7 @@ async fn a_relink_lands_the_same_on_both_nodes_and_an_older_one_only_touches_the
 #[tokio::test]
 async fn an_unlink_purges_on_core_with_a_receipt_and_a_missing_link_is_a_no_op() {
     let pair = Pair::new(LINKED).await;
+    plan_seen_after_the_link(&pair.core, "32").await;
 
     let run = pair
         .run(
@@ -137,6 +150,7 @@ async fn an_unlink_purges_on_core_with_a_receipt_and_a_missing_link_is_a_no_op()
 #[tokio::test]
 async fn an_orphan_drop_takes_the_mobile_link_only_with_the_last_connection() {
     let pair = Pair::new(LINKED).await;
+    plan_seen_after_the_link(&pair.core, "31").await;
 
     let alone = ConnectionDropOrphan {
         connection_id: "20000000-0000-4000-8000-000000000011".parse().unwrap(),
