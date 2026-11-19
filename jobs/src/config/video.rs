@@ -4,6 +4,7 @@ use std::time::Duration;
 use backend_contracts::pipeline::MAX_VIDEO_CANDIDATES;
 use base64::Engine as _;
 
+use super::anthropic::{self, AnthropicLadder};
 use super::env::{self, ConfigError};
 use super::{http_url, positive};
 
@@ -111,6 +112,9 @@ pub struct VideoVlmConfig {
     pub in_flight: i64,
     pub tick: Duration,
     pub timeout: Duration,
+    pub month_usd: f64,
+    pub recheck: Duration,
+    pub haiku: Option<AnthropicLadder>,
 }
 
 impl VideoVlmConfig {
@@ -119,10 +123,18 @@ impl VideoVlmConfig {
         if in_flight > 0 && ObjectsConfig::from_env()?.is_none() {
             return Err(ConfigError::Missing("VIDEO_S3_ENDPOINT".to_owned()));
         }
+        let month_usd = anthropic::month_usd("VIDEO_VLM_MONTH_USD", "0")?;
+        let haiku = match in_flight > 0 && month_usd > 0.0 {
+            true => anthropic::load("VIDEO_VLM_LADDER", None)?,
+            false => None,
+        };
         Ok(Self {
             in_flight,
             tick: Duration::from_secs(env::positive_u64("VIDEO_VLM_TICK_SECONDS", 30)?),
             timeout: Duration::from_secs(env::positive_u64("VIDEO_VLM_TIMEOUT_SECONDS", 4_200)?),
+            month_usd,
+            recheck: Duration::from_secs(env::positive_u64("VIDEO_VLM_RECHECK_SECONDS", 1_800)?),
+            haiku,
         })
     }
 }

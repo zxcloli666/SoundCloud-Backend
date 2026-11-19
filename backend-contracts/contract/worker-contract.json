@@ -4419,6 +4419,31 @@
           ],
           "type": "object"
         },
+        "VideoFileSlice": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "offset",
+            "bytes"
+          ],
+          "type": "object"
+        },
         "VideoLabel": {
           "enum": [
             "clip",
@@ -4613,6 +4638,14 @@
           "format": "int32",
           "minimum": 1,
           "type": "integer"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/VideoFileSlice"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
         },
         "label": {
           "$ref": "#/$defs/VideoLabel"
@@ -5469,6 +5502,16 @@
       "type": "object"
     },
     "video.vlm.new": {
+      "$defs": {
+        "VideoLabel": {
+          "enum": [
+            "clip",
+            "loop",
+            "static"
+          ],
+          "type": "string"
+        }
+      },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "attempt": {
@@ -5481,10 +5524,21 @@
           "minimum": 1,
           "type": "integer"
         },
+        "frames": {
+          "type": "boolean"
+        },
+        "label": {
+          "$ref": "#/$defs/VideoLabel"
+        },
         "offset_ms": {
           "format": "int32",
           "minimum": 0,
           "type": "integer"
+        },
+        "prompt": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
         },
         "sc_track_id": {
           "pattern": "^[1-9][0-9]{0,18}$",

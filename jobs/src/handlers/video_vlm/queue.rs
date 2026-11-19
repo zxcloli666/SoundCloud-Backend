@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use backend_contracts::admin_video::VideoSource;
-use serde::Deserialize;
+use backend_contracts::pipeline::VideoLabel;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::warn;
@@ -19,6 +20,14 @@ pub(super) struct Held {
     pub(super) scores: Value,
     #[serde(default)]
     pub(super) vlm_sent: i64,
+    #[serde(default)]
+    pub(super) haiku: Option<Known>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub(super) struct Known {
+    pub(super) label: VideoLabel,
+    pub(super) model: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -78,6 +87,28 @@ pub(super) async fn held(pool: &PgPool, track: &str, attempt: i32) -> JobResult<
     Ok(row
         .and_then(|row| row.payload)
         .and_then(|payload| serde_json::from_value(payload).ok()))
+}
+
+pub(super) async fn next(
+    pool: &PgPool,
+    track: &str,
+    attempt: i32,
+    known: Option<&Known>,
+) -> JobResult<Option<Claimed>> {
+    let known = known
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(JobError::permanent)?;
+    let row = sqlx::query_file!("queries/video_vlm/next.sql", track, attempt, known)
+        .fetch_optional(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(row.map(|row| Claimed {
+        sc_track_id: row.sc_track_id,
+        attempt: row.attempt,
+        held: serde_json::from_value(row.payload).ok(),
+        duration_ms: row.duration_ms,
+    }))
 }
 
 pub(super) async fn release(pool: &PgPool, track: &str, attempt: i32, wait: Duration, why: &str) {

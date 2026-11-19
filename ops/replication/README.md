@@ -213,6 +213,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 146. `0460_kinds_mobile_credential`: the kinds `mobile_credential.link` (optimistic, `link_v` wins) and `mobile_credential.drop` (core, a purge with a receipt). `connection.drop_orphan` also drops the mobile profile when the account keeps no other connection; `chat_auth_release` gets the columns it reads. The args of `mobile_credential.link` are redacted like those of `connection.login`.
 147. `0461_cmd_outbox_mobile_link_index`: a partial index of `cmd_outbox` for that redaction, built concurrently outside a transaction.
 148. `0462_scd_install`: the generated SQL again, on top of 0458: `mobile_credentials` (M) and `mobile_link_requests` (A) get their owners, guards, row hash and publication lists. Every other trigger is kept.
+149. `0463_llm_ledger`: `video_gen_spend` and `video_gen_pause` become `llm_spend` and `llm_pause`, keyed by a `ladder` column (`video_gen`, `video_vlm`); one pause row per ladder. Their old guards, row functions and guard sequences are dropped.
+150. `0464_scd_install`: the generated SQL again, on top of 0462: the two renamed tables get their registry, purge entries and guard; every other trigger is kept.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -251,6 +253,8 @@ Order for 0455-0456: run both migrations on core, main and star back to back, in
 Order for 0457-0458: core, main and star in any order (P: nothing is published, main and star keep empty tables), then jobs of this release on core. Generation stays off until `VIDEO_GEN_IN_FLIGHT` is set; a jobs of this release on a core without 0457 fails only the generation sweep, and only when it is on.
 
 Order for 0459-0462: only after 0455-0456. Core, main and star in any order (nothing writes the two tables before the api of this release), then `scd_sync_publications()` on all three and `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription (`core_from_main`, `core_from_star` on core, `main_from_core` on main, `star_from_core` on star); check that both tables are `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move. Then jobs of this release on core: an older jobs takes a mobile refresh for a connection refresh, since `target` defaults to `connection`. Then the api on main and star; it refuses to start below 0462. Linking stays off until `MOBILE_LINK_ALLOW` is set and an active `client_kind = 'mobile'` app row exists.
+
+Order for 0463-0464: core, main and star in any order (P), then jobs of this release on core. A jobs of 0457 on a core with 0463 fails the generation sweep, and only when `VIDEO_GEN_IN_FLIGHT` is on.
 
 Order for 0446 and the 0442 rewrite: any node, any time. `jobs-migrate` of this release drops the two foreign keys of a host that applied the old 0442 (5 s lock timeout on `tracks`; on a timeout it fails and is run again).
 

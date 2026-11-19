@@ -18,6 +18,8 @@ const READERS: &[&str] = &[
     "stream_bytes(",
     "jetstream_domains(",
     "worker_backlog(",
+    "anthropic::load(",
+    "anthropic::month_usd(",
 ];
 
 const DATABASE_PREFIXES: &[&str] = &["", "OPS_", "JOBS_READ_"];

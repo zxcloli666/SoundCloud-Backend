@@ -1,4 +1,4 @@
-UPDATE video_gen_pause
+UPDATE llm_pause
 SET alerted_at = now(),
     updated_at = now()
-WHERE id = 1
+WHERE ladder = $1

@@ -2,14 +2,13 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 
-use super::budget;
-use super::director::{
-    self, Answer, Brief, Director, DirectorError, Look, Picture, Review, Verdict,
-};
+use super::director::{self, Brief, Director, Look, Picture, Review, Verdict};
 use super::lanes::{self, Lanes};
 use super::state::{self, Accepted, Gen, Save, Stage};
-use super::{Store, VideoGen};
+use super::{LADDER, Store, VideoGen};
 use crate::handlers::video_accounts::Notify;
+use crate::llm::anthropic::{Answer, LlmError};
+use crate::llm::ledger;
 use crate::queue::{JobError, JobResult};
 
 const RETRY_PUBLISH: Duration = Duration::from_secs(120);
@@ -253,29 +252,30 @@ impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
     }
 
     async fn directed<T>(&self, job: &Gen, answer: Answer<T>) -> JobResult<Directed<T>> {
-        let period = budget::period(chrono::Utc::now(), self.reset_day);
-        budget::record(&self.pool, period, &job.track, &answer.spend).await?;
+        let period = ledger::period(chrono::Utc::now(), self.reset_day);
+        ledger::record(&self.pool, LADDER, period, &job.track, &answer.spend).await?;
         match answer.result {
             Ok(value) => {
-                budget::resume(&self.pool).await?;
+                ledger::resume(&self.pool, LADDER).await?;
                 Ok(Directed::Done(value))
             }
-            Err(DirectorError::Down(reason)) => {
+            Err(LlmError::Down(reason)) => {
                 let text = format!(
                     "Video generation is paused: the Opus API is unreachable ({reason}). It checks every {} min and resumes by itself.",
                     self.config.recheck.as_secs() / 60
                 );
-                budget::pause(
+                ledger::pause(
                     &self.pool,
                     &self.notify,
-                    budget::API_DOWN,
+                    LADDER,
+                    ledger::API_DOWN,
                     self.config.recheck,
                     &text,
                 )
                 .await?;
                 Ok(Directed::Halted)
             }
-            Err(DirectorError::Invalid(reason)) => Ok(Directed::Invalid(reason)),
+            Err(LlmError::Invalid(reason)) => Ok(Directed::Invalid(reason)),
         }
     }
 

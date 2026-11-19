@@ -2,6 +2,8 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
+use crate::llm::anthropic::Answer;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Plan {
     pub character: Character,
@@ -66,31 +68,6 @@ pub struct Review<'a> {
 pub enum Verdict {
     Accept { trim_start_ms: i32 },
     Redo { reason: String, edit: String },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Spend {
-    pub call: &'static str,
-    pub provider: String,
-    pub model: String,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cache_read_tokens: i64,
-    pub cache_write_tokens: i64,
-    pub usd: f64,
-}
-
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
-pub enum DirectorError {
-    #[error("the director is unreachable: {0}")]
-    Down(String),
-    #[error("the director answered something unusable: {0}")]
-    Invalid(String),
-}
-
-pub struct Answer<T> {
-    pub result: Result<T, DirectorError>,
-    pub spend: Vec<Spend>,
 }
 
 pub trait Director: Send + Sync {

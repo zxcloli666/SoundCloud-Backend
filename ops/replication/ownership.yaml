@@ -168,8 +168,8 @@ tables:
   video_accounts: {class: P, note: "core-private source accounts of the video lane with their secrets (cookies or tokens); never replicated, written only by the jobs admin video RPC and read back as a sha256 prefix"}
   video_flags: {class: P, note: "core-private admin flags (artist or account) that opt a catalog owner into video generation"}
   track_video_gen: {class: P, note: "core-private video generation state per track: stage, plan, accepted shots, temp keys and rejections; jobs fills and settles it"}
-  video_gen_spend: {class: P, note: "core-private ledger of the video director calls: tokens and usd per call and budget period"}
-  video_gen_pause: {class: P, note: "core-private single row: video generation paused on budget or a down director API, with the time of the one alert"}
+  llm_spend: {class: P, note: "core-private ledger of the jobs LLM ladder calls (video director, video VLM): ladder, tokens and usd per call and budget period"}
+  llm_pause: {class: P, note: "core-private pause per jobs LLM ladder on budget or a down API, with the time of the one alert"}
   track_work_aliases: {class: P}
   track_enrich_queue:
     class: P

@@ -18,14 +18,12 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use url::Url;
 
-use super::director::{
-    Answer, Brief, Character, Director, DirectorError, Look, Plan, PlannedShot, Review, Spend,
-    Verdict,
-};
+use super::director::{Brief, Character, Director, Look, Plan, PlannedShot, Review, Verdict};
 use super::lanes::Lanes;
 use super::{Store, VideoGen};
-use crate::config::{DirectorConfig, VideoGenConfig};
+use crate::config::{AnthropicLadder, VideoGenConfig};
 use crate::handlers::video_accounts::Notify;
+use crate::llm::anthropic::{Answer, LlmError, Spend};
 use crate::objects::{Blobs, Listed, ObjectsError};
 
 pub(super) type Bench = VideoGen<Scripted, Memory, Wire, Inbox>;
@@ -52,7 +50,7 @@ pub(super) fn config() -> VideoGenConfig {
         fps: 16,
         frames: 81,
         stills: 4,
-        director: Some(DirectorConfig {
+        director: Some(AnthropicLadder {
             steps: Vec::new(),
             reset_day: 17,
         }),
@@ -110,25 +108,25 @@ pub(super) fn plan() -> Plan {
 
 #[derive(Clone, Default)]
 pub(super) struct Scripted {
-    plans: Arc<Mutex<VecDeque<Result<Plan, DirectorError>>>>,
-    verdicts: Arc<Mutex<VecDeque<Result<Verdict, DirectorError>>>>,
+    plans: Arc<Mutex<VecDeque<Result<Plan, LlmError>>>>,
+    verdicts: Arc<Mutex<VecDeque<Result<Verdict, LlmError>>>>,
     pub(super) briefs: Arc<Mutex<Vec<Brief>>>,
     pub(super) reviews: Arc<Mutex<Vec<Seen>>>,
 }
 
 impl Scripted {
-    pub(super) fn plans(&self, answer: Result<Plan, DirectorError>) {
+    pub(super) fn plans(&self, answer: Result<Plan, LlmError>) {
         self.plans.lock().unwrap().push_back(answer);
     }
 
-    pub(super) fn verdicts(&self, answer: Result<Verdict, DirectorError>) {
+    pub(super) fn verdicts(&self, answer: Result<Verdict, LlmError>) {
         self.verdicts.lock().unwrap().push_back(answer);
     }
 }
 
-fn spent<T>(call: &'static str, usd: f64, result: Result<T, DirectorError>) -> Answer<T> {
+fn spent<T>(call: &'static str, usd: f64, result: Result<T, LlmError>) -> Answer<T> {
     let spend = match &result {
-        Err(DirectorError::Down(_)) => Vec::new(),
+        Err(LlmError::Down(_)) => Vec::new(),
         _ => vec![Spend {
             call,
             provider: "opus".to_owned(),
@@ -150,7 +148,7 @@ impl Director for Scripted {
         spent(
             "plan",
             PLAN_USD,
-            next.unwrap_or(Err(DirectorError::Invalid("unscripted".to_owned()))),
+            next.unwrap_or(Err(LlmError::Invalid("unscripted".to_owned()))),
         )
     }
 
@@ -165,7 +163,7 @@ impl Director for Scripted {
         spent(
             "review",
             REVIEW_USD,
-            next.unwrap_or(Err(DirectorError::Invalid("unscripted".to_owned()))),
+            next.unwrap_or(Err(LlmError::Invalid("unscripted".to_owned()))),
         )
     }
 }

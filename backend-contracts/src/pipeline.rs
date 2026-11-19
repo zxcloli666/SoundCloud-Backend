@@ -10,6 +10,7 @@ use crate::vector_store::{
     TRACKS_COLLAB_DIMENSIONS, TRACKS_LYRICS_DIMENSIONS, TRACKS_MERT_DIMENSIONS,
     TRACKS_TASTE_DIMENSIONS,
 };
+use crate::video_gen::VideoFileSlice;
 use crate::worker_contract::done_duplicate_window_seconds;
 
 pub const SC_TRACK_ID_PATTERN: &str = "^[1-9][0-9]{0,18}$";
@@ -40,6 +41,8 @@ pub const VIDEO_PART_BYTES: u32 = 512 * 1024;
 pub const MAX_VIDEO_PART_CHARS: u32 = VIDEO_PART_BYTES.div_ceil(3) * 4;
 pub const MAX_VIDEO_PARTS: u32 = 256;
 pub const MAX_VIDEO_NAME_CHARS: u32 = 256;
+pub const MAX_VLM_PROMPT_CHARS: u32 = 4000;
+pub const MAX_VLM_FRAMES: u32 = 32;
 pub const MAX_VIDEO_SCORES: u32 = 32;
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -814,6 +817,15 @@ pub struct VideoVlmRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i32", range(min = 0))]
     pub offset_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub frames: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoLabel")]
+    pub label: Option<VideoLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(min = 1, max = MAX_VLM_PROMPT_CHARS))]
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -845,6 +857,9 @@ pub struct VideoVlmResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "VideoClip")]
     pub clip: Option<VideoClip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<VideoFileSlice>", length(min = 1, max = MAX_VLM_FRAMES))]
+    pub files: Option<Vec<VideoFileSlice>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "VideoPart")]
     pub part: Option<VideoPart>,

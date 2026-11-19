@@ -514,6 +514,30 @@ AS $f$
 SELECT md5(ROW(t.artist_name, t.artist_urn, t.artwork_url, t.duration, t.id, t.played_at, t.sc_track_id, t.soundcloud_user_id, t.title)::text) FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_llm_pause(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.alerted_at, t.created_at, t.ladder, t.paused_until, t.reason, t.updated_at)::text) FROM public.llm_pause t WHERE t.ladder = (k ->> 'ladder')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_llm_spend(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.cache_read_tokens, t.cache_write_tokens, t.call, t.created_at, t.id, t.input_tokens, t.ladder, t.model, t.output_tokens, t.period, t.provider, t.sc_track_id, t.usd)::text) FROM public.llm_spend t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_login_requests(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1462,30 +1486,6 @@ AS $f$
 SELECT md5(ROW(t.added_by, t.created_at, t.kind, t.sc_user_id)::text) FROM public.video_flags t WHERE t.kind = (k ->> 'kind')::text AND t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
-CREATE OR REPLACE FUNCTION public.scd_row_hash_video_gen_pause(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.alerted_at, t.created_at, t.id, t.paused_until, t.reason, t.updated_at)::text) FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_row_hash_video_gen_spend(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.cache_read_tokens, t.cache_write_tokens, t.call, t.created_at, t.id, t.input_tokens, t.model, t.output_tokens, t.period, t.provider, t.sc_track_id, t.usd)::text) FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
 CREATE OR REPLACE FUNCTION public.scd_row_hash_wanted_track_albums(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1626,6 +1626,10 @@ BEGIN
             RETURN public.scd_row_hash_link_requests(k);
         WHEN 'listening_history' THEN
             RETURN public.scd_row_hash_listening_history(k);
+        WHEN 'llm_pause' THEN
+            RETURN public.scd_row_hash_llm_pause(k);
+        WHEN 'llm_spend' THEN
+            RETURN public.scd_row_hash_llm_spend(k);
         WHEN 'login_requests' THEN
             RETURN public.scd_row_hash_login_requests(k);
         WHEN 'lyrics_cache' THEN
@@ -1784,10 +1788,6 @@ BEGIN
             RETURN public.scd_row_hash_video_accounts(k);
         WHEN 'video_flags' THEN
             RETURN public.scd_row_hash_video_flags(k);
-        WHEN 'video_gen_pause' THEN
-            RETURN public.scd_row_hash_video_gen_pause(k);
-        WHEN 'video_gen_spend' THEN
-            RETURN public.scd_row_hash_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             RETURN public.scd_row_hash_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN

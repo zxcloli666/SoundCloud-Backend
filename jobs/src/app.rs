@@ -308,8 +308,8 @@ pub async fn run() -> anyhow::Result<()> {
         supervisor.spawn("video temp sweep", video_find.expire(cancellation.clone()));
     }
     if let Some(video_vlm) = handlers
-        .video_vlm(databases.main.bulk.clone(), &config)
-        .await
+        .video_vlm(databases.main.bulk.clone(), &config, video_vlm_bus)
+        .await?
     {
         let vlm_receiver = video_vlm.clone();
         supervisor.spawn(
@@ -319,10 +319,7 @@ pub async fn run() -> anyhow::Result<()> {
                 async move { video_vlm.finish(result).await }
             }),
         );
-        supervisor.spawn(
-            "video VLM sweep",
-            video_vlm.sweep(video_vlm_bus, cancellation.clone()),
-        );
+        supervisor.spawn("video VLM sweep", video_vlm.sweep(cancellation.clone()));
     }
     if let Some(video_gen) = handlers
         .video_gen(databases.main.bulk.clone(), &config, video_gen_bus.clone())
