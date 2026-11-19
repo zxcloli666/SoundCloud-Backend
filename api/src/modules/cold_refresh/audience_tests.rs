@@ -45,10 +45,8 @@ async fn seed_users(pool: &PgPool) -> anyhow::Result<()> {
 async fn each_relation_reads_only_its_own_audience(pool: PgPool) -> anyhow::Result<()> {
     seed_users(&pool).await?;
     sqlx::raw_sql(
-        "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at) VALUES
-         ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:1', now()),
-         ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:2', now()),
-         ('soundcloud:playlists:42', 'playlist-reposters', 'soundcloud:users:3', now());",
+        "INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at) VALUES
+         (42, 1, 1, now()), (42, 2, 2, now()), (42, 3, 3, now());",
     )
     .execute(&pool)
     .await?;
@@ -68,10 +66,10 @@ async fn an_audience_member_without_a_catalog_profile_is_skipped(
 ) -> anyhow::Result<()> {
     seed_users(&pool).await?;
     sqlx::raw_sql(
-        "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at) VALUES
-         ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:404', now()),
-         ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:1', now() - interval '1 minute'),
-         ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:2', now() - interval '2 minutes');",
+        "INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at) VALUES
+         (42, 1, 404, now()),
+         (42, 1, 1, now() - interval '1 minute'),
+         (42, 1, 2, now() - interval '2 minutes');",
     )
     .execute(&pool)
     .await?;
@@ -84,6 +82,15 @@ async fn an_audience_member_without_a_catalog_profile_is_skipped(
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_subject_without_a_numeric_id_reads_an_empty_page(pool: PgPool) -> anyhow::Result<()> {
+    seed_users(&pool).await?;
+    let page = read_audience_page(&pool, &TRACK_FAVORITERS, "soundcloud:tracks:abc", 0, 50).await?;
+    assert!(page.collection.is_empty());
+    assert!(!page.has_more);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_last_allowed_audience_page_does_not_advertise_an_unreachable_next_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -91,9 +98,8 @@ async fn the_last_allowed_audience_page_does_not_advertise_an_unreachable_next_p
         "INSERT INTO users (sc_user_id, urn, username, username_normalized)
          SELECT n::text, 'soundcloud:users:' || n, 'User ' || n, 'user ' || n
          FROM generate_series(1, 50001) n;
-         INSERT INTO catalog_audience (subject_urn, relation, user_urn)
-         SELECT 'soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:' || n
-         FROM generate_series(1, 50001) n;",
+         INSERT INTO catalog_audience_ids (subject_id, relation, user_id)
+         SELECT 42, 2, n FROM generate_series(1, 50001) n;",
     )
     .execute(&pool)
     .await?;
@@ -196,6 +202,8 @@ async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
          ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:1'),
          ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:2'),
          ('soundcloud:playlists:42', 'playlist-reposters', 'soundcloud:users:3');
+         INSERT INTO catalog_audience_ids (subject_id, relation, user_id) VALUES
+         (42, 1, 1), (42, 2, 2), (42, 3, 3);
          INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id, synced_at, complete) VALUES
          ('42', 'track-favoriters', 'public', gen_random_uuid(), 1, gen_random_uuid(), now(), true),
          ('42', 'playlist-reposters', 'public', gen_random_uuid(), 1, gen_random_uuid(), now(), true);",
@@ -214,6 +222,10 @@ async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
         .fetch_all(&pool)
         .await?;
     assert_eq!(left, ["soundcloud:playlists:42"]);
+    let left_ids: Vec<i16> = sqlx::query_scalar("SELECT relation FROM catalog_audience_ids")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(left_ids, [3]);
     let snapshots: Vec<String> =
         sqlx::query_scalar("SELECT collection FROM catalog_collection_sync ORDER BY collection")
             .fetch_all(&pool)
@@ -230,8 +242,7 @@ async fn a_public_subject_serves_its_mirror_and_schedules_one_refresh(
     sqlx::raw_sql(
         "INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, sharing)
          VALUES ('42', 'soundcloud:playlists:42', 'Set', 'set', 'public');
-         INSERT INTO catalog_audience (subject_urn, relation, user_urn) VALUES
-         ('soundcloud:playlists:42', 'playlist-reposters', 'soundcloud:users:1');",
+         INSERT INTO catalog_audience_ids (subject_id, relation, user_id) VALUES (42, 3, 1);",
     )
     .execute(&pool)
     .await?;

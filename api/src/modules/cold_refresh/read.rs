@@ -40,10 +40,22 @@ pub async fn read_audience_page(
     let offset = page
         .checked_mul(limit)
         .ok_or_else(|| AppError::bad_request("Collection page is out of range"))?;
+    let relation = coll
+        .kind
+        .audience_relation()
+        .ok_or_else(|| AppError::internal("Not an audience collection"))?;
+    let Ok(subject_id) = crate::common::sc_ids::extract_sc_id(subject_urn).parse::<i64>() else {
+        return Ok(ListPageResult {
+            collection: Vec::new(),
+            page,
+            page_size: limit,
+            has_more: false,
+        });
+    };
     let keys = sqlx::query_file_scalar!(
         "queries/cold_refresh/audience_page.sql",
-        coll.subject_urn(subject_urn),
-        coll.kind.as_str(),
+        subject_id,
+        relation,
         limit + 1,
         offset
     )
