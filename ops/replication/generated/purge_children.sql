@@ -485,6 +485,36 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_llm_pause(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.ladder INTO p FROM public.llm_pause t WHERE t.ladder = (k ->> 'ladder')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.llm_pause t WHERE t.ladder = (k ->> 'ladder')::text;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_llm_spend(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.id INTO p FROM public.llm_spend t WHERE t.id = (k ->> 'id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.llm_spend t WHERE t.id = (k ->> 'id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_lyrics_cache(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1352,36 +1382,6 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE FUNCTION public.scd_purge_video_gen_pause(k jsonb)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    p record;
-BEGIN
-    SELECT t.id INTO p FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint;
-    IF NOT FOUND THEN
-        RETURN;
-    END IF;
-    DELETE FROM public.video_gen_pause t WHERE t.id = (k ->> 'id')::smallint;
-END
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_purge_video_gen_spend(k jsonb)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    p record;
-BEGIN
-    SELECT t.id INTO p FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid;
-    IF NOT FOUND THEN
-        RETURN;
-    END IF;
-    DELETE FROM public.video_gen_spend t WHERE t.id = (k ->> 'id')::uuid;
-END
-$f$;
-
 CREATE OR REPLACE FUNCTION public.scd_purge_wanted_track_albums(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1514,6 +1514,10 @@ BEGIN
             PERFORM public.scd_purge_enrich_calibration(k);
         WHEN 'job_status' THEN
             PERFORM public.scd_purge_job_status(k);
+        WHEN 'llm_pause' THEN
+            PERFORM public.scd_purge_llm_pause(k);
+        WHEN 'llm_spend' THEN
+            PERFORM public.scd_purge_llm_spend(k);
         WHEN 'lyrics_cache' THEN
             PERFORM public.scd_purge_lyrics_cache(k);
         WHEN 'lyrics_embedding_wire_state' THEN
@@ -1624,10 +1628,6 @@ BEGIN
             PERFORM public.scd_purge_video_accounts(k);
         WHEN 'video_flags' THEN
             PERFORM public.scd_purge_video_flags(k);
-        WHEN 'video_gen_pause' THEN
-            PERFORM public.scd_purge_video_gen_pause(k);
-        WHEN 'video_gen_spend' THEN
-            PERFORM public.scd_purge_video_gen_spend(k);
         WHEN 'wanted_track_albums' THEN
             PERFORM public.scd_purge_wanted_track_albums(k);
         WHEN 'wanted_track_artists' THEN

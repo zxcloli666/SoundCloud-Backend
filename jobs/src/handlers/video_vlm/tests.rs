@@ -8,28 +8,54 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-use super::VideoVlm;
 use super::queue;
 use super::result::{Verdict, judge};
+use super::{Step, VideoVlm};
 use crate::config::VideoVlmConfig;
 use crate::handlers::video_find::tests::{Memory, config};
 
-type Rig = VideoVlm<Memory>;
+mod fakes;
+mod haiku;
+
+use self::fakes::{Eyes, Inbox, Wire};
+
+type Rig = VideoVlm<Memory, Wire, Eyes, Inbox>;
+
+fn vlm_config(haiku: bool) -> VideoVlmConfig {
+    VideoVlmConfig {
+        in_flight: 2,
+        tick: Duration::from_secs(30),
+        timeout: Duration::from_secs(4_200),
+        month_usd: 5.0,
+        recheck: Duration::from_secs(1_800),
+        haiku: haiku.then(|| crate::config::AnthropicLadder {
+            steps: Vec::new(),
+            reset_day: 17,
+        }),
+    }
+}
 
 fn rig(pool: &PgPool) -> (Rig, Memory) {
+    let (vlm, blobs, _, _, _) = bench(pool, false);
+    (vlm, blobs)
+}
+
+fn bench(pool: &PgPool, haiku: bool) -> (Rig, Memory, Wire, Eyes, Inbox) {
     let blobs = Memory::default();
+    let wire = Wire::default();
+    let eyes = Eyes::default();
+    let inbox = Inbox::default();
     let vlm = VideoVlm::new(
         pool.clone(),
         "https://storage.test/".parse().unwrap(),
-        VideoVlmConfig {
-            in_flight: 2,
-            tick: Duration::from_secs(30),
-            timeout: Duration::from_secs(4_200),
-        },
+        vlm_config(haiku),
         &config(),
         blobs.clone(),
+        wire.clone(),
+        haiku.then(|| eyes.clone()),
+        inbox.clone(),
     );
-    (vlm, blobs)
+    (vlm, blobs, wire, eyes, inbox)
 }
 
 async fn held_track(
@@ -141,6 +167,7 @@ fn base(id: &str, attempt: i64) -> VideoVlmResult {
         scores: None,
         duration_ms: None,
         clip: None,
+        files: None,
         part: None,
     }
 }
@@ -235,7 +262,7 @@ async fn the_request_names_the_temp_file_by_its_storage_url_and_a_resend_gets_a_
     let first = claim(&pool, 1).await?.remove(0);
     let held = first.held.clone().unwrap();
 
-    let request = vlm.request(&first, &held.s3_key, held.offset_ms).unwrap();
+    let request = vlm.request(&first, &held, Step::Classify).unwrap();
 
     assert_eq!(
         request.video_url,
@@ -459,8 +486,6 @@ async fn a_result_for_another_attempt_or_an_idle_row_changes_nothing(
 fn an_ok_answer_needs_its_label_model_and_exactly_the_file_a_clip_needs() {
     let mut no_label = answer("11", 1, VideoLabel::Loop);
     no_label.label = None;
-    let mut no_model = answer("11", 1, VideoLabel::Loop);
-    no_model.model = None;
     let mut static_with_file = clip_part("11", 1, b"ab", &[b"ab"], 0);
     static_with_file.label = Some(VideoLabel::Static);
     let mut clip_without_file = answer("11", 1, VideoLabel::Clip);
@@ -468,13 +493,7 @@ fn an_ok_answer_needs_its_label_model_and_exactly_the_file_a_clip_needs() {
     let mut half = clip_part("11", 1, b"ab", &[b"ab"], 0);
     half.part = None;
 
-    for bad in [
-        no_label,
-        no_model,
-        static_with_file,
-        clip_without_file,
-        half,
-    ] {
+    for bad in [no_label, static_with_file, clip_without_file, half] {
         assert!(judge(&bad).is_err());
     }
     assert!(matches!(

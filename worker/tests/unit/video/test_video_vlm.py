@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import aiohttp
+import cv2
+import numpy as np
 import pytest
 
 from tests.fakes.engines import FakeEngines
@@ -16,11 +18,12 @@ from worker.domain.deadline import Deadline
 from worker.domain.outcome import Outcome, Reason, Status
 from worker.domain.ports import FrameVerdict
 from worker.domain.video import sample
-from worker.domain.video_vlm import LABELS, PROMPT, VideoVlmLane
+from worker.domain.video_vlm import LABELS, VideoVlmLane
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import Settings
 
+PROMPT = "Answer with one word: clip, loop or static."
 MODEL = "Qwen/Qwen3-VL-2B-Instruct-GGUF/Qwen3VL-2B-Instruct-Q4_K_M.gguf@52d6c8ff"
 
 
@@ -70,6 +73,7 @@ class Harness:
             "sc_track_id": "98765",
             "attempt": 2,
             "video_url": self.server.url(path),
+            "prompt": PROMPT,
             **extra,
         }
         return await self.lane.process(request, Deadline.after(60))
@@ -167,6 +171,70 @@ async def test_a_request_without_its_url_is_invalid(harness: Harness) -> None:
     outcome = await harness.lane.process({"sc_track_id": "1", "attempt": 1}, Deadline.after(5))
 
     assert outcome.reason is Reason.INVALID_REQUEST
+
+
+async def test_frames_mode_returns_the_model_frames_as_jpeg_files_without_the_model(
+    harness: Harness, settings: Settings
+) -> None:
+    outcome = await harness.run(frames=True, prompt=None, offset_ms=500, duration_ms=3000)
+
+    assert outcome.status is Status.OK
+    assert harness.engines.calls == []
+    assert "label" not in outcome.fields and "model" not in outcome.fields
+    blob = b"".join(outcome.parts)
+    slices = outcome.fields["files"]
+    assert isinstance(slices, list)
+    assert [item["name"] for item in slices] == [
+        f"frame{index}.jpg" for index in range(settings.vlm.frames)
+    ]
+    assert outcome.fields["clip"] == {
+        "bytes": len(blob),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        "parts": len(outcome.parts),
+    }
+    side = settings.vlm.frame_side
+    for item in slices:
+        data = blob[item["offset"] : item["offset"] + item["bytes"]]
+        image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert image is not None and image.shape == (side, side, 3)
+
+
+async def test_a_known_clip_label_returns_the_cut_piece_without_the_model(
+    harness: Harness, tmp_path: Path
+) -> None:
+    outcome = await harness.run(label="clip", prompt=None, offset_ms=500, duration_ms=3000)
+
+    assert outcome.status is Status.OK
+    assert harness.engines.calls == []
+    assert outcome.fields["label"] == "clip"
+    assert "model" not in outcome.fields and "scores" not in outcome.fields
+    blob = b"".join(outcome.parts)
+    assert outcome.fields["clip"]["sha256"] == hashlib.sha256(blob).hexdigest()  # type: ignore[index]
+    out = tmp_path / "clip.mp4"
+    out.write_bytes(blob)
+    assert media.stream_types(out) == ["video"]
+
+
+async def test_a_known_static_label_needs_neither_the_file_nor_the_model(
+    harness: Harness,
+) -> None:
+    outcome = await harness.run("/missing", label="static")
+
+    assert (outcome.status, outcome.fields, outcome.parts) == (Status.OK, {"label": "static"}, ())
+    assert harness.engines.calls == []
+
+
+async def test_an_unknown_label_is_invalid(harness: Harness) -> None:
+    outcome = await harness.run(label="dance")
+
+    assert outcome.reason is Reason.INVALID_REQUEST
+
+
+async def test_the_model_needs_the_prompt_from_the_task(harness: Harness) -> None:
+    outcome = await harness.run(prompt=None)
+
+    assert outcome.reason is Reason.INVALID_REQUEST
+    assert harness.engines.calls == []
 
 
 def test_the_window_follows_the_offset_and_the_track_length() -> None:

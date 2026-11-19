@@ -38,8 +38,8 @@ def png(image: Uint8Array) -> bytes:
     return encoded(".png", image, [])
 
 
-def jpeg(image: Uint8Array) -> bytes:
-    return encoded(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, STILL_QUALITY])
+def jpeg(image: Uint8Array, quality: int = STILL_QUALITY) -> bytes:
+    return encoded(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
 
 
 def encoded(extension: str, image: Uint8Array, params: list[int]) -> bytes:

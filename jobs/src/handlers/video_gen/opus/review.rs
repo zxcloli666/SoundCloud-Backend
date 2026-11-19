@@ -1,20 +1,18 @@
 use base64::Engine as _;
 use serde_json::{Value, json};
 
-use super::{Call, Message, Opus};
-use crate::handlers::video_gen::director::{
-    Brief, DirectorError, Picture, Plan, Review, Spend, Verdict,
-};
+use crate::handlers::video_gen::director::{Brief, Picture, Plan, Review, Verdict};
 use crate::handlers::video_gen::prompts;
+use crate::llm::anthropic::{Anthropic, Call, LlmError, Spend, finished, text_of};
 
 const MAX_TURNS: usize = 6;
 const NUDGE: &str = "Answer by calling accept or reject.";
 
 pub(super) async fn plan(
-    opus: &Opus,
+    opus: &Anthropic,
     brief: &Brief,
     spend: &mut Vec<Spend>,
-) -> Result<Plan, DirectorError> {
+) -> Result<Plan, LlmError> {
     let messages = [json!({
         "role": "user",
         "content": [
@@ -24,26 +22,23 @@ pub(super) async fn plan(
     })];
     let call = Call {
         name: "plan",
+        system: Some(prompts::SYSTEM),
         messages: &messages,
         tools: None,
         format: Some(prompts::plan_schema()),
+        effort: None,
     };
     let message = opus.send(&call, spend).await?;
     finished(&message)?;
-    let text: String = message
-        .content
-        .iter()
-        .filter(|block| block["type"] == "text")
-        .filter_map(|block| block["text"].as_str())
-        .collect();
-    serde_json::from_str(&text).map_err(|error| DirectorError::Invalid(format!("plan: {error}")))
+    serde_json::from_str(&text_of(&message))
+        .map_err(|error| LlmError::Invalid(format!("plan: {error}")))
 }
 
 pub(super) async fn verdict(
-    opus: &Opus,
+    opus: &Anthropic,
     review: &Review<'_>,
     spend: &mut Vec<Spend>,
-) -> Result<Verdict, DirectorError> {
+) -> Result<Verdict, LlmError> {
     let mut content = vec![json!({"type": "text", "text": prompts::review_request(review)})];
     for picture in &review.current {
         content.push(json!({"type": "text", "text": picture.name}));
@@ -54,9 +49,11 @@ pub(super) async fn verdict(
     for _ in 0..MAX_TURNS {
         let call = Call {
             name: "review",
+            system: Some(prompts::SYSTEM),
             messages: &messages,
             tools: Some(prompts::review_tools()),
             format: None,
+            effort: None,
         };
         let message = opus.send(&call, spend).await?;
         finished(&message)?;
@@ -72,7 +69,7 @@ pub(super) async fn verdict(
         messages.push(json!({"role": "assistant", "content": message.content}));
         if results.is_empty() {
             if nudged {
-                return Err(DirectorError::Invalid(
+                return Err(LlmError::Invalid(
                     "the review ended without a verdict".to_owned(),
                 ));
             }
@@ -82,20 +79,12 @@ pub(super) async fn verdict(
         }
         messages.push(json!({"role": "user", "content": results}));
     }
-    Err(DirectorError::Invalid(
+    Err(LlmError::Invalid(
         "the review took too many turns".to_owned(),
     ))
 }
 
-fn finished(message: &Message) -> Result<(), DirectorError> {
-    match message.stop_reason.as_deref() {
-        Some("refusal") => Err(DirectorError::Invalid("the director refused".to_owned())),
-        Some("max_tokens") => Err(DirectorError::Invalid("the answer was cut".to_owned())),
-        _ => Ok(()),
-    }
-}
-
-fn decided(tool: &Value) -> Option<Result<Verdict, DirectorError>> {
+fn decided(tool: &Value) -> Option<Result<Verdict, LlmError>> {
     let input = &tool["input"];
     match tool["name"].as_str()? {
         "accept" => Some(Ok(Verdict::Accept {
@@ -108,7 +97,7 @@ fn decided(tool: &Value) -> Option<Result<Verdict, DirectorError>> {
                 reason: reason.to_owned(),
                 edit: edit.to_owned(),
             }),
-            _ => Err(DirectorError::Invalid(
+            _ => Err(LlmError::Invalid(
                 "reject without reason or edit".to_owned(),
             )),
         }),

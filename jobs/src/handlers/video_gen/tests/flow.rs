@@ -6,12 +6,14 @@ use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
 
-use super::super::budget;
-use super::super::director::{DirectorError, Look, Verdict};
+use super::super::LADDER;
+use super::super::director::{Look, Verdict};
 use super::{
     Bench, PLAN_USD, REVIEW_USD, Scripted, TRACK, Wire, bench, config, due_now, failed, lyrics,
     plan, reply, row, star, superlike, track,
 };
+use crate::llm::anthropic::LlmError;
+use crate::llm::ledger;
 
 const ACCEPT: Verdict = Verdict::Accept { trim_start_ms: 0 };
 
@@ -152,7 +154,7 @@ async fn accepted_shots_become_a_generated_video(pool: PgPool) {
             true
         )
     );
-    let spent = budget::spent(&pool, budget::period(Utc::now(), 17))
+    let spent = ledger::spent(&pool, LADDER, ledger::period(Utc::now(), 17))
         .await
         .unwrap();
     assert!((spent - (PLAN_USD + 4.0 * REVIEW_USD)).abs() < 1e-9);
@@ -360,7 +362,7 @@ async fn a_bad_plan_is_retried_and_then_fails(pool: PgPool) {
     let mut short = plan();
     short.shots.truncate(1);
     director.plans(Ok(short));
-    director.plans(Err(DirectorError::Invalid("no tool call".to_owned())));
+    director.plans(Err(LlmError::Invalid("no tool call".to_owned())));
     let mut gap = plan();
     gap.shots[1].start_ms = 35_000;
     director.plans(Ok(gap));

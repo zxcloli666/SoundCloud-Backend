@@ -37,6 +37,8 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_cmd_dead;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_discover_tag_counts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_enrich_calibration;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_job_status;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_llm_pause;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_llm_spend;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_cache;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_embedding_wire_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_backfill_state;
@@ -92,8 +94,6 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_user_web_profiles;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_users;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_accounts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_flags;
-CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_gen_pause;
-CREATE SEQUENCE IF NOT EXISTS public.scd_guard_video_gen_spend;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_albums;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_wanted_track_work_aliases;
@@ -2589,6 +2589,10 @@ ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zz_tomb_check;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.llm_pause FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_llm_pause', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.llm_spend FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_llm_spend', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_login_requests()
 RETURNS trigger
@@ -7952,10 +7956,6 @@ CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_flags FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_flags', 'cmd', 'migration', 'repl');
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_gen_pause FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_gen_pause', 'cmd', 'migration', 'repl');
-
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.video_gen_spend FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_video_gen_spend', 'cmd', 'migration', 'repl');
-
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_albums', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_wanted_track_albums()
@@ -8248,6 +8248,8 @@ FROM (VALUES
     ('guard', 'discover_tag_counts', 'scd_guard_discover_tag_counts'),
     ('guard', 'enrich_calibration', 'scd_guard_enrich_calibration'),
     ('guard', 'job_status', 'scd_guard_job_status'),
+    ('guard', 'llm_pause', 'scd_guard_llm_pause'),
+    ('guard', 'llm_spend', 'scd_guard_llm_spend'),
     ('guard', 'lyrics_cache', 'scd_guard_lyrics_cache'),
     ('guard', 'lyrics_embedding_wire_state', 'scd_guard_lyrics_embedding_wire_state'),
     ('guard', 'lyrics_lookup_backfill_state', 'scd_guard_lyrics_lookup_backfill_state'),
@@ -8303,8 +8305,6 @@ FROM (VALUES
     ('guard', 'users', 'scd_guard_users'),
     ('guard', 'video_accounts', 'scd_guard_video_accounts'),
     ('guard', 'video_flags', 'scd_guard_video_flags'),
-    ('guard', 'video_gen_pause', 'scd_guard_video_gen_pause'),
-    ('guard', 'video_gen_spend', 'scd_guard_video_gen_spend'),
     ('guard', 'wanted_track_albums', 'scd_guard_wanted_track_albums'),
     ('guard', 'wanted_track_artists', 'scd_guard_wanted_track_artists'),
     ('guard', 'wanted_track_work_aliases', 'scd_guard_wanted_track_work_aliases'),
@@ -8467,6 +8467,8 @@ BEGIN
             ('listening_history', 'zz_tomb'),
             ('listening_history', 'zz_tomb_check'),
             ('listening_history', 'zzz_suppress'),
+            ('llm_pause', 'zz_guard'),
+            ('llm_spend', 'zz_guard'),
             ('login_requests', 'zz_merge'),
             ('login_requests', 'zz_tomb'),
             ('login_requests', 'zz_tomb_check'),
@@ -8696,8 +8698,6 @@ BEGIN
             ('users', 'zzz_suppress'),
             ('video_accounts', 'zz_guard'),
             ('video_flags', 'zz_guard'),
-            ('video_gen_pause', 'zz_guard'),
-            ('video_gen_spend', 'zz_guard'),
             ('wanted_track_albums', 'zz_guard'),
             ('wanted_track_albums', 'zz_owner'),
             ('wanted_track_albums', 'zzz_suppress'),

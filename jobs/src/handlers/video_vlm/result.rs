@@ -1,41 +1,54 @@
 use anyhow::{bail, ensure};
 use backend_contracts::pipeline::{VideoClip, VideoLabel, VideoPart, VideoVlmResult};
 use backend_contracts::reasons::{FailureClass, WorkerReason, WorkerStatus};
+use backend_contracts::video_gen::VideoFileSlice;
 use backend_contracts::worker_contract::WorkerLane;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
 
 use super::VideoVlm;
+use super::haiku::Vision;
 use super::queue::{self, Held};
+use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::final_key;
+use crate::handlers::video_gen::Lanes;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
 
 #[derive(Debug, PartialEq)]
 pub(super) struct Answer {
     pub(super) label: VideoLabel,
-    pub(super) model: String,
+    pub(super) model: Option<String>,
     pub(super) scores: Value,
     pub(super) duration_ms: Option<i32>,
     pub(super) file: Option<(VideoClip, VideoPart)>,
 }
 
 #[derive(Debug, PartialEq)]
+pub(super) struct Frames {
+    pub(super) clip: VideoClip,
+    pub(super) part: VideoPart,
+    pub(super) files: Vec<VideoFileSlice>,
+}
+
+#[derive(Debug, PartialEq)]
 pub(super) enum Verdict {
     Labelled(Box<Answer>),
+    Frames(Box<Frames>),
     Drop(WorkerReason),
     Again(WorkerReason),
     Gone,
 }
 
-impl<B: Blobs + 'static> VideoVlm<B> {
+impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     pub async fn finish(&self, result: VideoVlmResult) -> JobResult {
         let attempt = i32::try_from(result.attempt)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("video attempt is out of range")))?;
         let track = result.sc_track_id.as_str();
         match judge(&result).map_err(JobError::permanent)? {
             Verdict::Labelled(answer) => self.labelled(track, attempt, &result, &answer).await,
+            Verdict::Frames(frames) => self.framed(track, attempt, &frames).await,
             Verdict::Drop(reason) => self.dropped(track, attempt, reason).await,
             Verdict::Again(reason) => self.again(track, attempt, reason).await,
             Verdict::Gone => self.gone(track, attempt).await,
@@ -66,27 +79,32 @@ impl<B: Blobs + 'static> VideoVlm<B> {
             debug!(track, attempt, "stale VLM result ignored");
             return Ok(());
         };
+        let judged = judged_by(answer, &held).map_err(JobError::permanent)?;
         match (answer.label, file) {
             (VideoLabel::Clip | VideoLabel::Loop, Some(file)) => {
-                self.keep_file(track, attempt, &held, answer, file).await?
+                self.keep_file(track, attempt, &held, &judged, file).await
             }
             (VideoLabel::Static, _) => {
-                let wait = self.pacing.static_recheck;
-                let why = Some(WorkerReason::StaticVideo.as_str());
-                queue::settle(&self.pool, track, attempt, "static", wait, why).await?;
-                info!(
-                    track,
-                    attempt,
-                    model = answer.model,
-                    "VLM found a static video"
-                );
+                self.settle_static(track, attempt, &held, &judged.model)
+                    .await
             }
-            (_, None) => {
-                return Err(JobError::permanent(anyhow::anyhow!(
-                    "VLM answer carries no file"
-                )));
-            }
+            (_, None) => Err(JobError::permanent(anyhow::anyhow!(
+                "VLM answer carries no file"
+            ))),
         }
+    }
+
+    pub(super) async fn settle_static(
+        &self,
+        track: &str,
+        attempt: i32,
+        held: &Held,
+        model: &str,
+    ) -> JobResult {
+        let wait = self.pacing.static_recheck;
+        let why = Some(WorkerReason::StaticVideo.as_str());
+        queue::settle(&self.pool, track, attempt, "static", wait, why).await?;
+        info!(track, attempt, model, "VLM found a static video");
         self.drop_temp(&held.s3_key).await;
         Ok(())
     }
@@ -96,7 +114,7 @@ impl<B: Blobs + 'static> VideoVlm<B> {
         track: &str,
         attempt: i32,
         held: &Held,
-        answer: &Answer,
+        answer: &Judged,
         file: Vec<u8>,
     ) -> JobResult {
         let key = final_key(track, attempt);
@@ -126,6 +144,7 @@ impl<B: Blobs + 'static> VideoVlm<B> {
         if !stored {
             let _ = self.blobs.delete(&key).await;
         }
+        self.drop_temp(&held.s3_key).await;
         Ok(())
     }
 
@@ -188,7 +207,7 @@ impl<B: Blobs + 'static> VideoVlm<B> {
         Ok(())
     }
 
-    async fn drop_temp(&self, key: &str) {
+    pub(super) async fn drop_temp(&self, key: &str) {
         if let Err(error) = self.blobs.delete(key).await {
             warn!(key, %error, "a video temp file was not deleted; the sweep removes it");
         }
@@ -208,7 +227,7 @@ async fn store(
     attempt: i32,
     stored: Stored<'_>,
     held: &Held,
-    answer: &Answer,
+    answer: &Judged,
 ) -> JobResult<bool> {
     let mut transaction = pool.begin().await.map_err(JobError::retryable)?;
     let settled = sqlx::query_file!(
@@ -252,7 +271,28 @@ async fn store(
     Ok(true)
 }
 
-fn verify(held: &Held, answer: &Answer) -> Value {
+struct Judged {
+    label: VideoLabel,
+    model: String,
+    scores: Value,
+    duration_ms: Option<i32>,
+}
+
+fn judged_by(answer: &Answer, held: &Held) -> anyhow::Result<Judged> {
+    let (model, scores) = match (&answer.model, &held.haiku) {
+        (Some(model), _) => (model.clone(), answer.scores.clone()),
+        (None, Some(known)) if known.label == answer.label => (known.model.clone(), json!({})),
+        _ => bail!("VLM {} answer names no model", answer.label.as_str()),
+    };
+    Ok(Judged {
+        label: answer.label,
+        model,
+        scores,
+        duration_ms: answer.duration_ms,
+    })
+}
+
+fn verify(held: &Held, answer: &Judged) -> Value {
     let mut verify = held.scores.clone();
     if let Value::Object(map) = &mut verify {
         map.insert(
@@ -274,6 +314,7 @@ pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
         "VLM result has a non-canonical track id"
     );
     match (result.status, result.reason) {
+        (WorkerStatus::Ok, None) if result.label.is_none() => framed(result),
         (WorkerStatus::Ok, None) => labelled(result),
         (WorkerStatus::Ok, Some(reason)) => {
             bail!("VLM ok result carries reason {}", reason.as_str())
@@ -295,10 +336,32 @@ pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
     }
 }
 
-fn labelled(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
-    let (Some(label), Some(model)) = (result.label, result.model.clone()) else {
-        bail!("VLM ok result lacks its label or model");
+fn framed(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
+    let (Some(clip), Some(part), Some(files)) = (&result.clip, &result.part, &result.files) else {
+        bail!("VLM ok result has neither a label nor its frames");
     };
+    let mut end = 0;
+    for file in files {
+        ensure!(
+            file.offset == end && file.bytes > 0,
+            "VLM frame {} does not follow the one before it",
+            file.name
+        );
+        end += file.bytes;
+    }
+    ensure!(end == clip.bytes, "VLM frames do not cover the whole file");
+    Ok(Verdict::Frames(Box::new(Frames {
+        clip: clip.clone(),
+        part: part.clone(),
+        files: files.clone(),
+    })))
+}
+
+fn labelled(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
+    let Some(label) = result.label else {
+        bail!("VLM ok result lacks its label");
+    };
+    let model = result.model.clone();
     let file = match (&result.clip, &result.part) {
         (Some(clip), Some(part)) => Some((clip.clone(), part.clone())),
         (None, None) => None,

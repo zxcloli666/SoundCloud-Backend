@@ -1,4 +1,3 @@
-mod budget;
 pub mod director;
 mod flow;
 mod lanes;
@@ -22,6 +21,7 @@ use url::Url;
 
 use crate::config::VideoGenConfig;
 use crate::handlers::video_accounts::Notify;
+use crate::llm::ledger;
 use crate::objects::{Blobs, Objects, ObjectsError};
 use crate::queue::JobResult;
 
@@ -29,6 +29,8 @@ pub use self::director::Director;
 pub use self::lanes::Lanes;
 use self::parts::Parts;
 use self::state::{DIRECTOR_STAGES, LANE_STAGES};
+
+pub const LADDER: &str = "video_gen";
 
 pub trait Store: Blobs {
     fn get(&self, key: &str) -> impl Future<Output = Result<Option<Vec<u8>>, ObjectsError>> + Send;
@@ -136,24 +138,24 @@ impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
     }
 
     async fn gate(&self) -> JobResult<bool> {
-        let paused = budget::paused(&self.pool).await?;
+        let paused = ledger::paused(&self.pool, LADDER).await?;
         match &paused {
             Some(pause) if !pause.due => return Ok(false),
-            Some(pause) if pause.reason == budget::API_DOWN => return Ok(true),
+            Some(pause) if pause.reason == ledger::API_DOWN => return Ok(true),
             _ => {}
         }
         if !self.affordable().await? {
             return Ok(false);
         }
         if paused.is_some() {
-            budget::resume(&self.pool).await?;
+            ledger::resume(&self.pool, LADDER).await?;
         }
         Ok(true)
     }
 
     async fn affordable(&self) -> JobResult<bool> {
-        let period = budget::period(Utc::now(), self.reset_day);
-        let spent = budget::spent(&self.pool, period).await?;
+        let period = ledger::period(Utc::now(), self.reset_day);
+        let spent = ledger::spent(&self.pool, LADDER, period).await?;
         if spent < self.config.month_usd {
             return Ok(true);
         }
@@ -163,10 +165,11 @@ impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
             self.config.recheck.as_secs() / 60,
             self.reset_day
         );
-        budget::pause(
+        ledger::pause(
             &self.pool,
             &self.notify,
-            budget::BUDGET,
+            LADDER,
+            ledger::BUDGET,
             self.config.recheck,
             &text,
         )

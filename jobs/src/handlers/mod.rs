@@ -67,6 +67,7 @@ use serde::de::DeserializeOwned;
 use crate::bus::Bus;
 use crate::config::JobsConfig;
 use crate::db::Databases;
+use crate::llm::anthropic::Anthropic;
 use crate::qdrant::QdrantProvisioner;
 use crate::queue::{JobError, JobResult, LeasedJob, LookupLane, WriteGovernor};
 
@@ -101,7 +102,6 @@ use self::video_accounts::{Checker, Proxied, Seal, SpotifyKey, Telegram, VideoAc
 use self::video_find::ytdlp::YtDlp;
 use self::video_find::{Pooled, ProxyPool, VideoFind};
 use self::video_gen::VideoGen;
-use self::video_gen::opus::Opus;
 use self::video_vlm::VideoVlm;
 use self::wanted::{AiMatcherClient, WantedHandler};
 use crate::objects::Objects;
@@ -450,15 +450,28 @@ impl JobHandlers {
         &self,
         pool: sqlx::PgPool,
         config: &JobsConfig,
-    ) -> Option<Arc<VideoVlm<Objects>>> {
-        let objects = config.video_find.objects.as_ref()?;
-        Some(Arc::new(VideoVlm::new(
+        bus: crate::bus::Bus,
+    ) -> Result<
+        Option<Arc<VideoVlm<Objects, crate::bus::Bus, Anthropic, Telegram>>>,
+        crate::ClientBuildError,
+    > {
+        let Some(objects) = config.video_find.objects.as_ref() else {
+            return Ok(None);
+        };
+        let haiku = match &config.video_vlm.haiku {
+            Some(ladder) => Some(Anthropic::new(ladder)?).filter(|client| !client.is_empty()),
+            None => None,
+        };
+        Ok(Some(Arc::new(VideoVlm::new(
             pool,
             config.sync_queue.storage_url.clone(),
             config.video_vlm.clone(),
             &config.video_find,
             Objects::connect(objects).await,
-        )))
+            bus,
+            haiku,
+            Telegram::new(config.video_accounts.tg_webhook.clone())?,
+        ))))
     }
 
     pub async fn video_gen(
@@ -467,7 +480,7 @@ impl JobHandlers {
         config: &JobsConfig,
         bus: crate::bus::Bus,
     ) -> Result<
-        Option<Arc<VideoGen<Opus, Objects, crate::bus::Bus, Telegram>>>,
+        Option<Arc<VideoGen<Anthropic, Objects, crate::bus::Bus, Telegram>>>,
         crate::ClientBuildError,
     > {
         let (Some(objects), Some(director)) = (
@@ -480,7 +493,7 @@ impl JobHandlers {
             pool,
             config.sync_queue.storage_url.clone(),
             config.video_gen.clone(),
-            Opus::new(director)?,
+            Anthropic::new(director)?,
             Objects::connect(objects).await,
             bus,
             Telegram::new(config.video_accounts.tg_webhook.clone())?,
