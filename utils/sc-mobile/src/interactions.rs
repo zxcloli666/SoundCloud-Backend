@@ -5,7 +5,6 @@ use crate::reactions::{
 };
 use crate::request::MobileRequest;
 
-pub const REPOST: &str = "sc:interactiontype:repost";
 pub const REACTION: &str = "sc:interactiontype:reaction";
 pub const LIKE: &str = "sc:interactiontypevalue:like";
 
@@ -14,15 +13,6 @@ pub struct Interaction<'a> {
     pub value_urn: Option<&'a str>,
     pub target_urn: &'a str,
     pub parent_urn: &'a str,
-}
-
-pub fn repost(track_urn: &str) -> Interaction<'_> {
-    Interaction {
-        type_urn: REPOST,
-        value_urn: None,
-        target_urn: track_urn,
-        parent_urn: track_urn,
-    }
 }
 
 pub fn comment_like<'a>(comment_urn: &'a str, track_urn: &'a str) -> Interaction<'a> {
@@ -79,23 +69,6 @@ mod tests {
     }
 
     #[test]
-    fn a_repost_targets_the_track_and_carries_no_value() {
-        let interaction = repost("soundcloud:tracks:1");
-        let expected = json!({
-            "input": {
-                "targetUrn": "soundcloud:tracks:1",
-                "parentUrn": "soundcloud:tracks:1",
-                "interactionTypeUrn": "sc:interactiontype:repost",
-            }
-        });
-
-        assert_eq!(add(&interaction).kind(), Kind::Mutation);
-        assert_eq!(variables(&add(&interaction)), Some(expected.clone()));
-        assert_eq!(remove(&interaction).kind(), Kind::Mutation);
-        assert_eq!(variables(&remove(&interaction)), Some(expected));
-    }
-
-    #[test]
     fn a_comment_like_targets_the_comment_under_its_track() {
         let interaction = comment_like("soundcloud:comments:9", "soundcloud:tracks:1");
 
@@ -114,16 +87,19 @@ mod tests {
 
     #[test]
     fn reading_an_interaction_is_a_query_on_its_target() {
-        let request = read(&repost("soundcloud:tracks:1"));
+        let request = read(&comment_like(
+            "soundcloud:comments:9",
+            "soundcloud:tracks:1",
+        ));
 
         assert_eq!(request.kind(), Kind::Query);
         assert_eq!(
             variables(&request),
             Some(json!({
-                "interactionTypeUrn": "sc:interactiontype:repost",
+                "interactionTypeUrn": "sc:interactiontype:reaction",
                 "limitPerTarget": 10,
                 "parentUrn": "soundcloud:tracks:1",
-                "targetUrns": ["soundcloud:tracks:1"],
+                "targetUrns": ["soundcloud:comments:9"],
             }))
         );
     }

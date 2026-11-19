@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::args::Args;
 use crate::datadome;
 use crate::journal::{Journal, Sent, failure_note, json_of};
-use crate::{follow, interaction, like, playlist};
+use crate::{follow, interaction, like, playlist, repost};
 
 pub const LEFT: &str = "stopped on datadome; the action may be left in place, undo it by hand";
 
@@ -18,8 +18,7 @@ pub async fn run(client: &MobileClient, args: &Args, caller: &Caller, journal: &
     match &args.actions_track {
         Some(track) => {
             like::run(client, caller, journal, track).await;
-            let repost = interactions::repost(track);
-            interaction::run(client, caller, journal, "repost", &repost).await;
+            repost::run(client, caller, journal, track).await;
         }
         None => {
             journal.skip("like", "no --actions-track");
@@ -75,14 +74,20 @@ pub fn answer(body: &Value, pointer: &str) -> Option<String> {
 }
 
 pub fn is_item(item: &Value, urn: &str) -> bool {
-    [Some(item), item.get("user"), item.get("track")]
+    [Some(item), item.get("target"), item.get("track")]
         .into_iter()
         .flatten()
         .any(|candidate| names(candidate, urn))
 }
 
 fn names(item: &Value, urn: &str) -> bool {
-    if item.get("urn").and_then(Value::as_str) == Some(urn) {
+    if item.as_str() == Some(urn) {
+        return true;
+    }
+    if ["urn", "target_urn"]
+        .iter()
+        .any(|key| item.get(key).and_then(Value::as_str) == Some(urn))
+    {
         return true;
     }
     item.get("id")
@@ -97,15 +102,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_item_is_named_by_its_urn_or_its_id() {
+    fn an_item_is_named_by_its_target_track_or_own_urn() {
         assert!(is_item(
             &json!({ "urn": "soundcloud:users:7" }),
             "soundcloud:users:7"
         ));
         assert!(is_item(
-            &json!({ "user": { "id": 7 } }),
+            &json!({ "user": "soundcloud:users:1", "target": "soundcloud:users:7" }),
             "soundcloud:users:7"
         ));
-        assert!(!is_item(&json!({ "id": 8 }), "soundcloud:users:7"));
+        assert!(is_item(
+            &json!({ "user": { "id": 1 }, "target": { "id": 7 } }),
+            "soundcloud:users:7"
+        ));
+        assert!(is_item(
+            &json!({ "target_urn": "soundcloud:tracks:3" }),
+            "soundcloud:tracks:3"
+        ));
+        assert!(!is_item(
+            &json!({ "user": { "id": 7 }, "target": { "id": 8 } }),
+            "soundcloud:users:7"
+        ));
     }
 }

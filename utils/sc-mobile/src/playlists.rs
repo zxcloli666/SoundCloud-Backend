@@ -5,7 +5,7 @@ use crate::request::MobileRequest;
 pub fn create(title: &str) -> MobileRequest {
     MobileRequest::post(
         &["playlists"],
-        &json!({ "title": title, "sharing": "private", "tracks": [] }),
+        &json!({ "title": title, "public": false, "track_urns": [] }),
     )
 }
 
@@ -52,7 +52,7 @@ mod tests {
             (
                 Method::POST,
                 Some("/playlists".to_owned()),
-                Some(json!({ "title": "probe", "sharing": "private", "tracks": [] }))
+                Some(json!({ "title": "probe", "public": false, "track_urns": [] }))
             )
         );
     }
