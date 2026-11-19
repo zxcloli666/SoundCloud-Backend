@@ -1,24 +1,35 @@
 wp_query="$(cat "$root/jobs/queries/queue/write_pressure.sql")"
+ts_query="$(cat "$root/jobs/queries/admin_maintenance/track_search_lag.sql")"
+rv_query="$(cat "$root/utils/repl-verify/queries/backlog.sql")"
 wp_backlog() { val postgres "$wp_query" | cut -d'|' -f1; }
 wp_lag() { val postgres "SELECT pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_lsn(), confirmed_flush_lsn)::bigint FROM pg_catalog.pg_replication_slots WHERE slot_name = '$1'"; }
 wp_slot() { val postgres "SELECT pg_catalog.pg_create_logical_replication_slot('$1', 'pgoutput')" > /dev/null; }
 wp_wal() { val postgres "SELECT pg_catalog.pg_logical_emit_message(true, 'scd_b1_pressure', repeat('x', $1))" > /dev/null; }
 
-say "write pressure: the bulk governor counts the scd slots and skips the graph and tablesync slots"
+say "write pressure: the bulk governor, the maintenance gate and repl verify count the scd slots and skip the graph and tablesync slots"
 wp_slot scd_b1_pressure_graph_from_core
 wp_slot scd_b1_from_pressure_graph
 wp_slot pg_16384_sync_16385_7311111111111111111
 wp_wal 4194304
 want "graph slots of both name styles and a tablesync slot are no replication backlog" "$(wp_backlog)" 0
+want "nor for the maintenance gate" "$(val postgres "$ts_query" | cut -d'|' -f2)" 0
+want "nor for repl verify" "$(val postgres "$rv_query")" 0
 wp_slot scd_b1_pressure_from_core
 wp_wal 65536
 wp_counted="$(wp_backlog)"
+ts_counted="$(val postgres "$ts_query" | cut -d'|' -f2)"
+rv_counted="$(val postgres "$rv_query")"
 wp_scd="$(wp_lag scd_b1_pressure_from_core)"
 wp_graph="$(wp_lag scd_b1_pressure_graph_from_core)"
 wp_sync="$(wp_lag pg_16384_sync_16385_7311111111111111111)"
 [ "$wp_counted" -gt 0 ] && [ "$wp_counted" -le "$wp_scd" ] && [ "$wp_counted" -lt "$wp_graph" ] && [ "$wp_counted" -lt "$wp_sync" ] \
   || { echo "FAIL write pressure counted $wp_counted bytes, the scd slot lags $wp_scd, the graph slots $wp_graph, the tablesync slot $wp_sync"; exit 1; }
 echo "ok the scd slot is the backlog ($wp_counted bytes), the graph and tablesync slots behind it are not ($wp_graph, $wp_sync bytes)"
+for counted in "$ts_counted" "$rv_counted"; do
+  [ "$counted" -gt 0 ] && [ "$counted" -le "$wp_scd" ] && [ "$counted" -lt "$wp_sync" ] \
+    || { echo "FAIL a backlog query counted $counted bytes, the scd slot lags $wp_scd, the tablesync slot $wp_sync"; exit 1; }
+done
+echo "ok the maintenance gate ($ts_counted bytes) and repl verify ($rv_counted bytes) count the same slot"
 for s in scd_b1_pressure_graph_from_core scd_b1_from_pressure_graph pg_16384_sync_16385_7311111111111111111 scd_b1_pressure_from_core; do
   val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
 done
