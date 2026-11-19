@@ -160,13 +160,15 @@ pub(super) async fn reconcile(
     connection: &mut PgConnection,
     payload: &CatalogCollectionPayload,
     snapshot: &Snapshot,
+    followers_max_rows: i64,
 ) -> JobResult {
     if payload.collection == CatalogCollection::Followers {
         sqlx::query_file!(
             "queries/catalog_collection/reconcile_followers.sql",
             &payload.subject_id,
             snapshot.started_at,
-            snapshot.snapshot_id
+            snapshot.snapshot_id,
+            followers_max_rows
         )
         .execute(connection)
         .await

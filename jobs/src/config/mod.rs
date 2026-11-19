@@ -63,6 +63,7 @@ pub struct JobsConfig {
     pub subscriptions: SubscriptionsConfig,
     pub subscriptions_always_premium: bool,
     pub audience_max_items: i64,
+    pub followers_reconcile_max_rows: i64,
     pub schedules: JobScheduleConfig,
     pub oauth: OAuthConfig,
     pub repl_verify: repl_verify::Mode,
@@ -554,6 +555,10 @@ impl JobsConfig {
             subscriptions: SubscriptionsConfig::from_env()?,
             subscriptions_always_premium: env::boolean("SUBSCRIPTIONS_ALWAYS_PREMIUM", false)?,
             audience_max_items: env::positive_u64("CATALOG_AUDIENCE_MAX_ITEMS", 2_000)? as i64,
+            followers_reconcile_max_rows: env::positive_u64(
+                "CATALOG_FOLLOWERS_RECONCILE_MAX_ROWS",
+                5_000,
+            )? as i64,
             schedules: JobScheduleConfig::from_env()?,
             oauth: OAuthConfig::from_env()?,
             repl_verify: env::parse("REPL_VERIFY", "repair")?,

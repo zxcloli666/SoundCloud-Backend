@@ -14,14 +14,21 @@ pub(super) struct CollectionWriter {
     pool: PgPool,
     entities: CatalogWriter,
     audience_max_items: i64,
+    followers_reconcile_max_rows: i64,
 }
 
 impl CollectionWriter {
-    pub(super) fn new(pool: PgPool, max_track_duration_ms: i32, audience_max_items: i64) -> Self {
+    pub(super) fn new(
+        pool: PgPool,
+        max_track_duration_ms: i32,
+        audience_max_items: i64,
+        followers_reconcile_max_rows: i64,
+    ) -> Self {
         Self {
             entities: CatalogWriter::new(pool.clone(), max_track_duration_ms),
             pool,
             audience_max_items,
+            followers_reconcile_max_rows,
         }
     }
 
@@ -31,12 +38,14 @@ impl CollectionWriter {
         snapshot: &state::Snapshot,
         items: usize,
     ) -> bool {
-        matches!(
-            payload.collection,
+        let capped = match payload.collection {
             CatalogCollection::TrackFavoriters
-                | CatalogCollection::TrackReposters
-                | CatalogCollection::PlaylistReposters
-        ) && snapshot.item_count + items as i64 >= self.audience_max_items
+            | CatalogCollection::TrackReposters
+            | CatalogCollection::PlaylistReposters => true,
+            CatalogCollection::Followers => !payload.owner,
+            _ => false,
+        };
+        capped && snapshot.item_count + items as i64 >= self.audience_max_items
     }
 
     pub(super) async fn persist(
@@ -163,7 +172,13 @@ impl CollectionWriter {
                 state::restart_on_owner_api(&mut tx, job, payload).await?;
             }
         } else if !more {
-            mirror::reconcile(&mut tx, payload, snapshot).await?;
+            mirror::reconcile(
+                &mut tx,
+                payload,
+                snapshot,
+                self.followers_reconcile_max_rows,
+            )
+            .await?;
         }
         if !more {
             state::sweep_seen(&mut tx, payload, snapshot).await?;
