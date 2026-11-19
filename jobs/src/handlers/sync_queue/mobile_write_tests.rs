@@ -195,6 +195,31 @@ async fn an_unclear_mobile_create_found_on_soundcloud_is_finished_without_a_seco
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_created_reply_without_a_urn_is_found_in_the_listing_and_linked(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let world = world(pool, Profile::Active).await?;
+    world.mobile.reply_with([Canned::Json(201, json!({}))]);
+
+    world.send(CREATE, "new:1", mix()).await?;
+
+    assert_eq!(world.mobile.count(), 1);
+    assert!(world.apiv1.calls().is_empty());
+    assert_eq!(world.row().await?.0, 1);
+    assert!(!world.row().await?.1);
+    assert!(attempted(&world).await?);
+
+    world.apiv1.list(vec![created_playlist()]);
+    run(&world.pool, &world.handler).await?;
+
+    assert_eq!(world.mobile.count(), 1);
+    assert_eq!(world.apiv1.calls(), ["GET /me/playlists"]);
+    assert_eq!(world.queued().await?, 0);
+    assert!(owned(&world).await?);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_client_error_on_a_mobile_create_is_parked_without_apiv1(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -1,6 +1,6 @@
 use backend_contracts::SYNC_QUEUE_MAX_RETRIES;
 
-use super::actions;
+use super::actions::{self, ActionError};
 use super::mobile::{self, Absence, Failure, Opened, Refusal, Route};
 use super::model::ClaimedMutation;
 use super::write_gate::WriteGate;
@@ -83,6 +83,13 @@ impl SyncQueueHandler {
                         };
                         record_mobile_action(action, outcome);
                         self.finish(mutation, remote, oauth_app_id).await?;
+                    }
+                    Err(error @ ActionError::InvalidRemoteResult(_))
+                        if mutation.action_type == "playlist_create" =>
+                    {
+                        record_mobile_action(action, "failed");
+                        self.retry_unclear_create(mutation, &error.to_string())
+                            .await?;
                     }
                     Err(error) => {
                         record_mobile_action(action, "failed");
