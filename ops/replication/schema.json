@@ -508,6 +508,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["subject_id", "relation", "user_id"], "expr": false, "keys": ["subject_id", "relation", "user_id"], "name": "catalog_audience_ids_pkey", "primary": true, "where": null}
