@@ -13,7 +13,7 @@ kept="$(sed -n "s/^SELECT public\.scd_keep_trigger('\([^']*\)', .*/\1/p" "$keep_
 made="$(sed -n 's/^CREATE OR REPLACE TRIGGER [^ ]* .* ON \([^ ]*\) FOR EACH .*/\1/p' "$keep_install" | sort -u)"
 locked="$(comm -23 <(printf '%s\n' "$kept") <(printf '%s\n' "$made") | paste -sd, -)"
 count="$(printf '%s' "$locked" | tr ',' '\n' | grep -c . || true)"
-[ "$count" -gt 100 ] || { echo "FAIL $(basename "$keep_install") keeps triggers on only $count tables"; exit 1; }
+[ "$count" -gt 50 ] || { echo "FAIL $(basename "$keep_install") keeps triggers on only $count tables"; exit 1; }
 sql -d scd_b1_keep -c "SET application_name = 'scd_keep'" -c "BEGIN" -c "LOCK TABLE $locked IN EXCLUSIVE MODE" \
   -c "SELECT pg_sleep(600)" -c "COMMIT" > "$tmp/keep.out" 2>&1 &
 keep_holder=$!

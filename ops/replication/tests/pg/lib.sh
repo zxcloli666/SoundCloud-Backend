@@ -10,7 +10,7 @@ only() { val "scd_b1_$1" "$2"; }
 want() { [ "$2" = "$3" ] && echo "ok $1 ($2)" || { echo "FAIL $1: got '$2', want '$3'"; exit 1; }; }
 
 teardown() {
-  for n in $nodes legacy_main legacy_star ld_core ld_main ld_star rv_core rv_main rv_star; do
+  for n in $nodes legacy_main legacy_star ld_core ld_main ld_star rv_core rv_main rv_star cs_a cs_b; do
     for s in $(val postgres "SELECT s.subname FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_database d ON d.oid = s.subdbid WHERE d.datname = 'scd_b1_$n'"); do
       sql -d "scd_b1_$n" -c "ALTER SUBSCRIPTION $s DISABLE" -c "ALTER SUBSCRIPTION $s SET (slot_name = NONE)" -c "DROP SUBSCRIPTION $s"
     done
@@ -18,7 +18,7 @@ teardown() {
   for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
     val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
   done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lookups scd_b1_verify_hash scd_b1_lyrics_race scd_b1_ld_core scd_b1_ld_main scd_b1_ld_star scd_b1_ld_tpl scd_b1_rv_core scd_b1_rv_main scd_b1_rv_star scd_b1_rv_tpl scd_b1_tpl scd_b1_ops; do
+  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lookups scd_b1_verify_hash scd_b1_lyrics_race scd_b1_ld_core scd_b1_ld_main scd_b1_ld_star scd_b1_ld_tpl scd_b1_rv_core scd_b1_rv_main scd_b1_rv_star scd_b1_rv_tpl scd_b1_cs_a scd_b1_cs_b scd_b1_tpl scd_b1_ops; do
     sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
   done
 }
