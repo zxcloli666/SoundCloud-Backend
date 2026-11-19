@@ -72,13 +72,7 @@ impl StarTiersHandler {
     }
 
     pub(crate) async fn refresh(&self) -> JobResult {
-        let refreshed = sqlx::query_file!(
-            "queries/star_priority/refresh_track_tiers.sql",
-            HISTORY_DAYS
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        let refreshed = self.refresh_track_tiers().await.map_err(JobError::retryable)?;
         let sweep = self
             .sweep
             .lock()
@@ -120,6 +114,30 @@ impl StarTiersHandler {
         );
         Ok(())
     }
+
+    async fn refresh_track_tiers(&self) -> Result<RefreshedTiers, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query_file!("queries/star_priority/no_jit.sql")
+            .execute(&mut *transaction)
+            .await?;
+        let refreshed = sqlx::query_file_as!(
+            RefreshedTiers,
+            "queries/star_priority/refresh_track_tiers.sql",
+            HISTORY_DAYS
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(refreshed)
+    }
+}
+
+struct RefreshedTiers {
+    star_users: i64,
+    star_liked: i64,
+    star_other: i64,
+    written: i64,
+    removed: i64,
 }
 
 pub(crate) async fn mark_liked_tracks(
