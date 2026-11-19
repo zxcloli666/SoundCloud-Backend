@@ -39,6 +39,7 @@ pub(crate) fn config() -> VideoFindConfig {
         static_recheck: Duration::from_secs(90 * 86_400),
         max_candidates: 8,
         download_timeout: Duration::from_secs(10),
+        stage_timeout: Duration::from_secs(1_800),
         max_file_mib: 96,
         temp_ttl: Duration::from_secs(3 * 86_400),
         sweep_every: Duration::from_secs(3_600),
@@ -1082,4 +1083,57 @@ mod sources {
                 .all(|(_, headers)| headers["x-egress-tag"] == "geo-ru")
         );
     }
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_claim_left_unstaged_by_a_restart_is_freed_after_the_stage_window(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    star_track(&pool, "11", 2, 1).await?;
+    star_track(&pool, "12", 1, 1).await?;
+    let (_, _, blobs, _) = rig(&pool);
+    assert_eq!(claim(&pool, 1).await?.remove(0).sc_track_id, "11");
+    assert_eq!(
+        staged_claim(&pool, &blobs, "12", 1).await?.sc_track_id,
+        "12"
+    );
+    let age = |minutes: i32| {
+        sqlx::query(
+            "UPDATE track_video_dispatch
+             SET updated_at = now() - make_interval(mins => $1)
+             WHERE stage = 'dispatched'",
+        )
+        .bind(minutes)
+        .execute(&pool)
+    };
+    let requeue = || {
+        queue::requeue_unanswered(
+            &pool,
+            Duration::from_secs(4_200),
+            Duration::from_secs(2_100),
+        )
+    };
+
+    age(30).await?;
+    requeue()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert_eq!(stage(&pool, "11").await?.0, "dispatched");
+
+    age(40).await?;
+    requeue()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert_eq!(
+        stage(&pool, "11").await?,
+        ("retry".to_owned(), 1, Some("unanswered".to_owned()))
+    );
+    assert_eq!(stage(&pool, "12").await?.0, "dispatched");
+
+    age(80).await?;
+    requeue()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert_eq!(stage(&pool, "12").await?.0, "retry");
+    Ok(())
 }

@@ -5,4 +5,7 @@ SET stage = 'retry',
     payload = NULL,
     updated_at = now()
 WHERE stage = 'dispatched'
-  AND updated_at < now() - make_interval(secs => $1)
+  AND (
+      updated_at < now() - make_interval(secs => $1)
+      OR (payload IS NULL AND updated_at < now() - make_interval(secs => $2))
+  )
