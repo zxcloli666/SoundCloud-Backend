@@ -159,6 +159,7 @@ dependencies = [
  "repl-verify",
  "sc-chat-wire",
  "sc-fingerprint",
+ "sc-mobile",
  "sc-transport",
  "serde",
  "serde_json",
@@ -4538,6 +4539,26 @@ dependencies = [
  "tracing",
  "wreq",
  "wreq-util",
+]
+
+[[package]]
+name = "sc-mobile"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "futures-util",
+ "getrandom 0.3.4",
+ "redact",
+ "sc-fingerprint",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+ "uuid",
+ "wreq",
 ]
 
 [[package]]

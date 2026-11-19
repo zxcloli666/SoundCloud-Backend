@@ -196,6 +196,7 @@ async fn main() {
         crate::modules::auth::AuthHealthService::with_database(redis_pool.clone(), pg.clone());
     let core = CoreRpc::new(nats.clone());
     let state_core = core.clone();
+    let mobile_core = core.clone();
     let auth = AuthService::new(
         pg.clone(),
         sc.clone(),
@@ -277,6 +278,12 @@ async fn main() {
         cold_refresh.clone(),
         public_users.clone(),
     );
+    let mobile = crate::modules::mobile::MobileService::new(
+        pg.clone(),
+        auth.clone(),
+        mobile_core,
+        &config.soundcloud,
+    );
     let tracks = TracksService::new(crate::modules::tracks::TracksServiceDependencies {
         sc: sc.clone(),
         pg: pg.clone(),
@@ -347,6 +354,7 @@ async fn main() {
         subscriptions,
         auras,
         me,
+        mobile,
         tracks,
         playlists,
         users,

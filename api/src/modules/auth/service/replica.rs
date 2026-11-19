@@ -16,7 +16,7 @@ const SESSION_IN_FLIGHT: Duration = Duration::from_secs(6 * 60 * 60);
 pub const SESSION_RETRY_AFTER_SECONDS: i64 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Feed {
+pub(crate) enum Feed {
     Local,
     Streaming,
     Stalled,
@@ -38,7 +38,7 @@ impl AuthService {
             .await
     }
 
-    pub(super) async fn feed(&self) -> AppResult<Feed> {
+    pub(crate) async fn feed(&self) -> AppResult<Feed> {
         let row = sqlx::query_file!("queries/auth/service/replication_feed.sql")
             .fetch_one(&self.pool)
             .await?;

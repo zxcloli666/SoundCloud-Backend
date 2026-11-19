@@ -23,6 +23,7 @@ COPY utils/llm-ladder /utils/llm-ladder
 COPY utils/redact /utils/redact
 COPY utils/repl-verify /utils/repl-verify
 COPY utils/sc-fingerprint /utils/sc-fingerprint
+COPY utils/sc-mobile /utils/sc-mobile
 COPY utils/sc-transport /utils/sc-transport
 COPY utils/stream-ticket /utils/stream-ticket
 COPY utils/telemetry /utils/telemetry

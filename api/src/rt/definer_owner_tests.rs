@@ -126,12 +126,23 @@ const AUTH_GRANTS: [(&str, &str, &str); 21] = [
     ("schema public", "USAGE", "*"),
 ];
 
-const RELEASE_GRANTS: [(&str, &str, &str); 7] = [
+const RELEASE_GRANTS: [(&str, &str, &str); 10] = [
     ("public.cmd_outbox", "INSERT", "args,id,kind,node,touched"),
+    ("public.mobile_credentials", "DELETE", "*"),
+    (
+        "public.mobile_credentials",
+        "SELECT",
+        "soundcloud_user_id,token_v",
+    ),
+    ("public.mobile_credentials", "UPDATE", "updated_at"),
     ("public.repl_purges", "INSERT", "pk,purged_v,tbl"),
     ("public.sessions", "SELECT", "soundcloud_connection_id"),
     ("public.soundcloud_connections", "DELETE", "*"),
-    ("public.soundcloud_connections", "SELECT", "id,token_v"),
+    (
+        "public.soundcloud_connections",
+        "SELECT",
+        "id,soundcloud_user_id,token_v",
+    ),
     ("public.soundcloud_connections", "UPDATE", "updated_at"),
     ("schema public", "USAGE", "*"),
 ];
@@ -364,6 +375,9 @@ async fn superuser_powers_stay_out_of_reach_inside_the_auth_functions(
         "SELECT count(*) FROM chat.devices".to_owned(),
         "SELECT access_token FROM public.soundcloud_connections".to_owned(),
         "SELECT refresh_token FROM public.soundcloud_connections".to_owned(),
+        "SELECT access_token FROM public.mobile_credentials".to_owned(),
+        "SELECT refresh_token FROM public.mobile_credentials".to_owned(),
+        "SELECT code_verifier FROM public.mobile_link_requests".to_owned(),
         "SELECT client_secret FROM public.oauth_apps".to_owned(),
         "INSERT INTO public.cmd_done (node, id, status) VALUES ('main', gen_random_uuid(), 'ok')"
             .to_owned(),

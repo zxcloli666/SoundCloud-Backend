@@ -62,6 +62,7 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::auth::router(state.admission.clone()))
         .merge(modules::auth::sealed::router(state.sealed.clone()))
         .merge(modules::me::router())
+        .merge(modules::mobile::router())
         .merge(modules::legacy_clients::router())
         .merge(modules::tracks::router())
         .merge(modules::playlists::router())
