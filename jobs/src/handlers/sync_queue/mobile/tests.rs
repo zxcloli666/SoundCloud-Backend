@@ -180,7 +180,7 @@ fn a_malformed_mutation_is_refused_before_any_request_is_built() {
         );
     }
     assert!(matches!(
-        build(&claimed("like_track", "soundcloud:tracks:42", None)),
+        build(&claimed("like_playlist", "soundcloud:playlists:42", None)),
         Err(ActionError::UnknownAction(_))
     ));
 }

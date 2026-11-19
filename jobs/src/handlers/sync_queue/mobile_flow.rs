@@ -23,17 +23,12 @@ impl SyncQueueHandler {
         let action = metric_action(&mutation.action_type);
         let request = match mobile::build(mutation) {
             Ok(request) => request,
+            Err(_) if route == Route::MobileThenApiv1 => return Ok(Flow::Apiv1),
             Err(error) => {
                 self.record_action_failure(mutation, &error).await?;
                 return Ok(Flow::Done);
             }
         };
-        if mutation.action_type == "playlist_create"
-            && mutation.has_ambiguous_remote_attempt()
-            && !self.confirmed_not_created(mutation).await?
-        {
-            return Ok(Flow::Done);
-        }
         if self
             .bot_checks
             .remaining_seconds(&account_action(mutation))
@@ -58,6 +53,12 @@ impl SyncQueueHandler {
                 return Ok(Flow::Done);
             }
         };
+        if mutation.action_type == "playlist_create"
+            && mutation.has_ambiguous_remote_attempt()
+            && !self.confirmed_not_created(mutation).await?
+        {
+            return Ok(Flow::Done);
+        }
         let oauth_app_id = Some(linked.oauth_app_id());
         let Some(probing) = self.admit(mutation, oauth_app_id).await? else {
             record_mobile_action(action, "held");

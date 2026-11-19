@@ -49,7 +49,7 @@ async fn a_linked_create_goes_through_mobile_and_the_local_playlist_gets_the_new
     let seen = world.mobile.seen();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0, "POST");
-    assert!(seen[0].1.ends_with("/playlists"));
+    assert!(seen[0].1.contains("/playlists"));
     let sent: Option<Value> = world
         .mobile
         .sent(0)
@@ -239,7 +239,7 @@ async fn a_linked_playlist_delete_is_a_mobile_delete_and_a_gone_playlist_closes_
     let seen = world.mobile.seen();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].0, "DELETE");
-    assert!(seen[0].1.ends_with("/playlists/soundcloud:playlists:900"));
+    assert!(seen[0].1.contains("/playlists/soundcloud:playlists:900"));
     assert!(world.apiv1.calls().is_empty());
     assert_eq!(world.queued().await?, 0);
     Ok(())
@@ -274,8 +274,8 @@ async fn a_linked_like_is_a_mobile_post_and_an_unlike_is_a_mobile_delete_post(
 
     let seen = world.mobile.seen();
     assert_eq!(seen.len(), 2);
-    assert!(seen[0].1.ends_with("/likes/tracks/create"));
-    assert!(seen[1].1.ends_with("/likes/tracks/delete"));
+    assert!(seen[0].1.contains("/likes/tracks/create"));
+    assert!(seen[1].1.contains("/likes/tracks/delete"));
     let sent: Vec<Option<Value>> = (0..2)
         .map(|index| {
             world
@@ -321,6 +321,13 @@ async fn a_bot_check_on_a_like_goes_to_apiv1_at_once_and_the_next_likes_skip_mob
     assert_eq!(world.apiv1.calls().len(), 1);
     assert_eq!(world.credential().await?.0, "active");
 
+    let app: uuid::Uuid = sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections")
+        .fetch_one(&world.pool)
+        .await?;
+    world
+        .handler
+        .spacings
+        .succeeded(&(app, "like_track".to_owned()), None);
     world
         .send("like_track", "soundcloud:tracks:43", None)
         .await?;

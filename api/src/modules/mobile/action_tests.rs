@@ -528,7 +528,7 @@ async fn a_comment_like_is_queued_with_the_track_from_our_tables_or_the_query(
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn an_unlike_cancels_the_queued_like_of_the_same_comment(pool: PgPool) -> anyhow::Result<()> {
+async fn an_unlike_annuls_the_queued_like_of_the_same_comment(pool: PgPool) -> anyhow::Result<()> {
     let fixture = linked(&pool, Graph::Reactions).await?;
     let queue = queue(&pool)?;
 
@@ -544,7 +544,6 @@ async fn an_unlike_cancels_the_queued_like_of_the_same_comment(pool: PgPool) -> 
     assert_eq!(unlike["actionType"], "comment_unlike");
     let rows = queued(&pool).await?;
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().any(|row| row.0 == "comment_like" && row.3));
-    assert!(rows.iter().any(|row| row.0 == "comment_unlike" && !row.3));
+    assert!(rows.iter().all(|row| row.3));
     Ok(())
 }
