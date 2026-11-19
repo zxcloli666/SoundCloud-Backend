@@ -69,12 +69,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             pool,
             storage_url,
             config,
-            pacing: Pacing {
-                retry_base: find.retry_base,
-                max_attempts: find.max_attempts,
-                none_recheck: find.none_recheck,
-                static_recheck: find.static_recheck,
-            },
+            pacing: Pacing::of(find),
             blobs,
             parts: Parts::default(),
             lanes,
@@ -217,6 +212,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         warn!(track = %claim.sc_track_id, "held video payload is unreadable; the candidate is dropped");
         let settled = queue::settle(
             &self.pool,
+            &self.pacing,
             &claim.sc_track_id,
             claim.attempt,
             "none",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 
 import aiohttp
@@ -14,7 +15,7 @@ from worker.domain.deadline import Deadline
 from worker.domain.outcome import PermanentFailure, Reason, Status
 from worker.domain.video.classify import Verdict
 from worker.domain.video.features import Features
-from worker.domain.video_find import Candidate, Evaluated, InputsGone, VideoFindLane
+from worker.domain.video_find import Candidate, Evaluated, InputsGone, VideoFindLane, parse
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import Settings
@@ -130,3 +131,38 @@ async def test_an_uncertain_loop_still_goes_to_the_vlm_without_a_file(harness: H
 
     assert outcome.parts == ()
     assert (outcome.fields["kind"], outcome.fields["uncertain"]) == ("loop", True)
+
+
+async def test_a_kept_video_that_wins_comes_back_without_a_file(harness: Harness) -> None:
+    source = harness.folder / "c0.mp4"
+    media.make_mpegts(source, seconds=2)
+    kept = Candidate(0, "video", "u", kept=True)
+    best = replace(evaluated(source, Verdict("clip", False, "motion")), candidate=kept)
+
+    outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(60))
+
+    assert outcome.parts == ()
+    assert (outcome.fields["candidate"], outcome.fields["uncertain"]) == (0, False)
+
+
+async def test_a_kept_video_that_is_gone_is_skipped_not_sent_back(harness: Harness) -> None:
+    kept = Candidate(index=0, kind="video", url=harness.server.url("/missing"), kept=True)
+
+    with pytest.raises(PermanentFailure) as failed:
+        await harness.lane._download(kept, harness.folder, Deadline.after(30))
+
+    assert not isinstance(failed.value, InputsGone)
+
+
+def test_a_candidate_is_kept_only_when_jobs_says_so() -> None:
+    request = {
+        "sc_track_id": "11",
+        "attempt": 2,
+        "s3_url": "https://storage.test/11",
+        "candidates": [
+            {"index": 0, "kind": "video", "url": "https://storage.test/v/11-1.mp4", "kept": True},
+            {"index": 1, "kind": "video", "url": "https://storage.test/v/11-2-1.mp4"},
+        ],
+    }
+
+    assert [candidate.kept for candidate in parse(request).candidates] == [True, False]

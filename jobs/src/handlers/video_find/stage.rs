@@ -28,14 +28,29 @@ pub(super) struct StagedCandidate {
     pub(super) kind: VideoCandidateKind,
     pub(super) source_ref: Option<String>,
     pub(super) key: String,
+    #[serde(default)]
+    pub(super) kept: bool,
+}
+
+impl StagedCandidate {
+    fn same_as(&self, lead: &Lead) -> bool {
+        self.source == lead.source
+            && self.source_ref.is_some()
+            && self.source_ref == lead.source_ref
+    }
 }
 
 impl Staged {
     pub(super) fn keys(&self) -> Vec<String> {
         self.candidates
             .iter()
+            .filter(|candidate| !candidate.kept)
             .map(|candidate| candidate.key.clone())
             .collect()
+    }
+
+    pub(super) fn has_new(&self) -> bool {
+        self.candidates.iter().any(|candidate| !candidate.kept)
     }
 
     pub(super) fn candidate(&self, index: u32) -> Option<&StagedCandidate> {
@@ -70,14 +85,20 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
     pub(super) async fn bring_all(
         &self,
         claim: &Claimed,
+        kept: Vec<StagedCandidate>,
         leads: Vec<Lead>,
         youtube: &Leased,
     ) -> JobResult<Staged> {
-        let mut staged = Staged::default();
+        let mut staged = Staged { candidates: kept };
         let mut youtube_open = true;
         for lead in leads {
+            if staged.candidates.len() >= self.config.max_candidates {
+                break;
+            }
             let is_youtube = lead.source == VideoSource::Youtube;
-            if is_youtube && !youtube_open {
+            if (is_youtube && !youtube_open)
+                || staged.candidates.iter().any(|old| old.same_as(&lead))
+            {
                 continue;
             }
             let index = u32::try_from(staged.candidates.len()).unwrap_or(u32::MAX);
@@ -89,6 +110,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     kind: lead.kind,
                     source_ref: lead.source_ref.clone(),
                     key,
+                    kept: false,
                 }),
                 Err(Bring::Store(error)) => {
                     self.drop_temps(&staged.keys()).await;
@@ -186,6 +208,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     kind: candidate.kind,
                     url: url.to_string(),
                     source_ref: candidate.source_ref.clone(),
+                    kept: candidate.kept.then_some(true),
                 })
             })
             .collect()

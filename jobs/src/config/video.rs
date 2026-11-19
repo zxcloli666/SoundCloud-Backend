@@ -48,6 +48,9 @@ pub struct VideoFindConfig {
     pub max_attempts: u32,
     pub none_recheck: Duration,
     pub static_recheck: Duration,
+    pub research_fresh: Duration,
+    pub research_old: Duration,
+    pub research_fresh_age: Duration,
     pub max_candidates: usize,
     pub download_timeout: Duration,
     pub stage_timeout: Duration,
@@ -87,6 +90,15 @@ impl VideoFindConfig {
             ),
             static_recheck: Duration::from_secs(
                 env::positive_u64("VIDEO_STATIC_RECHECK_DAYS", 30)? * 86_400,
+            ),
+            research_fresh: Duration::from_secs(
+                env::positive_u64("VIDEO_RESEARCH_FRESH_DAYS", 30)? * 86_400,
+            ),
+            research_old: Duration::from_secs(
+                env::positive_u64("VIDEO_RESEARCH_OLD_DAYS", 90)? * 86_400,
+            ),
+            research_fresh_age: Duration::from_secs(
+                env::positive_u64("VIDEO_RESEARCH_FRESH_AGE_DAYS", 180)? * 86_400,
             ),
             max_candidates: env::non_zero_usize(
                 "VIDEO_MAX_CANDIDATES",

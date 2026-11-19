@@ -40,6 +40,7 @@ class Candidate:
     index: int
     kind: str
     url: str
+    kept: bool = False
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,8 @@ class VideoFindLane:
         try:
             await self._candidate_source.fetch(candidate.url, path, deadline)
         except PermanentFailure as failure:
-            if failure.reason in (Reason.AUDIO_NOT_FOUND, Reason.AUDIO_FORBIDDEN):
+            gone = failure.reason in (Reason.AUDIO_NOT_FOUND, Reason.AUDIO_FORBIDDEN)
+            if gone and not candidate.kept:
                 raise InputsGone(f"candidate={candidate.index} {failure.detail}") from failure
             raise
         return path
@@ -196,7 +198,7 @@ class VideoFindLane:
     async def _check(
         self, candidate: Candidate, path: Path, track: Track, deadline: Deadline
     ) -> tuple[int, Mapping[str, float]] | None:
-        if candidate.kind == CANVAS:
+        if candidate.kind == CANVAS or candidate.kept:
             return 0, {}
         found = await self._verify(path, track, deadline)
         if found is None:
@@ -227,11 +229,11 @@ class VideoFindLane:
     async def _deliver(self, best: Evaluated, folder: Path, deadline: Deadline) -> Outcome:
         kind = "loop" if best.verdict.kind == "loop" else "clip"
         scores = {**best.measured.scores(), **best.proof}
-        if best.verdict.uncertain:
+        if best.verdict.uncertain or best.candidate.kept:
             info = await features.probe(best.path, deadline)
             return Outcome.ok(
                 kind=kind,
-                uncertain=True,
+                uncertain=best.verdict.uncertain,
                 candidate=best.candidate.index,
                 offset_ms=0 if kind == "loop" else max(best.offset_ms, 0),
                 duration_ms=max(1, round(info.duration_s * MS)),
@@ -304,4 +306,5 @@ def candidate(raw: Mapping[str, object]) -> Candidate:
         index=required_int(raw, "index"),
         kind=required_text(raw, "kind"),
         url=required_text(raw, "url"),
+        kept=raw.get("kept") is True,
     )

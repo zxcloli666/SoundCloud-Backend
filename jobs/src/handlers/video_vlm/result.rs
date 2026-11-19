@@ -11,7 +11,7 @@ use super::VideoVlm;
 use super::haiku::Vision;
 use super::queue::{self, Held};
 use crate::handlers::video_accounts::Notify;
-use crate::handlers::video_find::final_key;
+use crate::handlers::video_find::{Pacing, final_key};
 use crate::handlers::video_gen::Lanes;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
@@ -103,7 +103,16 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     ) -> JobResult {
         let wait = self.pacing.static_recheck;
         let why = Some(WorkerReason::StaticVideo.as_str());
-        queue::settle(&self.pool, track, attempt, "static", wait, why).await?;
+        queue::settle(
+            &self.pool,
+            &self.pacing,
+            track,
+            attempt,
+            "static",
+            wait,
+            why,
+        )
+        .await?;
         info!(track, attempt, model, "VLM found a static video");
         self.drop_temp(&held.s3_key).await;
         Ok(())
@@ -129,6 +138,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         };
         let stored = store(
             &self.pool,
+            &self.pacing,
             track,
             attempt,
             Stored {
@@ -141,8 +151,12 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             answer,
         )
         .await?;
-        if !stored {
-            let _ = self.blobs.delete(&key).await;
+        match stored {
+            None => {
+                let _ = self.blobs.delete(&key).await;
+            }
+            Some(Some(replaced)) if replaced != key => self.drop_replaced(&replaced).await,
+            Some(_) => {}
         }
         self.drop_temp(&held.s3_key).await;
         Ok(())
@@ -156,6 +170,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         let wait = self.pacing.none_recheck;
         queue::settle(
             &self.pool,
+            &self.pacing,
             track,
             attempt,
             "none",
@@ -186,7 +201,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             stage,
             "VLM check failed; it will be sent again"
         );
-        if stage.as_deref() == Some("none") {
+        if matches!(stage.as_deref(), Some("none" | "found")) {
             self.drop_temp(&held.s3_key).await;
         }
         Ok(())
@@ -212,6 +227,12 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             warn!(key, %error, "a video temp file was not deleted; the sweep removes it");
         }
     }
+
+    async fn drop_replaced(&self, key: &str) {
+        if let Err(error) = self.blobs.delete(key).await {
+            warn!(key, %error, "a replaced video file was not deleted");
+        }
+    }
 }
 
 struct Stored<'a> {
@@ -223,12 +244,13 @@ struct Stored<'a> {
 
 async fn store(
     pool: &PgPool,
+    pacing: &Pacing,
     track: &str,
     attempt: i32,
     stored: Stored<'_>,
     held: &Held,
     answer: &Judged,
-) -> JobResult<bool> {
+) -> JobResult<Option<Option<String>>> {
     let mut transaction = pool.begin().await.map_err(JobError::retryable)?;
     let settled = sqlx::query_file!(
         "queries/video_vlm/settle.sql",
@@ -236,16 +258,19 @@ async fn store(
         attempt,
         "found",
         0.0_f64,
-        None::<&str>
+        None::<&str>,
+        pacing.research_fresh.as_secs_f64(),
+        pacing.research_old.as_secs_f64(),
+        pacing.research_fresh_age.as_secs_f64()
     )
     .fetch_optional(&mut *transaction)
     .await
     .map_err(JobError::retryable)?;
     if settled.is_none() {
         debug!(track, attempt, "stale VLM result ignored");
-        return Ok(false);
+        return Ok(None);
     }
-    sqlx::query_file!(
+    let video = sqlx::query_file!(
         "queries/video_find/store_video.sql",
         track,
         stored.kind.as_str(),
@@ -257,7 +282,7 @@ async fn store(
         stored.duration_ms,
         verify(held, answer)
     )
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(JobError::retryable)?;
     transaction.commit().await.map_err(JobError::retryable)?;
@@ -268,7 +293,7 @@ async fn store(
         model = answer.model,
         "video stored after the VLM check"
     );
-    Ok(true)
+    Ok(Some(video.replaced))
 }
 
 struct Judged {
