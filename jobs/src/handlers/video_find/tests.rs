@@ -691,9 +691,13 @@ fn static_and_empty_results_settle_while_transient_ones_retry() {
 mod sources {
     use backend_contracts::pipeline::VideoCandidateKind;
 
+    use bytes::Bytes;
+    use catalog_sources::SourceResult;
+    use wreq::header::HeaderMap;
+
     use super::super::sources::{Failure, Sources, Wanted};
-    use crate::handlers::video_accounts::SpotifyKey;
     use crate::handlers::video_accounts::check::mock::{Answer, Mock};
+    use crate::handlers::video_accounts::{Fetch, SpotifyKey};
 
     fn wanted() -> Wanted {
         Wanted {
@@ -704,17 +708,49 @@ mod sources {
         }
     }
 
-    const TOKEN: &str = "https://open.spotify.com/api/token";
-    const SEARCH: &str = "https://api.spotify.com/v1/search";
-    const PATHFINDER: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
+    fn gothrussia() -> Wanted {
+        Wanted {
+            artist: "Psychosis".to_owned(),
+            title: "gothrussia".to_owned(),
+            isrc: Some("GBUM72300001".to_owned()),
+            duration_ms: Some(171_756),
+        }
+    }
 
-    fn spotify(mock: &std::sync::Arc<Mock>) -> Sources<std::sync::Arc<Mock>> {
+    const TOKEN: &str = "https://open.spotify.com/api/token";
+    const SEARCH: &str = "https://api-partner.spotify.com/pathfinder/v2/query?op=searchTracks";
+    const PATHFINDER: &str = "https://api-partner.spotify.com/pathfinder/v2/query?op=canvas";
+    const FOUND: &str = include_str!("sources/fixtures/search_tracks.json");
+    const NOTHING: &str = r#"{"data":{"searchV2":{"tracksV2":{"items":[]}}}}"#;
+
+    struct ByOperation(std::sync::Arc<Mock>);
+
+    impl Fetch for ByOperation {
+        async fn get(&self, url: &str, headers: HeaderMap) -> SourceResult<Bytes> {
+            self.0.get(url, headers).await
+        }
+
+        async fn post(&self, url: &str, headers: HeaderMap, body: Bytes) -> SourceResult<Bytes> {
+            let operation = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|body| body["operationName"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            self.0
+                .post(&format!("{url}?op={operation}"), headers, body)
+                .await
+        }
+    }
+
+    fn spotify(mock: &std::sync::Arc<Mock>) -> Sources<ByOperation> {
         mock.route(
             "https://open.spotify.com/api/server-time",
             Answer::Body(r#"{"serverTime":1700000000}"#.to_owned()),
         );
         token_expiring_in(mock, 3_600_000);
-        Sources::new(mock.clone(), SpotifyKey::new(61, &[41, 41, 41]))
+        Sources::new(
+            ByOperation(mock.clone()),
+            SpotifyKey::new(61, &[41, 41, 41]),
+        )
     }
 
     fn token_expiring_in(mock: &std::sync::Arc<Mock>, millis: u64) {
@@ -739,13 +775,7 @@ mod sources {
     }
 
     fn hit(mock: &std::sync::Arc<Mock>) {
-        mock.route(
-            SEARCH,
-            Answer::Body(
-                r#"{"tracks":{"items":[{"uri":"spotify:track:abc","name":"Doja","duration_ms":96000,"artists":[{"name":"Central Cee"}]}]}}"#
-                    .to_owned(),
-            ),
-        );
+        mock.route(SEARCH, Answer::Body(FOUND.to_owned()));
         mock.route(
             PATHFINDER,
             Answer::Body(
@@ -761,7 +791,7 @@ mod sources {
         let sources = spotify(&mock);
         hit(&mock);
 
-        assert!(sources.canvas("dc", &wanted()).await.unwrap().is_some());
+        assert!(sources.canvas("dc", &gothrussia()).await.unwrap().is_some());
 
         assert_eq!(asked(&mock, TOKEN), 1);
         assert_eq!(asked(&mock, SEARCH), 1);
@@ -772,12 +802,9 @@ mod sources {
     async fn an_isrc_without_a_hit_falls_back_to_one_text_search() {
         let mock = Mock::new();
         let sources = spotify(&mock);
-        mock.route(
-            SEARCH,
-            Answer::Body(r#"{"tracks":{"items":[]}}"#.to_owned()),
-        );
+        mock.route(SEARCH, Answer::Body(NOTHING.to_owned()));
 
-        assert_eq!(sources.canvas("dc", &wanted()).await, Ok(None));
+        assert_eq!(sources.canvas("dc", &gothrussia()).await, Ok(None));
 
         assert_eq!(asked(&mock, SEARCH), 2);
         assert_eq!(asked(&mock, PATHFINDER), 0);
@@ -790,11 +817,11 @@ mod sources {
         hit(&mock);
 
         for _ in 0..3 {
-            sources.canvas("dc", &wanted()).await.unwrap();
+            sources.canvas("dc", &gothrussia()).await.unwrap();
         }
         assert_eq!(asked(&mock, TOKEN), 1);
 
-        sources.canvas("other", &wanted()).await.unwrap();
+        sources.canvas("other", &gothrussia()).await.unwrap();
         assert_eq!(asked(&mock, TOKEN), 2);
     }
 
@@ -805,8 +832,8 @@ mod sources {
         token_expiring_in(&mock, 30_000);
         hit(&mock);
 
-        sources.canvas("dc", &wanted()).await.unwrap();
-        sources.canvas("dc", &wanted()).await.unwrap();
+        sources.canvas("dc", &gothrussia()).await.unwrap();
+        sources.canvas("dc", &gothrussia()).await.unwrap();
 
         assert_eq!(asked(&mock, TOKEN), 2);
     }
@@ -816,18 +843,18 @@ mod sources {
         let mock = Mock::new();
         let sources = spotify(&mock);
         hit(&mock);
-        sources.canvas("dc", &wanted()).await.unwrap();
+        sources.canvas("dc", &gothrussia()).await.unwrap();
         mock.route(SEARCH, Answer::Status(401));
 
-        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+        let failure = sources.canvas("dc", &gothrussia()).await.unwrap_err();
 
         assert!(matches!(failure, Failure::Rejected(_)), "{failure:?}");
         assert_eq!(asked(&mock, TOKEN), 2);
         assert_eq!(asked(&mock, SEARCH), 3);
 
         hit(&mock);
-        sources.canvas("dc", &wanted()).await.unwrap();
-        sources.canvas("dc", &wanted()).await.unwrap();
+        sources.canvas("dc", &gothrussia()).await.unwrap();
+        sources.canvas("dc", &gothrussia()).await.unwrap();
         assert_eq!(asked(&mock, TOKEN), 3);
     }
 
@@ -837,7 +864,7 @@ mod sources {
         let sources = spotify(&mock);
         mock.route(SEARCH, Answer::Limited(120));
 
-        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+        let failure = sources.canvas("dc", &gothrussia()).await.unwrap_err();
 
         assert_eq!(
             failure,
@@ -848,7 +875,7 @@ mod sources {
         let sources = spotify(&mock);
         mock.route(TOKEN, Answer::Status(429));
 
-        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+        let failure = sources.canvas("dc", &gothrussia()).await.unwrap_err();
 
         assert_eq!(
             failure,
@@ -860,7 +887,7 @@ mod sources {
         hit(&mock);
         mock.route(PATHFINDER, Answer::Status(429));
 
-        let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+        let failure = sources.canvas("dc", &gothrussia()).await.unwrap_err();
 
         assert_eq!(
             failure,
@@ -872,41 +899,33 @@ mod sources {
     async fn an_isrc_hit_with_a_canvas_becomes_a_canvas_lead() {
         let mock = Mock::new();
         let sources = spotify(&mock);
+        mock.route(SEARCH, Answer::Body(FOUND.to_owned()));
         mock.route(
-            "https://api.spotify.com/v1/search",
-            Answer::Body(
-                r#"{"tracks":{"items":[{"uri":"spotify:track:abc","name":"Doja","duration_ms":96000,"artists":[{"name":"Central Cee"}]}]}}"#
-                    .to_owned(),
-            ),
-        );
-        mock.route(
-            "https://api-partner.spotify.com/pathfinder/v2/query",
+            PATHFINDER,
             Answer::Body(
                 r#"{"data":{"trackUnion":{"canvas":{"url":"https://canvaz.scdn.co/upload/a.cnvs.mp4"}}}}"#
                     .to_owned(),
             ),
         );
 
-        let found = sources.canvas("dc", &wanted()).await.unwrap().unwrap();
+        let found = sources.canvas("dc", &gothrussia()).await.unwrap().unwrap();
 
         assert_eq!(found.url, "https://canvaz.scdn.co/upload/a.cnvs.mp4");
         assert_eq!(found.kind, VideoCandidateKind::Canvas);
-        assert_eq!(found.source_ref.as_deref(), Some("spotify:track:abc"));
+        assert_eq!(
+            found.source_ref.as_deref(),
+            Some("spotify:track:5zSu3mGfeaY3q3xDXFVBa0")
+        );
     }
 
     #[tokio::test]
     async fn a_text_match_with_another_title_is_not_a_canvas_candidate() {
         let mock = Mock::new();
         let sources = spotify(&mock);
-        let mut other = wanted();
+        let mut other = gothrussia();
         other.isrc = None;
-        mock.route(
-            "https://api.spotify.com/v1/search",
-            Answer::Body(
-                r#"{"tracks":{"items":[{"uri":"spotify:track:zzz","name":"Another Song Entirely","duration_ms":96000,"artists":[{"name":"Central Cee"}]}]}}"#
-                    .to_owned(),
-            ),
-        );
+        other.title = "Another Song Entirely".to_owned();
+        mock.route(SEARCH, Answer::Body(FOUND.to_owned()));
 
         assert_eq!(sources.canvas("dc", &other).await, Ok(None));
     }
@@ -916,9 +935,9 @@ mod sources {
         for (status, paused) in [(429_u16, true), (401, false)] {
             let mock = Mock::new();
             let sources = spotify(&mock);
-            mock.route("https://api.spotify.com/v1/search", Answer::Status(status));
+            mock.route(SEARCH, Answer::Status(status));
 
-            let failure = sources.canvas("dc", &wanted()).await.unwrap_err();
+            let failure = sources.canvas("dc", &gothrussia()).await.unwrap_err();
 
             assert_eq!(
                 matches!(failure, Failure::Paused(..)),
