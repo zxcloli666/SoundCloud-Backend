@@ -2,7 +2,7 @@ from sqlbits import assign, function, indent, keys_tuple, index_pred, lit, pk_js
 
 GENERATED = (
     "zz_core_col", "zz_erase", "zz_fk", "zz_guard", "zz_guard_intent", "zz_guard_result", "zz_max", "zz_merge", "zz_orphan",
-    "zz_owner", "zz_purge_guard", "zz_skip", "zz_tomb", "zz_tomb_check", "zz_tomb_guard", "zz_ver", "zzz_suppress",
+    "zz_owner", "zz_owner_copy", "zz_purge_guard", "zz_skip", "zz_tomb", "zz_tomb_check", "zz_tomb_guard", "zz_ver", "zzz_suppress",
 )
 RETIRED = ("public.scd_merge_repl_tombstones()",)
 SPLIT = "public.scd_mode() = 'split'"
@@ -45,6 +45,7 @@ def table_triggers(model, t):
                          ["cmd", "migration", "repl"], "guard"))
     if t.cls == "C":
         out.append(owner(t))
+        out.append(owner_copy(t))
     if t.cls == "C" and t.core_cols:
         out.append(core_col(t))
     if t.cls == "M":
@@ -587,7 +588,7 @@ def moved(t):
 def owner(t):
     keys = list(t.uniques)
     cols = [c for c in t.replicated if c not in t.pk]
-    lines = ["DECLARE", "    r record;", "    n bigint;", "    held boolean;"]
+    lines = ["DECLARE", "    r record;", "    n bigint;", "    held boolean;", "    fast text;"]
     lines += ["    k%d boolean;" % i for i in range(len(keys))]
     lines += [
         "BEGIN",
@@ -597,6 +598,9 @@ def owner(t):
         "        END IF;",
         "        RETURN NEW;",
         "    END IF;",
+    ]
+    lines += indent(copy_start(t))
+    lines += [
         "    IF TG_OP = 'DELETE' THEN",
         "        IF pg_catalog.pg_trigger_depth() = 1 AND %s THEN" % is_pending(t, "OLD"),
         "            RETURN NULL;",
@@ -629,6 +633,47 @@ def owner(t):
     sql = function(fn_name("owner", t), "\n".join(lines))
     sql += trigger(t, "zz_owner", "BEFORE INSERT OR UPDATE OR DELETE", fn_name("owner", t) + "()", API + " AND " + SPLIT, replica=True)
     return "zz_owner", sql, []
+
+
+def copy_start(t):
+    return [
+        "IF TG_OP = 'INSERT' THEN",
+        "    fast := current_setting('scd.copy', true);",
+        "    IF fast IS NULL OR fast = '' THEN",
+        "        fast := '-';",
+        "        IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')",
+        "            AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = %s::regclass AND s.srsubstate = 'd')" % lit(table(t.name)),
+        "            AND NOT EXISTS (SELECT 1 FROM %s) THEN" % table(t.name),
+        "            fast := %s;" % lit(t.name),
+        "        END IF;",
+        "        PERFORM pg_catalog.set_config('scd.copy', fast, true);",
+        "    END IF;",
+        "    IF fast = %s THEN" % lit(t.name),
+        "        RETURN NEW;",
+        "    END IF;",
+        "END IF;",
+    ]
+
+
+def owner_copy(t):
+    lines = [
+        "DECLARE",
+        "    p record;",
+        "BEGIN",
+        "    IF current_setting('scd.copy', true) IS DISTINCT FROM %s THEN" % lit(t.name),
+        "        RETURN NULL;",
+        "    END IF;",
+        "    PERFORM pg_catalog.set_config('scd.merging', 'on', true);",
+        "    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = %s LOOP" % lit(t.name),
+        "        DELETE FROM %s t WHERE %s AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());" % (table(t.name), pk_match("t", t, "p.pk")),
+        "    END LOOP;",
+        "    PERFORM pg_catalog.set_config('scd.merging', '', true);",
+        "    RETURN NULL;",
+        "END",
+    ]
+    sql = function(fn_name("owner_copy", t), "\n".join(lines))
+    sql += trigger(t, "zz_owner_copy", "AFTER INSERT", fn_name("owner_copy", t) + "()", API + " AND " + SPLIT, row=False, replica=True)
+    return "zz_owner_copy", sql, []
 
 
 def purge_guard(t):

@@ -70,8 +70,8 @@ class Generated(unittest.TestCase):
         def triggers(table):
             return sorted(set(re.findall(r"CREATE OR REPLACE TRIGGER (\w+) [^;]*? ON public\.%s " % table, text)))
 
-        self.assertEqual(triggers("tracks"), ["zz_guard", "zz_owner", "zzz_suppress"])
-        self.assertEqual(triggers("artists"), ["zz_core_col", "zz_guard", "zz_owner", "zzz_suppress"])
+        self.assertEqual(triggers("tracks"), ["zz_guard", "zz_owner", "zz_owner_copy", "zzz_suppress"])
+        self.assertEqual(triggers("artists"), ["zz_core_col", "zz_guard", "zz_owner", "zz_owner_copy", "zzz_suppress"])
         self.assertEqual(triggers("background_jobs"), ["zz_guard"])
         self.assertEqual(triggers("user_likes_tracks"), ["zz_guard_intent", "zz_guard_result", "zz_merge", "zz_purge_guard", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("soundcloud_connections"),
@@ -88,7 +88,7 @@ class Generated(unittest.TestCase):
 
     def test_replica_triggers_are_enabled_for_replica(self):
         text = self.files["triggers.sql"]
-        for name in ("zz_merge", "zz_owner", "zz_skip", "zz_tomb_check", "zz_tomb_guard", "zz_erase", "zz_purge_guard", "zz_max", "zz_fk",
+        for name in ("zz_merge", "zz_owner", "zz_owner_copy", "zz_skip", "zz_tomb_check", "zz_tomb_guard", "zz_erase", "zz_purge_guard", "zz_max", "zz_fk",
                      "zz_orphan", "zzz_suppress"):
             created = len(re.findall(r"CREATE OR REPLACE TRIGGER %s " % name, text))
             enabled = len(re.findall(r"ENABLE REPLICA TRIGGER %s;" % name, text))

@@ -37,6 +37,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_admin_maintenance_runs", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_admin_maintenance_runs", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -85,6 +86,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_album_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_album_artists", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -105,6 +107,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_album_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_album_tracks", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -140,6 +143,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_albums", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_albums", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -164,6 +168,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artist_attribution_revalidation", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artist_attribution_revalidation", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -185,6 +190,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artist_colike", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artist_colike", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -205,6 +211,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artist_coplay", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artist_coplay", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -239,6 +246,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artist_playable_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artist_playable_tracks", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -263,6 +271,7 @@
     {"before": false, "enabled": "A", "function": "artist_sc_account_flag", "gated": true, "name": "artist_sc_account_flag_trg", "pinned": true, "source": "\nBEGIN\n    IF TG_OP = 'INSERT' THEN\n        IF (NEW.verified OR NEW.source = 'mb_resolve') AND NEW.role IN ('main', 'alt', 'demo') THEN\n            UPDATE artists\n            SET has_sc_account = true\n            WHERE id = NEW.artist_id\n              AND NOT has_sc_account;\n        END IF;\n        RETURN NULL;\n    END IF;\n\n    UPDATE artists\n    SET has_sc_account = EXISTS (SELECT 1\n                                 FROM artist_sc_accounts AS account\n                                 WHERE account.artist_id = OLD.artist_id\n                                   AND (account.verified OR account.source = 'mb_resolve')\n                                   AND account.role IN ('main', 'alt', 'demo'))\n    WHERE id = OLD.artist_id;\n    RETURN NULL;\nEND;\n"},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artist_sc_accounts", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artist_sc_accounts", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -286,6 +295,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artist_socials", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artist_socials", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -344,6 +354,7 @@
     {"enabled": "O", "function": "scd_core_col_artists", "gated": false, "name": "zz_core_col", "pinned": false},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_artists", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -419,6 +430,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_background_job_failures", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_background_job_failures", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -492,6 +504,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_catalog_audience", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_catalog_audience", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -510,6 +523,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_catalog_audience_ids", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_catalog_audience_ids", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -573,6 +587,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_catalog_collection_sync", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_catalog_collection_sync", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -902,6 +917,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_discover_tag_counts", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_discover_tag_counts", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1002,6 +1018,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_job_status", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_job_status", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1170,6 +1187,7 @@
     {"enabled": "O", "function": "scd_core_col_lyrics_cache", "gated": false, "name": "zz_core_col", "pinned": false},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_lyrics_cache", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_lyrics_cache", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1300,6 +1318,7 @@
     {"before": false, "enabled": "A", "function": "star_due_mark", "gated": true, "name": "star_due_mark_update", "pinned": true, "source": "\nBEGIN\n    IF NOT EXISTS (\n        SELECT 1\n        FROM public.star_due_watch AS watch\n        WHERE watch.watched_at > now() - interval '1 day'\n    ) THEN\n        RETURN NULL;\n    END IF;\n    IF TG_OP = 'INSERT' THEN\n        INSERT INTO public.star_due_marks (sc_track_id)\n        SELECT star.sc_track_id\n        FROM public.star_track_tiers AS star\n        WHERE star.sc_track_id = NEW.sc_track_id;\n        RETURN NULL;\n    END IF;\n    INSERT INTO public.star_due_marks (sc_track_id)\n    SELECT star.sc_track_id\n    FROM public.star_track_tiers AS star\n    WHERE star.sc_track_id = OLD.sc_track_id;\n    IF TG_OP = 'UPDATE' THEN\n        IF NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id THEN\n            INSERT INTO public.star_due_marks (sc_track_id)\n            SELECT star.sc_track_id\n            FROM public.star_track_tiers AS star\n            WHERE star.sc_track_id = NEW.sc_track_id;\n        END IF;\n    END IF;\n    RETURN NULL;\nEND\n"},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_lyrics_lookup_state", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_lyrics_lookup_state", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1487,6 +1506,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_oauth_app_tokens", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_oauth_app_tokens", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1588,6 +1608,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlist_legacy_membership_intents", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlist_legacy_membership_intents", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1625,6 +1646,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlist_membership_operations", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlist_membership_operations", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1664,6 +1686,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlist_membership_state", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlist_membership_state", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1724,6 +1747,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlist_remote_observations", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlist_remote_observations", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1762,6 +1786,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlist_remote_snapshots", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlist_remote_snapshots", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1797,6 +1822,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlist_track_projection", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlist_track_projection", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -1847,6 +1873,7 @@
     {"enabled": "O", "function": "scd_core_col_playlists", "gated": false, "name": "zz_core_col", "pinned": false},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_playlists", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2023,6 +2050,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_search_terms", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_search_terms", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2271,6 +2299,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_sync_queue_action_pauses", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_sync_queue_action_pauses", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2298,6 +2327,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_taste_model_versions", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_taste_model_versions", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2367,6 +2397,7 @@
     {"before": true, "enabled": "A", "function": "track_artists_block_guard", "gated": true, "name": "track_artists_block_guard_trg", "pinned": true, "source": "\nBEGIN\n    IF\nEXISTS (\n        SELECT 1 FROM track_artist_blocks b\n        WHERE b.track_id = NEW.track_id AND b.artist_id = NEW.artist_id\n    ) THEN\n        RETURN NULL;\nEND IF;\nRETURN NEW;\nEND;\n"},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_track_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_track_artists", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2390,6 +2421,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_track_comments", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_track_comments", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2456,6 +2488,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_track_highlights", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_track_highlights", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2480,6 +2513,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_track_search", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_track_search", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2532,6 +2566,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_track_sync_stamps", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_track_sync_stamps", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2617,6 +2652,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_track_videos", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_track_videos", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2756,6 +2792,7 @@
     {"before": true, "enabled": "A", "function": "tracks_primary_block_guard", "gated": true, "name": "tracks_primary_block_guard_trg", "pinned": true, "source": "\nBEGIN\n    IF\nNEW.primary_artist_id IS NOT NULL AND EXISTS (\n        SELECT 1 FROM track_artist_blocks b\n        WHERE b.track_id = NEW.id AND b.artist_id = NEW.primary_artist_id\n    ) THEN\n        NEW.primary_artist_id := NULL;\nEND IF;\nRETURN NEW;\nEND;\n"},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_tracks", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -2908,6 +2945,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_user_followers", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_user_followers", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3029,6 +3067,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_user_owned_playlists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_user_owned_playlists", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3049,6 +3088,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_user_owned_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_user_owned_tracks", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3067,6 +3107,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_user_profiles", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_user_profiles", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3130,6 +3171,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_user_taste_vectors", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_user_taste_vectors", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3148,6 +3190,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_user_web_profiles", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_user_web_profiles", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3191,6 +3234,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_users", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_users", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3252,6 +3296,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_wanted_track_albums", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_wanted_track_albums", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3272,6 +3317,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_wanted_track_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_wanted_track_artists", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
@@ -3325,6 +3371,7 @@
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_wanted_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_wanted_tracks", "gated": false, "name": "zz_owner_copy", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [

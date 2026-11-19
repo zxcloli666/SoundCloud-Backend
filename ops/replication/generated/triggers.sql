@@ -170,12 +170,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.admin_maintenance_runs'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.admin_maintenance_runs) THEN
+                fast := 'admin_maintenance_runs';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'admin_maintenance_runs' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', OLD.kind)) THEN
@@ -228,6 +244,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_admin_maintenance_runs();
 ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_admin_maintenance_runs()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'admin_maintenance_runs' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'admin_maintenance_runs' LOOP
+        DELETE FROM public.admin_maintenance_runs t WHERE t.kind = (p.pk ->> 'kind')::character varying(64) AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.admin_maintenance_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_admin_maintenance_runs();
+ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -245,12 +282,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.album_artists'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.album_artists) THEN
+                fast := 'album_artists';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'album_artists' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', OLD.album_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
@@ -302,6 +355,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_artists();
 ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_album_artists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'album_artists' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'album_artists' LOOP
+        DELETE FROM public.album_artists t WHERE t.album_id = (p.pk ->> 'album_id')::uuid AND t.artist_id = (p.pk ->> 'artist_id')::uuid AND t.role = (p.pk ->> 'role')::character varying(16) AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.album_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_album_artists();
+ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -315,12 +389,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.album_tracks'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.album_tracks) THEN
+                fast := 'album_tracks';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'album_tracks' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', OLD.album_id, 'track_id', OLD.track_id)) THEN
@@ -373,6 +463,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_tracks();
 ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_album_tracks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'album_tracks' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'album_tracks' LOOP
+        DELETE FROM public.album_tracks t WHERE t.album_id = (p.pk ->> 'album_id')::uuid AND t.track_id = (p.pk ->> 'track_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.album_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_album_tracks();
+ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -386,6 +497,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -394,6 +506,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.albums'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.albums) THEN
+                fast := 'albums';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'albums' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -479,6 +606,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_albums();
 ALTER TABLE public.albums ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_albums()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'albums' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'albums' LOOP
+        DELETE FROM public.albums t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_albums();
+ALTER TABLE public.albums ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.albums ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -492,12 +640,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artist_attribution_revalidation'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artist_attribution_revalidation) THEN
+                fast := 'artist_attribution_revalidation';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artist_attribution_revalidation' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', OLD.singleton)) THEN
@@ -550,6 +714,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_attribution_revalidation();
 ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artist_attribution_revalidation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artist_attribution_revalidation' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artist_attribution_revalidation' LOOP
+        DELETE FROM public.artist_attribution_revalidation t WHERE t.singleton = (p.pk ->> 'singleton')::boolean AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artist_attribution_revalidation FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artist_attribution_revalidation();
+ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -563,12 +748,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artist_colike'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artist_colike) THEN
+                fast := 'artist_colike';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artist_colike' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', OLD.a_id, 'b_id', OLD.b_id)) THEN
@@ -621,6 +822,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_colike FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_colike();
 ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artist_colike()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artist_colike' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artist_colike' LOOP
+        DELETE FROM public.artist_colike t WHERE t.a_id = (p.pk ->> 'a_id')::uuid AND t.b_id = (p.pk ->> 'b_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artist_colike FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artist_colike();
+ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -634,12 +856,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artist_coplay'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artist_coplay) THEN
+                fast := 'artist_coplay';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artist_coplay' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', OLD.a_id, 'b_id', OLD.b_id)) THEN
@@ -692,6 +930,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_coplay();
 ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artist_coplay()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artist_coplay' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artist_coplay' LOOP
+        DELETE FROM public.artist_coplay t WHERE t.a_id = (p.pk ->> 'a_id')::uuid AND t.b_id = (p.pk ->> 'b_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artist_coplay FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artist_coplay();
+ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -707,12 +966,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artist_playable_tracks'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artist_playable_tracks) THEN
+                fast := 'artist_playable_tracks';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artist_playable_tracks' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'track_id', OLD.track_id)) THEN
@@ -765,6 +1040,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_playable_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_playable_tracks();
 ALTER TABLE public.artist_playable_tracks ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artist_playable_tracks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artist_playable_tracks' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artist_playable_tracks' LOOP
+        DELETE FROM public.artist_playable_tracks t WHERE t.artist_id = (p.pk ->> 'artist_id')::uuid AND t.track_id = (p.pk ->> 'track_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artist_playable_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artist_playable_tracks();
+ALTER TABLE public.artist_playable_tracks ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_playable_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_playable_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -778,6 +1074,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -785,6 +1082,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artist_sc_accounts'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artist_sc_accounts) THEN
+                fast := 'artist_sc_accounts';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artist_sc_accounts' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'sc_user_id', OLD.sc_user_id)) THEN
@@ -859,6 +1171,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_sc_accounts();
 ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artist_sc_accounts()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artist_sc_accounts' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artist_sc_accounts' LOOP
+        DELETE FROM public.artist_sc_accounts t WHERE t.artist_id = (p.pk ->> 'artist_id')::uuid AND t.sc_user_id = (p.pk ->> 'sc_user_id')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artist_sc_accounts FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artist_sc_accounts();
+ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -872,12 +1205,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artist_socials'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artist_socials) THEN
+                fast := 'artist_socials';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artist_socials' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'url', OLD.url)) THEN
@@ -930,6 +1279,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_socials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_socials();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artist_socials()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artist_socials' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artist_socials' LOOP
+        DELETE FROM public.artist_socials t WHERE t.artist_id = (p.pk ->> 'artist_id')::uuid AND t.url = (p.pk ->> 'url')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artist_socials FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artist_socials();
+ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -957,6 +1327,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
     k2 boolean;
@@ -967,6 +1338,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.artists'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.artists) THEN
+                fast := 'artists';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'artists' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -1120,6 +1506,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artists();
 ALTER TABLE public.artists ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_artists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'artists' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'artists' LOOP
+        DELETE FROM public.artists t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_artists();
+ALTER TABLE public.artists ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artists ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -1137,12 +1544,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.background_job_failures'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.background_job_failures) THEN
+                fast := 'background_job_failures';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'background_job_failures' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', OLD.id, 'generation', OLD.generation)) THEN
@@ -1195,6 +1618,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_background_job_failures();
 ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_background_job_failures()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'background_job_failures' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'background_job_failures' LOOP
+        DELETE FROM public.background_job_failures t WHERE t.id = (p.pk ->> 'id')::uuid AND t.generation = (p.pk ->> 'generation')::bigint AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.background_job_failures FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_background_job_failures();
+ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -1212,12 +1656,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.catalog_audience'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.catalog_audience) THEN
+                fast := 'catalog_audience';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'catalog_audience' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', OLD.subject_urn, 'relation', OLD.relation, 'user_urn', OLD.user_urn)) THEN
@@ -1270,6 +1730,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();
 ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_catalog_audience()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'catalog_audience' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'catalog_audience' LOOP
+        DELETE FROM public.catalog_audience t WHERE t.subject_urn = (p.pk ->> 'subject_urn')::text AND t.relation = (p.pk ->> 'relation')::text AND t.user_urn = (p.pk ->> 'user_urn')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.catalog_audience FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_catalog_audience();
+ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -1283,12 +1764,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.catalog_audience_ids'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.catalog_audience_ids) THEN
+                fast := 'catalog_audience_ids';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'catalog_audience_ids' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience_ids' AND p.pk = jsonb_build_object('subject_id', OLD.subject_id, 'relation', OLD.relation, 'user_id', OLD.user_id)) THEN
@@ -1341,6 +1838,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience_ids FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience_ids();
 ALTER TABLE public.catalog_audience_ids ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_catalog_audience_ids()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'catalog_audience_ids' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'catalog_audience_ids' LOOP
+        DELETE FROM public.catalog_audience_ids t WHERE t.subject_id = (p.pk ->> 'subject_id')::bigint AND t.relation = (p.pk ->> 'relation')::smallint AND t.user_id = (p.pk ->> 'user_id')::bigint AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.catalog_audience_ids FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_catalog_audience_ids();
+ALTER TABLE public.catalog_audience_ids ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience_ids FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.catalog_audience_ids ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -1358,12 +1876,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.catalog_collection_sync'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.catalog_collection_sync) THEN
+                fast := 'catalog_collection_sync';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'catalog_collection_sync' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', OLD.subject_id, 'collection', OLD.collection, 'scope', OLD.scope)) THEN
@@ -1415,6 +1949,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_collection_sync();
 ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_catalog_collection_sync()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'catalog_collection_sync' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'catalog_collection_sync' LOOP
+        DELETE FROM public.catalog_collection_sync t WHERE t.subject_id = (p.pk ->> 'subject_id')::text AND t.collection = (p.pk ->> 'collection')::text AND t.scope = (p.pk ->> 'scope')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.catalog_collection_sync FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_catalog_collection_sync();
+ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zzz_suppress;
@@ -1967,12 +2522,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.discover_tag_counts'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.discover_tag_counts) THEN
+                fast := 'discover_tag_counts';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'discover_tag_counts' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', OLD.tag)) THEN
@@ -2024,6 +2595,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_discover_tag_counts();
 ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_discover_tag_counts()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'discover_tag_counts' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'discover_tag_counts' LOOP
+        DELETE FROM public.discover_tag_counts t WHERE t.tag = (p.pk ->> 'tag')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.discover_tag_counts FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_discover_tag_counts();
+ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zzz_suppress;
@@ -2384,12 +2976,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.job_status'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.job_status) THEN
+                fast := 'job_status';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'job_status' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', OLD.kind, 'dedup_key', OLD.dedup_key)) THEN
@@ -2441,6 +3049,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.job_status FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_status();
 ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_job_status()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'job_status' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'job_status' LOOP
+        DELETE FROM public.job_status t WHERE t.kind = (p.pk ->> 'kind')::text AND t.dedup_key = (p.pk ->> 'dedup_key')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.job_status FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_job_status();
+ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zzz_suppress;
@@ -2834,12 +3463,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.lyrics_cache'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.lyrics_cache) THEN
+                fast := 'lyrics_cache';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'lyrics_cache' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id)) THEN
@@ -2915,6 +3560,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_cache();
 ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_lyrics_cache()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'lyrics_cache' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'lyrics_cache' LOOP
+        DELETE FROM public.lyrics_cache t WHERE t.sc_track_id = (p.pk ->> 'sc_track_id')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.lyrics_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_lyrics_cache();
+ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -2934,6 +3600,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -2941,6 +3608,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.lyrics_lookup_state'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.lyrics_lookup_state) THEN
+                fast := 'lyrics_lookup_state';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'lyrics_lookup_state' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
@@ -3014,6 +3696,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_lookup_state();
 ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_lyrics_lookup_state()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'lyrics_lookup_state' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'lyrics_lookup_state' LOOP
+        DELETE FROM public.lyrics_lookup_state t WHERE t.track_id = (p.pk ->> 'track_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.lyrics_lookup_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_lyrics_lookup_state();
+ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zzz_suppress;
@@ -3452,12 +4155,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.oauth_app_tokens'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.oauth_app_tokens) THEN
+                fast := 'oauth_app_tokens';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'oauth_app_tokens' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', OLD.oauth_app_id)) THEN
@@ -3509,6 +4228,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_oauth_app_tokens();
 ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_oauth_app_tokens()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'oauth_app_tokens' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'oauth_app_tokens' LOOP
+        DELETE FROM public.oauth_app_tokens t WHERE t.oauth_app_id = (p.pk ->> 'oauth_app_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.oauth_app_tokens FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_oauth_app_tokens();
+ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zzz_suppress;
@@ -3667,6 +4407,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -3674,6 +4415,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlist_legacy_membership_intents'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlist_legacy_membership_intents) THEN
+                fast := 'playlist_legacy_membership_intents';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlist_legacy_membership_intents' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', OLD.archive_id)) THEN
@@ -3748,6 +4504,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_legacy_membership_intents();
 ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlist_legacy_membership_intents()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlist_legacy_membership_intents' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlist_legacy_membership_intents' LOOP
+        DELETE FROM public.playlist_legacy_membership_intents t WHERE t.archive_id = (p.pk ->> 'archive_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlist_legacy_membership_intents FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlist_legacy_membership_intents();
+ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -3761,6 +4538,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -3769,6 +4547,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlist_membership_operations'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlist_membership_operations) THEN
+                fast := 'playlist_membership_operations';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlist_membership_operations' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', OLD.operation_id)) THEN
@@ -3854,6 +4647,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_operations();
 ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlist_membership_operations()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlist_membership_operations' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlist_membership_operations' LOOP
+        DELETE FROM public.playlist_membership_operations t WHERE t.operation_id = (p.pk ->> 'operation_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlist_membership_operations FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlist_membership_operations();
+ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -3867,12 +4681,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlist_membership_state'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlist_membership_state) THEN
+                fast := 'playlist_membership_state';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlist_membership_state' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn)) THEN
@@ -3925,6 +4755,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_state();
 ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlist_membership_state()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlist_membership_state' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlist_membership_state' LOOP
+        DELETE FROM public.playlist_membership_state t WHERE t.playlist_urn = (p.pk ->> 'playlist_urn')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlist_membership_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlist_membership_state();
+ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -3940,6 +4791,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -3947,6 +4799,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlist_remote_observations'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlist_remote_observations) THEN
+                fast := 'playlist_remote_observations';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlist_remote_observations' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -4021,6 +4888,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_observations();
 ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlist_remote_observations()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlist_remote_observations' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlist_remote_observations' LOOP
+        DELETE FROM public.playlist_remote_observations t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlist_remote_observations FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlist_remote_observations();
+ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -4036,6 +4924,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -4044,6 +4933,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlist_remote_snapshots'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlist_remote_snapshots) THEN
+                fast := 'playlist_remote_snapshots';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlist_remote_snapshots' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -4129,6 +5033,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_snapshots();
 ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlist_remote_snapshots()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlist_remote_snapshots' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlist_remote_snapshots' LOOP
+        DELETE FROM public.playlist_remote_snapshots t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlist_remote_snapshots FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlist_remote_snapshots();
+ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -4144,6 +5069,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -4151,6 +5077,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlist_track_projection'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlist_track_projection) THEN
+                fast := 'playlist_track_projection';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlist_track_projection' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn, 'position', OLD."position")) THEN
@@ -4225,6 +5166,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_track_projection();
 ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlist_track_projection()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlist_track_projection' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlist_track_projection' LOOP
+        DELETE FROM public.playlist_track_projection t WHERE t.playlist_urn = (p.pk ->> 'playlist_urn')::text AND t."position" = (p.pk ->> 'position')::integer AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlist_track_projection FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlist_track_projection();
+ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -4252,6 +5214,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -4259,6 +5222,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.playlists'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.playlists) THEN
+                fast := 'playlists';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'playlists' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', OLD.urn)) THEN
@@ -4370,6 +5348,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlists();
 ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_playlists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'playlists' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'playlists' LOOP
+        DELETE FROM public.playlists t WHERE t.urn = (p.pk ->> 'urn')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_playlists();
+ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zzz_suppress;
@@ -4745,12 +5744,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.search_terms'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.search_terms) THEN
+                fast := 'search_terms';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'search_terms' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', OLD.word)) THEN
@@ -4802,6 +5817,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.search_terms FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_search_terms();
 ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_search_terms()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'search_terms' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'search_terms' LOOP
+        DELETE FROM public.search_terms t WHERE t.word = (p.pk ->> 'word')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.search_terms FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_search_terms();
+ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zzz_suppress;
@@ -5476,12 +6512,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.sync_queue_action_pauses'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.sync_queue_action_pauses) THEN
+                fast := 'sync_queue_action_pauses';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'sync_queue_action_pauses' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', OLD.oauth_app_id, 'action_type', OLD.action_type)) THEN
@@ -5534,6 +6586,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_sync_queue_action_pauses();
 ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_sync_queue_action_pauses()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'sync_queue_action_pauses' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'sync_queue_action_pauses' LOOP
+        DELETE FROM public.sync_queue_action_pauses t WHERE t.oauth_app_id = (p.pk ->> 'oauth_app_id')::uuid AND t.action_type = (p.pk ->> 'action_type')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.sync_queue_action_pauses FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_sync_queue_action_pauses();
+ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -5547,6 +6620,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
     k2 boolean;
@@ -5556,6 +6630,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.taste_model_versions'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.taste_model_versions) THEN
+                fast := 'taste_model_versions';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'taste_model_versions' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', OLD.version)) THEN
@@ -5651,6 +6740,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_taste_model_versions();
 ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_taste_model_versions()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'taste_model_versions' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'taste_model_versions' LOOP
+        DELETE FROM public.taste_model_versions t WHERE t.version = (p.pk ->> 'version')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.taste_model_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_taste_model_versions();
+ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zzz_suppress;
@@ -5834,12 +6944,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.track_artists'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.track_artists) THEN
+                fast := 'track_artists';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'track_artists' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
@@ -5892,6 +7018,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_artists();
 ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_track_artists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'track_artists' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'track_artists' LOOP
+        DELETE FROM public.track_artists t WHERE t.track_id = (p.pk ->> 'track_id')::uuid AND t.artist_id = (p.pk ->> 'artist_id')::uuid AND t.role = (p.pk ->> 'role')::character varying(16) AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_track_artists();
+ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -5905,6 +7052,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -5912,6 +7060,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.track_comments'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.track_comments) THEN
+                fast := 'track_comments';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'track_comments' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -5986,6 +7149,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_comments FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_comments();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_track_comments()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'track_comments' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'track_comments' LOOP
+        DELETE FROM public.track_comments t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.track_comments FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_track_comments();
+ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -6003,12 +7187,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.track_highlights'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.track_highlights) THEN
+                fast := 'track_highlights';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'track_highlights' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_highlights' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
@@ -6061,6 +7261,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_highlights FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_highlights();
 ALTER TABLE public.track_highlights ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_track_highlights()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'track_highlights' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'track_highlights' LOOP
+        DELETE FROM public.track_highlights t WHERE t.track_id = (p.pk ->> 'track_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.track_highlights FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_track_highlights();
+ALTER TABLE public.track_highlights ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_highlights FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_highlights ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -6074,12 +7295,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.track_search'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.track_search) THEN
+                fast := 'track_search';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'track_search' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_search' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -6131,6 +7368,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_search FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_search();
 ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_track_search()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'track_search' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'track_search' LOOP
+        DELETE FROM public.track_search t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.track_search FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_track_search();
+ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_search FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_search ENABLE REPLICA TRIGGER zzz_suppress;
@@ -6184,12 +7442,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.track_sync_stamps'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.track_sync_stamps) THEN
+                fast := 'track_sync_stamps';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'track_sync_stamps' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_sync_stamps' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
@@ -6242,6 +7516,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_sync_stamps FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_sync_stamps();
 ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_track_sync_stamps()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'track_sync_stamps' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'track_sync_stamps' LOOP
+        DELETE FROM public.track_sync_stamps t WHERE t.track_id = (p.pk ->> 'track_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.track_sync_stamps FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_track_sync_stamps();
+ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_sync_stamps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_sync_stamps ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -6261,12 +7556,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.track_videos'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.track_videos) THEN
+                fast := 'track_videos';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'track_videos' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_videos' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id, 'kind', OLD.kind)) THEN
@@ -6319,6 +7630,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_videos FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_videos();
 ALTER TABLE public.track_videos ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_track_videos()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'track_videos' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'track_videos' LOOP
+        DELETE FROM public.track_videos t WHERE t.sc_track_id = (p.pk ->> 'sc_track_id')::text AND t.kind = (p.pk ->> 'kind')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.track_videos FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_track_videos();
+ALTER TABLE public.track_videos ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_videos FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_videos ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -6336,6 +7668,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -6344,6 +7677,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.tracks'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.tracks) THEN
+                fast := 'tracks';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'tracks' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -6428,6 +7776,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_tracks();
 ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_tracks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'tracks' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'tracks' LOOP
+        DELETE FROM public.tracks t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_tracks();
+ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zzz_suppress;
@@ -6717,12 +8086,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.user_followers'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.user_followers) THEN
+                fast := 'user_followers';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'user_followers' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'target_user_urn', OLD.target_user_urn)) THEN
@@ -6774,6 +8159,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_followers FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_followers();
 ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_user_followers()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'user_followers' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'user_followers' LOOP
+        DELETE FROM public.user_followers t WHERE t.user_id = (p.pk ->> 'user_id')::text AND t.target_user_urn = (p.pk ->> 'target_user_urn')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.user_followers FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_user_followers();
+ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zzz_suppress;
@@ -7285,12 +8691,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.user_owned_playlists'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.user_owned_playlists) THEN
+                fast := 'user_owned_playlists';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'user_owned_playlists' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'playlist_urn', OLD.playlist_urn)) THEN
@@ -7343,6 +8765,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_playlists();
 ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_user_owned_playlists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'user_owned_playlists' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'user_owned_playlists' LOOP
+        DELETE FROM public.user_owned_playlists t WHERE t.user_id = (p.pk ->> 'user_id')::text AND t.playlist_urn = (p.pk ->> 'playlist_urn')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.user_owned_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_user_owned_playlists();
+ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -7356,12 +8799,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.user_owned_tracks'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.user_owned_tracks) THEN
+                fast := 'user_owned_tracks';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'user_owned_tracks' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id)) THEN
@@ -7414,6 +8873,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_tracks();
 ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_user_owned_tracks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'user_owned_tracks' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'user_owned_tracks' LOOP
+        DELETE FROM public.user_owned_tracks t WHERE t.user_id = (p.pk ->> 'user_id')::text AND t.sc_track_id = (p.pk ->> 'sc_track_id')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.user_owned_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_user_owned_tracks();
+ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -7427,12 +8907,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.user_profiles'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.user_profiles) THEN
+                fast := 'user_profiles';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'user_profiles' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id)) THEN
@@ -7484,6 +8980,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_profiles();
 ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_user_profiles()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'user_profiles' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'user_profiles' LOOP
+        DELETE FROM public.user_profiles t WHERE t.soundcloud_user_id = (p.pk ->> 'soundcloud_user_id')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.user_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_user_profiles();
+ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zzz_suppress;
@@ -7798,12 +9315,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.user_taste_vectors'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.user_taste_vectors) THEN
+                fast := 'user_taste_vectors';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'user_taste_vectors' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id, 'version', OLD.version)) THEN
@@ -7856,6 +9389,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_taste_vectors();
 ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_user_taste_vectors()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'user_taste_vectors' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'user_taste_vectors' LOOP
+        DELETE FROM public.user_taste_vectors t WHERE t.sc_user_id = (p.pk ->> 'sc_user_id')::text AND t.version = (p.pk ->> 'version')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.user_taste_vectors FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_user_taste_vectors();
+ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -7869,12 +9423,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.user_web_profiles'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.user_web_profiles) THEN
+                fast := 'user_web_profiles';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'user_web_profiles' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
@@ -7927,6 +9497,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_web_profiles();
 ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_user_web_profiles()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'user_web_profiles' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'user_web_profiles' LOOP
+        DELETE FROM public.user_web_profiles t WHERE t.sc_user_id = (p.pk ->> 'sc_user_id')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.user_web_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_user_web_profiles();
+ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -7940,6 +9531,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -7947,6 +9539,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.users'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.users) THEN
+                fast := 'users';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'users' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
@@ -8021,6 +9628,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.users FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_users();
 ALTER TABLE public.users ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_users()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'users' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'users' LOOP
+        DELETE FROM public.users t WHERE t.sc_user_id = (p.pk ->> 'sc_user_id')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.users FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_users();
+ALTER TABLE public.users ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.users FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.users ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -8038,12 +9666,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.wanted_track_albums'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.wanted_track_albums) THEN
+                fast := 'wanted_track_albums';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'wanted_track_albums' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', OLD.wanted_track_id, 'album_id', OLD.album_id)) THEN
@@ -8096,6 +9740,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_albums();
 ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_wanted_track_albums()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'wanted_track_albums' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'wanted_track_albums' LOOP
+        DELETE FROM public.wanted_track_albums t WHERE t.wanted_track_id = (p.pk ->> 'wanted_track_id')::uuid AND t.album_id = (p.pk ->> 'album_id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.wanted_track_albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_wanted_track_albums();
+ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -8109,12 +9774,28 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.wanted_track_artists'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.wanted_track_artists) THEN
+                fast := 'wanted_track_artists';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'wanted_track_artists' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', OLD.wanted_track_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
@@ -8167,6 +9848,27 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_artists();
 ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zz_owner;
 
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_wanted_track_artists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'wanted_track_artists' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'wanted_track_artists' LOOP
+        DELETE FROM public.wanted_track_artists t WHERE t.wanted_track_id = (p.pk ->> 'wanted_track_id')::uuid AND t.artist_id = (p.pk ->> 'artist_id')::uuid AND t.role = (p.pk ->> 'role')::character varying(16) AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.wanted_track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_wanted_track_artists();
+ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zz_owner_copy;
+
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
@@ -8182,6 +9884,7 @@ DECLARE
     r record;
     n bigint;
     held boolean;
+    fast text;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -8190,6 +9893,21 @@ BEGIN
             RETURN OLD;
         END IF;
         RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.wanted_tracks'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.wanted_tracks) THEN
+                fast := 'wanted_tracks';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'wanted_tracks' THEN
+            RETURN NEW;
+        END IF;
     END IF;
     IF TG_OP = 'DELETE' THEN
         IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
@@ -8274,6 +9992,27 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_tracks();
 ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_wanted_tracks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'wanted_tracks' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'wanted_tracks' LOOP
+        DELETE FROM public.wanted_tracks t WHERE t.id = (p.pk ->> 'id')::uuid AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.wanted_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_wanted_tracks();
+ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zzz_suppress;
@@ -8431,63 +10170,78 @@ BEGIN
         FROM pg_catalog.pg_trigger t
         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_core_col', 'zz_erase', 'zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_tomb_guard', 'zz_ver', 'zzz_suppress')
+        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_core_col', 'zz_erase', 'zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_owner_copy', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_tomb_guard', 'zz_ver', 'zzz_suppress')
         EXCEPT VALUES
             ('admin_catalog_requests', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_owner'),
+            ('admin_maintenance_runs', 'zz_owner_copy'),
             ('admin_maintenance_runs', 'zzz_suppress'),
             ('ai_resolver_budget', 'zz_guard'),
             ('ai_resolver_cache', 'zz_guard'),
             ('album_artists', 'zz_guard'),
             ('album_artists', 'zz_owner'),
+            ('album_artists', 'zz_owner_copy'),
             ('album_artists', 'zzz_suppress'),
             ('album_tracks', 'zz_guard'),
             ('album_tracks', 'zz_owner'),
+            ('album_tracks', 'zz_owner_copy'),
             ('album_tracks', 'zzz_suppress'),
             ('albums', 'zz_guard'),
             ('albums', 'zz_owner'),
+            ('albums', 'zz_owner_copy'),
             ('albums', 'zzz_suppress'),
             ('artist_attribution_revalidation', 'zz_guard'),
             ('artist_attribution_revalidation', 'zz_owner'),
+            ('artist_attribution_revalidation', 'zz_owner_copy'),
             ('artist_attribution_revalidation', 'zzz_suppress'),
             ('artist_colike', 'zz_guard'),
             ('artist_colike', 'zz_owner'),
+            ('artist_colike', 'zz_owner_copy'),
             ('artist_colike', 'zzz_suppress'),
             ('artist_coplay', 'zz_guard'),
             ('artist_coplay', 'zz_owner'),
+            ('artist_coplay', 'zz_owner_copy'),
             ('artist_coplay', 'zzz_suppress'),
             ('artist_interest', 'zz_guard'),
             ('artist_playable_tracks', 'zz_guard'),
             ('artist_playable_tracks', 'zz_owner'),
+            ('artist_playable_tracks', 'zz_owner_copy'),
             ('artist_playable_tracks', 'zzz_suppress'),
             ('artist_sc_accounts', 'zz_guard'),
             ('artist_sc_accounts', 'zz_owner'),
+            ('artist_sc_accounts', 'zz_owner_copy'),
             ('artist_sc_accounts', 'zzz_suppress'),
             ('artist_socials', 'zz_guard'),
             ('artist_socials', 'zz_owner'),
+            ('artist_socials', 'zz_owner_copy'),
             ('artist_socials', 'zzz_suppress'),
             ('artists', 'zz_core_col'),
             ('artists', 'zz_guard'),
             ('artists', 'zz_owner'),
+            ('artists', 'zz_owner_copy'),
             ('artists', 'zzz_suppress'),
             ('audio_index_wire_state', 'zz_guard'),
             ('background_job_enqueues', 'zz_guard'),
             ('background_job_failures', 'zz_guard'),
             ('background_job_failures', 'zz_owner'),
+            ('background_job_failures', 'zz_owner_copy'),
             ('background_job_failures', 'zzz_suppress'),
             ('background_jobs', 'zz_guard'),
             ('background_schedules', 'zz_guard'),
             ('catalog_audience', 'zz_guard'),
             ('catalog_audience', 'zz_owner'),
+            ('catalog_audience', 'zz_owner_copy'),
             ('catalog_audience', 'zzz_suppress'),
             ('catalog_audience_ids', 'zz_guard'),
             ('catalog_audience_ids', 'zz_owner'),
+            ('catalog_audience_ids', 'zz_owner_copy'),
             ('catalog_audience_ids', 'zzz_suppress'),
             ('catalog_collection_cursors', 'zz_guard'),
             ('catalog_collection_seen', 'zz_guard'),
             ('catalog_collection_sync', 'zz_guard'),
             ('catalog_collection_sync', 'zz_owner'),
+            ('catalog_collection_sync', 'zz_owner_copy'),
             ('catalog_collection_sync', 'zzz_suppress'),
             ('catalog_merge_state', 'zz_guard'),
             ('catalog_work_links', 'zz_guard'),
@@ -8515,6 +10269,7 @@ BEGIN
             ('discover_settings', 'zzz_suppress'),
             ('discover_tag_counts', 'zz_guard'),
             ('discover_tag_counts', 'zz_owner'),
+            ('discover_tag_counts', 'zz_owner_copy'),
             ('discover_tag_counts', 'zzz_suppress'),
             ('disliked_tracks', 'zz_merge'),
             ('disliked_tracks', 'zz_tomb'),
@@ -8532,6 +10287,7 @@ BEGIN
             ('featured_items', 'zzz_suppress'),
             ('job_status', 'zz_guard'),
             ('job_status', 'zz_owner'),
+            ('job_status', 'zz_owner_copy'),
             ('job_status', 'zzz_suppress'),
             ('link_requests', 'zz_merge'),
             ('link_requests', 'zz_tomb'),
@@ -8552,12 +10308,14 @@ BEGIN
             ('lyrics_cache', 'zz_core_col'),
             ('lyrics_cache', 'zz_guard'),
             ('lyrics_cache', 'zz_owner'),
+            ('lyrics_cache', 'zz_owner_copy'),
             ('lyrics_cache', 'zzz_suppress'),
             ('lyrics_embedding_wire_state', 'zz_guard'),
             ('lyrics_lookup_backfill_state', 'zz_guard'),
             ('lyrics_lookup_queue', 'zz_guard'),
             ('lyrics_lookup_state', 'zz_guard'),
             ('lyrics_lookup_state', 'zz_owner'),
+            ('lyrics_lookup_state', 'zz_owner_copy'),
             ('lyrics_lookup_state', 'zzz_suppress'),
             ('lyrics_repair', 'zz_guard'),
             ('mobile_credentials', 'zz_guard_result'),
@@ -8579,6 +10337,7 @@ BEGIN
             ('oauth_app_token_refresh_state', 'zz_guard'),
             ('oauth_app_tokens', 'zz_guard'),
             ('oauth_app_tokens', 'zz_owner'),
+            ('oauth_app_tokens', 'zz_owner_copy'),
             ('oauth_app_tokens', 'zzz_suppress'),
             ('oauth_apps', 'zz_fk'),
             ('oauth_apps', 'zz_merge'),
@@ -8587,28 +10346,35 @@ BEGIN
             ('pipeline_event_receipts', 'zz_guard'),
             ('playlist_legacy_membership_intents', 'zz_guard'),
             ('playlist_legacy_membership_intents', 'zz_owner'),
+            ('playlist_legacy_membership_intents', 'zz_owner_copy'),
             ('playlist_legacy_membership_intents', 'zzz_suppress'),
             ('playlist_membership_operations', 'zz_guard'),
             ('playlist_membership_operations', 'zz_owner'),
+            ('playlist_membership_operations', 'zz_owner_copy'),
             ('playlist_membership_operations', 'zzz_suppress'),
             ('playlist_membership_state', 'zz_guard'),
             ('playlist_membership_state', 'zz_owner'),
+            ('playlist_membership_state', 'zz_owner_copy'),
             ('playlist_membership_state', 'zzz_suppress'),
             ('playlist_reconcile_runs', 'zz_guard'),
             ('playlist_remote_observations', 'zz_guard'),
             ('playlist_remote_observations', 'zz_owner'),
+            ('playlist_remote_observations', 'zz_owner_copy'),
             ('playlist_remote_observations', 'zzz_suppress'),
             ('playlist_remote_snapshot_tracks', 'zz_guard'),
             ('playlist_remote_snapshots', 'zz_guard'),
             ('playlist_remote_snapshots', 'zz_owner'),
+            ('playlist_remote_snapshots', 'zz_owner_copy'),
             ('playlist_remote_snapshots', 'zzz_suppress'),
             ('playlist_sweep_cursor', 'zz_guard'),
             ('playlist_track_projection', 'zz_guard'),
             ('playlist_track_projection', 'zz_owner'),
+            ('playlist_track_projection', 'zz_owner_copy'),
             ('playlist_track_projection', 'zzz_suppress'),
             ('playlists', 'zz_core_col'),
             ('playlists', 'zz_guard'),
             ('playlists', 'zz_owner'),
+            ('playlists', 'zz_owner_copy'),
             ('playlists', 'zzz_suppress'),
             ('recommendation_quality_models', 'zz_guard'),
             ('repl_checksums', 'zz_max'),
@@ -8626,6 +10392,7 @@ BEGIN
             ('sc_track_counters', 'zzz_suppress'),
             ('search_terms', 'zz_guard'),
             ('search_terms', 'zz_owner'),
+            ('search_terms', 'zz_owner_copy'),
             ('search_terms', 'zzz_suppress'),
             ('sessions', 'zz_merge'),
             ('sessions', 'zz_orphan'),
@@ -8658,9 +10425,11 @@ BEGIN
             ('sync_queue', 'zzz_suppress'),
             ('sync_queue_action_pauses', 'zz_guard'),
             ('sync_queue_action_pauses', 'zz_owner'),
+            ('sync_queue_action_pauses', 'zz_owner_copy'),
             ('sync_queue_action_pauses', 'zzz_suppress'),
             ('taste_model_versions', 'zz_guard'),
             ('taste_model_versions', 'zz_owner'),
+            ('taste_model_versions', 'zz_owner_copy'),
             ('taste_model_versions', 'zzz_suppress'),
             ('taste_schedule', 'zz_guard'),
             ('track_artist_blocks', 'zz_merge'),
@@ -8672,34 +10441,41 @@ BEGIN
             ('track_artist_blocks', 'zzz_suppress'),
             ('track_artists', 'zz_guard'),
             ('track_artists', 'zz_owner'),
+            ('track_artists', 'zz_owner_copy'),
             ('track_artists', 'zzz_suppress'),
             ('track_comments', 'zz_guard'),
             ('track_comments', 'zz_owner'),
+            ('track_comments', 'zz_owner_copy'),
             ('track_comments', 'zzz_suppress'),
             ('track_enrich_queue', 'zz_guard'),
             ('track_highlight_dispatch', 'zz_guard'),
             ('track_highlights', 'zz_guard'),
             ('track_highlights', 'zz_owner'),
+            ('track_highlights', 'zz_owner_copy'),
             ('track_highlights', 'zzz_suppress'),
             ('track_search', 'zz_guard'),
             ('track_search', 'zz_owner'),
+            ('track_search', 'zz_owner_copy'),
             ('track_search', 'zzz_suppress'),
             ('track_seeks', 'zz_skip'),
             ('track_seeks', 'zzz_suppress'),
             ('track_storage_failures', 'zz_guard'),
             ('track_sync_stamps', 'zz_guard'),
             ('track_sync_stamps', 'zz_owner'),
+            ('track_sync_stamps', 'zz_owner_copy'),
             ('track_sync_stamps', 'zzz_suppress'),
             ('track_video_dispatch', 'zz_guard'),
             ('track_video_gen', 'zz_guard'),
             ('track_video_pool', 'zz_guard'),
             ('track_videos', 'zz_guard'),
             ('track_videos', 'zz_owner'),
+            ('track_videos', 'zz_owner_copy'),
             ('track_videos', 'zzz_suppress'),
             ('track_work_aliases', 'zz_guard'),
             ('track_work_keys', 'zz_guard'),
             ('tracks', 'zz_guard'),
             ('tracks', 'zz_owner'),
+            ('tracks', 'zz_owner_copy'),
             ('tracks', 'zzz_suppress'),
             ('transcription_sync_versions', 'zz_guard'),
             ('transcription_wire_state', 'zz_guard'),
@@ -8717,6 +10493,7 @@ BEGIN
             ('user_events', 'zzz_suppress'),
             ('user_followers', 'zz_guard'),
             ('user_followers', 'zz_owner'),
+            ('user_followers', 'zz_owner_copy'),
             ('user_followers', 'zzz_suppress'),
             ('user_followings', 'zz_guard_intent'),
             ('user_followings', 'zz_guard_result'),
@@ -8744,12 +10521,15 @@ BEGIN
             ('user_likes_tracks', 'zzz_suppress'),
             ('user_owned_playlists', 'zz_guard'),
             ('user_owned_playlists', 'zz_owner'),
+            ('user_owned_playlists', 'zz_owner_copy'),
             ('user_owned_playlists', 'zzz_suppress'),
             ('user_owned_tracks', 'zz_guard'),
             ('user_owned_tracks', 'zz_owner'),
+            ('user_owned_tracks', 'zz_owner_copy'),
             ('user_owned_tracks', 'zzz_suppress'),
             ('user_profiles', 'zz_guard'),
             ('user_profiles', 'zz_owner'),
+            ('user_profiles', 'zz_owner_copy'),
             ('user_profiles', 'zzz_suppress'),
             ('user_superlike_ranks', 'zz_merge'),
             ('user_superlike_ranks', 'zz_tomb'),
@@ -8765,24 +10545,30 @@ BEGIN
             ('user_superlikes', 'zzz_suppress'),
             ('user_taste_vectors', 'zz_guard'),
             ('user_taste_vectors', 'zz_owner'),
+            ('user_taste_vectors', 'zz_owner_copy'),
             ('user_taste_vectors', 'zzz_suppress'),
             ('user_web_profiles', 'zz_guard'),
             ('user_web_profiles', 'zz_owner'),
+            ('user_web_profiles', 'zz_owner_copy'),
             ('user_web_profiles', 'zzz_suppress'),
             ('users', 'zz_guard'),
             ('users', 'zz_owner'),
+            ('users', 'zz_owner_copy'),
             ('users', 'zzz_suppress'),
             ('video_accounts', 'zz_guard'),
             ('video_flags', 'zz_guard'),
             ('wanted_track_albums', 'zz_guard'),
             ('wanted_track_albums', 'zz_owner'),
+            ('wanted_track_albums', 'zz_owner_copy'),
             ('wanted_track_albums', 'zzz_suppress'),
             ('wanted_track_artists', 'zz_guard'),
             ('wanted_track_artists', 'zz_owner'),
+            ('wanted_track_artists', 'zz_owner_copy'),
             ('wanted_track_artists', 'zzz_suppress'),
             ('wanted_track_work_aliases', 'zz_guard'),
             ('wanted_tracks', 'zz_guard'),
             ('wanted_tracks', 'zz_owner'),
+            ('wanted_tracks', 'zz_owner_copy'),
             ('wanted_tracks', 'zzz_suppress')
         ORDER BY 1, 2
     LOOP
