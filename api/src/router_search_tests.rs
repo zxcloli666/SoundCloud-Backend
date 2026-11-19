@@ -115,7 +115,10 @@ pub(super) fn config(redis: &str) -> AppConfig {
             api_key: String::new().into(),
             tls: None,
         },
-        storage: StorageCfg { url: String::new() },
+        storage: StorageCfg {
+            url: String::new(),
+            public_url: String::new(),
+        },
         subscriptions: SubscriptionsCfg {
             always_premium: true,
         },

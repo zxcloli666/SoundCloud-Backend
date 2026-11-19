@@ -238,7 +238,7 @@ async fn main() {
     let auras = AurasService::new(pg.clone(), subscriptions.clone());
     let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());
     let cold_refresh = ColdRefreshService::new(pg.clone(), config.cold.clone());
-    modules::tracks::video::set_base_url(&config.storage.url);
+    modules::tracks::video::set_base_url(&config.storage.public_url);
     let s3_verifier = S3VerifierService::new(
         http_client.clone(),
         config.storage.url.clone(),
