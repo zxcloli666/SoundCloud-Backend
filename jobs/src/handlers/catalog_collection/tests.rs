@@ -720,6 +720,23 @@ async fn every_collection_kind_persists_to_its_own_mirror(pool: PgPool) -> anyho
     Ok(())
 }
 
+async fn both_audiences(pool: &PgPool) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let wide = sqlx::query_scalar(
+        "SELECT relation || '@' || split_part(subject_urn, ':', 3) || '/' || split_part(user_urn, ':', 3) || '@' || created_at
+         FROM catalog_audience ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await?;
+    let compact = sqlx::query_scalar(
+        "SELECT (ARRAY['track-favoriters', 'track-reposters', 'playlist-reposters'])[relation]
+                || '@' || subject_id || '/' || user_id || '@' || created_at
+         FROM catalog_audience_ids ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok((wide, compact))
+}
+
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complete(
     pool: PgPool,
@@ -727,11 +744,15 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
     let (mut job, mut payload, writer) = setup(&pool).await?;
     payload.collection = CatalogCollection::TrackFavoriters;
     payload.owner = false;
-    sqlx::query(
+    sqlx::raw_sql(
         "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at) VALUES
         ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:99', now() - interval '1 day'),
         ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:99', now() - interval '1 day'),
-        ('soundcloud:tracks:43', 'track-favoriters', 'soundcloud:users:99', now() - interval '1 day')",
+        ('soundcloud:tracks:43', 'track-favoriters', 'soundcloud:users:99', now() - interval '1 day');
+        INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at) VALUES
+        (42, 1, 99, now() - interval '1 day'),
+        (42, 2, 99, now() - interval '1 day'),
+        (43, 1, 99, now() - interval '1 day')",
     )
     .execute(&pool)
     .await?;
@@ -821,6 +842,9 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
     .fetch_all(&pool)
     .await?;
     assert_eq!(left, ["soundcloud:tracks:43"]);
+    let (wide, compact) = both_audiences(&pool).await?;
+    assert_eq!(wide.len(), 2);
+    assert_eq!(compact, wide);
     Ok(())
 }
 
@@ -852,6 +876,9 @@ async fn playlist_reposters_address_the_playlist_and_keep_their_own_mirror(
             .fetch_all(&pool)
             .await?;
     assert_eq!(rows, ["soundcloud:playlists:42/soundcloud:users:7"]);
+    let (wide, compact) = both_audiences(&pool).await?;
+    assert_eq!(compact, wide);
+    assert!(compact[0].starts_with("playlist-reposters@42/7@"));
     Ok(())
 }
 
@@ -1757,9 +1784,12 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
     let writer = CollectionWriter::new(pool.clone(), 420000, 3);
     payload.collection = CatalogCollection::TrackFavoriters;
     payload.owner = false;
-    sqlx::query(
+    sqlx::raw_sql(
         "INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at)
          SELECT 'soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:' || n, now() - interval '1 day'
+         FROM generate_series(90, 95) AS n;
+         INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at)
+         SELECT 42, 1, n, now() - interval '1 day'
          FROM generate_series(90, 95) AS n",
     )
     .execute(&pool)
@@ -1821,6 +1851,8 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
             "soundcloud:users:20"
         ]
     );
+    let (wide, compact) = both_audiences(&pool).await?;
+    assert_eq!(compact, wide);
 
     payload.collection = CatalogCollection::Followers;
     let followers = state::begin(&pool, &job, &payload)

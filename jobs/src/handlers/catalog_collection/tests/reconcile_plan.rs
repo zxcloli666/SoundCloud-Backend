@@ -13,7 +13,7 @@ struct Reconcile {
     args: String,
 }
 
-fn reconciles() -> [Reconcile; 2] {
+fn reconciles() -> [Reconcile; 3] {
     [
         Reconcile {
             target: "catalog_audience",
@@ -22,6 +22,12 @@ fn reconciles() -> [Reconcile; 2] {
             args: format!(
                 "'soundcloud:tracks:big', 'track-favoriters', now(), 'big', '{SNAPSHOT}'"
             ),
+        },
+        Reconcile {
+            target: "catalog_audience_ids",
+            types: "bigint, smallint, timestamptz, text, text, uuid",
+            sql: include_str!("../../../../queries/catalog_collection/audience_ids_reconcile.sql"),
+            args: format!("0, 1, now(), 'big', 'track-favoriters', '{SNAPSHOT}'"),
         },
         Reconcile {
             target: "user_followers",
@@ -35,9 +41,9 @@ fn reconciles() -> [Reconcile; 2] {
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(&format!(
         "CREATE TEMP TABLE list AS
-         SELECT 's' || n AS subject, 2 AS size, md5('s' || n)::uuid AS snapshot_id, 2 AS seen
+         SELECT 's' || n AS subject, n AS id, 2 AS size, md5('s' || n)::uuid AS snapshot_id, 2 AS seen
          FROM generate_series(1, {SMALL_LISTS}) AS n
-         UNION ALL SELECT 'big', {LISTED}, '{SNAPSHOT}'::uuid, {SEEN};
+         UNION ALL SELECT 'big', 0, {LISTED}, '{SNAPSHOT}'::uuid, {SEEN};
          INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id)
          SELECT list.subject, collection, 'public', gen_random_uuid(), 1, list.snapshot_id
          FROM list, unnest(ARRAY['track-favoriters', 'followers']) AS collection;
@@ -47,11 +53,14 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at)
          SELECT 'soundcloud:tracks:' || list.subject, 'track-favoriters', 'soundcloud:users:' || k, now() - interval '1 day'
          FROM list, generate_series(1, list.size) AS k;
+         INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at)
+         SELECT list.id, 1, k, now() - interval '1 day'
+         FROM list, generate_series(1, list.size) AS k;
          INSERT INTO user_followers (user_id, target_user_urn, created_at)
          SELECT list.subject, 'soundcloud:users:' || k, now() - interval '1 day'
          FROM list, generate_series(1, list.size) AS k;
          DROP TABLE list;
-         ANALYZE catalog_collection_sync, catalog_collection_seen, catalog_audience, user_followers"
+         ANALYZE catalog_collection_sync, catalog_collection_seen, catalog_audience, catalog_audience_ids, user_followers"
     ))
     .execute(pool)
     .await?;

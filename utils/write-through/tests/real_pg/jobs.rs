@@ -422,6 +422,10 @@ const CLEAR_FIXTURE: &str = "INSERT INTO public.catalog_audience (subject_urn, r
     VALUES ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:1', '2026-10-01 00:00:00+00'),
            ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:2', '2026-10-01 00:00:00+00'),
            ('soundcloud:tracks:43', 'track-favoriters', 'soundcloud:users:1', '2026-10-01 00:00:00+00');
+    INSERT INTO public.catalog_audience_ids (subject_id, relation, user_id, created_at)
+    VALUES (42, 1, 1, '2026-10-01 00:00:00+00'),
+           (42, 2, 2, '2026-10-01 00:00:00+00'),
+           (43, 1, 1, '2026-10-01 00:00:00+00');
     INSERT INTO public.catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id)
     VALUES ('42', 'track-favoriters', 'public', gen_random_uuid(), 1, gen_random_uuid()),
            ('42', 'track-comments', 'public', gen_random_uuid(), 1, gen_random_uuid()),
@@ -446,6 +450,7 @@ async fn clearing_an_audience_removes_its_rows_and_sync_state_on_both_nodes() {
     assert_eq!(run.assert_same(), json!(3));
     for pool in [&pair.api, &pair.core] {
         assert_eq!(count(pool, "catalog_audience").await, 1);
+        assert_eq!(count(pool, "catalog_audience_ids").await, 1);
         assert_eq!(count(pool, "catalog_collection_sync").await, 2);
     }
     assert!(pair.redeliver().await);

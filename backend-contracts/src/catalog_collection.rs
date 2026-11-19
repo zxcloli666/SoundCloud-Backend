@@ -39,6 +39,15 @@ impl CatalogCollection {
         }
     }
 
+    pub const fn audience_relation(self) -> Option<i16> {
+        match self {
+            Self::TrackFavoriters => Some(1),
+            Self::TrackReposters => Some(2),
+            Self::PlaylistReposters => Some(3),
+            _ => None,
+        }
+    }
+
     pub const fn item(self) -> CollectionItem {
         match self {
             Self::TrackComments => CollectionItem::Comment,

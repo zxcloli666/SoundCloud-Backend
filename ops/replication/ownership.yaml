@@ -28,7 +28,7 @@ kinds:
   playlist.membership_op: {touches: [playlist_membership_operations, playlist_track_projection, playlist_membership_state], from: "api playlists journal: append_operation, projection writes, advance_membership_state, ensure_membership_tracked"}
   lyrics.wake: {touches: [lyrics_lookup_state], from: "api lyrics ensure_lookup_state, request_lookup, mark_wake_durable"}
   comment.post: {touches: [track_comments], from: "api tracks comments insert_pending"}
-  cold_refresh.clear: {touches: [catalog_audience, track_comments, catalog_collection_sync], from: "api cold_refresh audience_clear, comments_clear"}
+  cold_refresh.clear: {touches: [catalog_audience, catalog_audience_ids, track_comments, catalog_collection_sync], from: "api cold_refresh audience_clear, comments_clear"}
   job.enqueue: {touches: [background_jobs, job_status, playlist_membership_state], optimistic: false, from: "api cold_refresh enqueue_entity, me enqueue_followed_uploads, featured create/update, playlist observe after the Redis claim"}
   owned.insert: {touches: [user_owned_tracks], from: "api tracks insert_owned, upload ingest (after observe.tracks in one transaction)"}
   owned.delete: {touches: [user_owned_tracks, user_owned_playlists], from: "api tracks and playlists delete_owned"}
@@ -126,6 +126,7 @@ tables:
   background_job_enqueues: {class: P}
   background_jobs: {class: P, note: "api enqueues only through job.enqueue; api status reads go to job_status"}
   background_schedules: {class: P}
+  catalog_audience_ids: {class: P, note: "catalog_audience with bigint subject and user ids and a smallint relation (1 track-favoriters, 2 track-reposters, 3 playlist-reposters); jobs writes both while it fills on core, it turns C when published"}
   catalog_collection_cursors: {class: P}
   catalog_collection_seen: {class: P}
   catalog_merge_state: {class: P}

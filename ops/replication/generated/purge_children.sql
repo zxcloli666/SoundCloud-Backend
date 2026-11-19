@@ -333,6 +333,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_catalog_audience_ids(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.relation, t.subject_id, t.user_id INTO p FROM public.catalog_audience_ids t WHERE t.subject_id = (k ->> 'subject_id')::bigint AND t.relation = (k ->> 'relation')::smallint AND t.user_id = (k ->> 'user_id')::bigint;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.catalog_audience_ids t WHERE t.subject_id = (k ->> 'subject_id')::bigint AND t.relation = (k ->> 'relation')::smallint AND t.user_id = (k ->> 'user_id')::bigint;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_catalog_collection_cursors(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1434,6 +1449,8 @@ BEGIN
             PERFORM public.scd_purge_background_schedules(k);
         WHEN 'catalog_audience' THEN
             PERFORM public.scd_purge_catalog_audience(k);
+        WHEN 'catalog_audience_ids' THEN
+            PERFORM public.scd_purge_catalog_audience_ids(k);
         WHEN 'catalog_collection_cursors' THEN
             PERFORM public.scd_purge_catalog_collection_cursors(k);
         WHEN 'catalog_collection_seen' THEN
