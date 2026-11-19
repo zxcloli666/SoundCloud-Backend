@@ -36,8 +36,10 @@ kinds:
   sync_queue.revive: {touches: [sync_queue], optimistic: false, from: "api sync_queue revive_dead, core only"}
   sync_queue.purge: {touches: [sync_queue], optimistic: false, from: "api admin sync_queue purge, core only"}
   oauth_app.delete: {touches: [oauth_apps], optimistic: false, from: "api oauth_apps remove (admin), core only"}
-  connection.drop_orphan: {touches: [soundcloud_connections], optimistic: false, from: "api auth delete_orphan_connection, core only (B6)"}
+  connection.drop_orphan: {touches: [soundcloud_connections, mobile_credentials], optimistic: false, from: "api auth delete_orphan_connection and auth_connection_release, core only (B6); also drops the mobile credential of an account left without connections"}
   connection.login: {touches: [soundcloud_connections], from: "api auth store_connection, re-login of the same account (B11)"}
+  mobile_credential.link: {touches: [mobile_credentials], from: "api mobile link callback, re-link of the same account; the newest link_v wins on core"}
+  mobile_credential.drop: {touches: [mobile_credentials], optimistic: false, from: "api mobile unlink, core only"}
 
 tables:
   admin_maintenance_runs: {class: C, note: "jobs writes, api admin reads"}
@@ -224,6 +226,16 @@ tables:
       token: {owner: both, version: token_v, cols: [soundcloud_user_id, username, created_at, oauth_app_id, access_token, refresh_token, expires_at, scope]}
       refresh: {owner: core, cols: [refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, refresh_rejection_count, first_refresh_rejection_at, updated_at, login_v]}
     note: "token writers: first login (api insert), re-login of the same account (connection.login, optimistic, the newest login_v wins on core) and refresh (core only, auth.refresh.v1, B11); orphan delete is a core kind"
+  mobile_credentials:
+    class: M
+    delete: receipt
+    groups:
+      token: {owner: both, version: token_v, cols: [oauth_app_id, device_id, access_token, refresh_token, expires_at, scope, linked_at]}
+      refresh: {owner: core, cols: [status, link_v, refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, updated_at]}
+      plan: {owner: both, version: plan_v, cols: [plan, plan_seen_at]}
+      consent: {owner: both, version: consent_v, cols: [uq_opt_in]}
+      uq: {owner: core, cols: [uq_busy_until, uq_cooldown_until, uq_failures]}
+    note: "one row per SoundCloud account, the mobile profile tokens; token writers: first link (api insert), re-link (mobile_credential.link, optimistic, the newest link_v wins on core) and refresh (core only, auth.refresh.v1 target mobile); drop and orphan drop are core kinds"
 
   cdn_tracks:
     class: A
@@ -262,6 +274,12 @@ tables:
     delete: tombstone
     unique: {login_requests_state_uq: random}
     groups: {row: {version: row_v, cols: rest}}
+  mobile_link_requests:
+    class: A
+    delete: tombstone
+    unique: {mobile_link_requests_state_uq: random}
+    groups: {row: {version: row_v, cols: rest}}
+    note: "PKCE link requests of the mobile profile, 15 minutes; jobs deletes expired rows with the login request cleanup"
   oauth_app_request_cooldowns: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
   oauth_apps:
     class: A
