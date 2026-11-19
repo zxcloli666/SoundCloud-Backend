@@ -8,7 +8,8 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
 use super::super::LADDER;
-use super::super::haiku::{self, PROMPT};
+use super::super::haiku;
+use super::super::prompt::{self, Features};
 use super::super::result::{Verdict, judge};
 use super::fakes::{CALL_USD, HAIKU, Wire};
 use super::{Rig, base, bench, file_part, finish, held_track, stage, stored};
@@ -79,6 +80,25 @@ async fn haiku_field(pool: &PgPool, id: &str) -> Value {
     row.0
 }
 
+fn label_of(text: &str) -> Result<VideoLabel, LlmError> {
+    haiku::reply_of(text).map(|reply| reply.label)
+}
+
+fn local_text() -> String {
+    prompt::local(&Features {
+        duration_s: Some(30.0),
+        ..Features::default()
+    })
+}
+
+fn measured() -> Features {
+    Features {
+        duration_s: Some(212.4),
+        cuts_per_min: Some(3.26),
+        motion_med: Some(0.0412),
+    }
+}
+
 fn last(wire: &Wire) -> (Value, String) {
     wire.requests().pop().unwrap()
 }
@@ -91,7 +111,7 @@ async fn without_haiku_the_local_model_gets_the_task_and_the_prompt_from_jobs(po
     tick(&vlm).await;
 
     let (request, id) = last(&wire);
-    assert_eq!(request["prompt"], PROMPT);
+    assert_eq!(request["prompt"], local_text());
     assert!(request.get("frames").is_none() && request.get("label").is_none());
     assert_eq!(id, "video_vlm:11:1:1");
 }
@@ -182,7 +202,7 @@ async fn a_down_api_or_a_refusal_hands_the_video_to_the_local_model(pool: PgPool
         finish(&vlm, frames_result(id, 1)).await.unwrap();
 
         let (request, message) = last(&wire);
-        assert_eq!(request["prompt"], PROMPT);
+        assert_eq!(request["prompt"], local_text());
         assert!(request.get("frames").is_none() && request.get("label").is_none());
         assert_eq!(message, format!("video_vlm:{id}:1:2"));
         assert_eq!(haiku_field(&pool, id).await, Value::Null);
@@ -215,7 +235,7 @@ async fn a_spent_cap_alerts_once_keeps_the_local_model_working_and_comes_back_by
     for id in ["11", "12"] {
         held_track(&pool, &blobs, id, 1).await.unwrap();
         tick(&vlm).await;
-        assert_eq!(last(&wire).0["prompt"], PROMPT);
+        assert_eq!(last(&wire).0["prompt"], local_text());
     }
     assert_eq!(inbox.count(), 1);
     assert!(inbox.messages.lock().unwrap()[0].contains("$5.00"));
@@ -233,7 +253,7 @@ async fn a_spent_cap_alerts_once_keeps_the_local_model_working_and_comes_back_by
     .await
     .unwrap();
     tick(&vlm).await;
-    assert_eq!(last(&wire).0["prompt"], PROMPT);
+    assert_eq!(last(&wire).0["prompt"], local_text());
 
     sqlx::query("UPDATE llm_pause SET paused_until = now() WHERE ladder = $1")
         .bind(LADDER)
@@ -287,7 +307,8 @@ fn frames_without_a_label_are_frames_and_a_gap_between_them_is_refused() {
 fn the_haiku_request_sends_every_frame_as_a_jpeg_before_the_prompt() {
     let frames: Vec<Vec<u8>> = FRAMES.iter().map(|frame| frame.to_vec()).collect();
 
-    let message = haiku::request(&frames);
+    let text = prompt::remote(frames.len(), &measured());
+    let message = haiku::request(&frames, &text);
 
     let content = message["content"].as_array().unwrap();
     assert_eq!(content.len(), 4);
@@ -296,25 +317,106 @@ fn the_haiku_request_sends_every_frame_as_a_jpeg_before_the_prompt() {
         content[2]["source"]["data"],
         base64::engine::general_purpose::STANDARD.encode(b"jpeg-two")
     );
-    assert_eq!(content[3], json!({"type": "text", "text": PROMPT}));
+    assert_eq!(content[3], json!({"type": "text", "text": text}));
+}
+
+#[test]
+fn the_schema_asks_for_a_reason_next_to_the_label() {
+    let schema = haiku::schema();
     assert_eq!(
-        haiku::schema()["properties"]["label"]["enum"],
+        schema["properties"]["label"]["enum"],
         json!(["clip", "loop", "static"])
+    );
+    assert_eq!(schema["properties"]["reason"]["type"], "string");
+    assert_eq!(schema["required"], json!(["reason", "label"]));
+}
+
+#[test]
+fn the_text_with_features_has_the_measured_line_and_the_json_reply() {
+    let text = prompt::remote(8, &measured());
+
+    assert!(text.starts_with("These are 8 frames from one video"));
+    assert!(text.contains(
+        "Measured on the file: duration 212 s, scene cuts per minute 3.3, median share of moving pixels 0.041."
+    ));
+    assert!(text.contains("static - no real filmed footage"));
+    assert!(text.ends_with(
+        r#"Reply as JSON: {"reason": "<one short sentence>", "label": "static|loop|clip"}"#
+    ));
+}
+
+#[test]
+fn the_text_without_features_leaves_the_line_out_and_a_lone_feature_stays_alone() {
+    let bare = prompt::remote(3, &Features::default());
+    assert!(!bare.contains("Measured"));
+
+    let lone = prompt::remote(
+        3,
+        &Features {
+            cuts_per_min: Some(12.0),
+            ..Features::default()
+        },
+    );
+    assert!(lone.contains("Measured on the file: scene cuts per minute 12.0.\n"));
+    assert!(!lone.contains("duration") && !lone.contains("moving pixels"));
+}
+
+#[test]
+fn the_local_text_shares_the_definitions_and_asks_for_one_word() {
+    let local = prompt::local(&measured());
+    let remote = prompt::remote(8, &measured());
+
+    assert!(local.ends_with("Answer with one word: clip, loop or static."));
+    assert!(!local.contains("JSON"));
+    assert!(!local.contains("8 frames"));
+    let definitions = |text: &str| {
+        let from = text.find("Classify the video:").unwrap();
+        let to = text.find("is static, not loop.").unwrap();
+        text[from..to].to_owned()
+    };
+    assert_eq!(definitions(&local), definitions(&remote));
+    assert!(local.contains("median share of moving pixels 0.041"));
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn haiku_gets_the_features_of_the_held_candidate(pool: PgPool) {
+    let (vlm, blobs, _, eyes, _) = bench(&pool, true);
+    held_track(&pool, &blobs, "11", 1).await.unwrap();
+    tick(&vlm).await;
+    eyes.answers(Ok(VideoLabel::Clip));
+
+    finish(&vlm, frames_result("11", 1)).await.unwrap();
+
+    let features = eyes.features.lock().unwrap().clone();
+    assert_eq!(
+        features,
+        vec![Features {
+            duration_s: Some(30.0),
+            ..Features::default()
+        }]
     );
 }
 
 #[test]
 fn only_one_of_the_three_labels_is_an_answer() {
+    assert_eq!(label_of(r#"{"label": "loop"}"#), Ok(VideoLabel::Loop));
     assert_eq!(
-        haiku::label_of(r#"{"label": "loop"}"#),
-        Ok(VideoLabel::Loop)
+        label_of(r#"{"reason": "words over a still", "label": "static"}"#),
+        Ok(VideoLabel::Static)
+    );
+    assert_eq!(
+        haiku::reply_of(r#"{"reason": "words over a still", "label": "static"}"#)
+            .unwrap()
+            .reason,
+        "words over a still"
     );
     for bad in [
         r#"{"label": "dance"}"#,
-        r#"{"label": "clip", "why": "cuts"}"#,
+        r#"{"reason": "x", "label": "dance"}"#,
+        r#"{"reason": "x", "label": "clip", "why": "cuts"}"#,
         "clip",
         "",
     ] {
-        assert!(haiku::label_of(bad).is_err());
+        assert!(label_of(bad).is_err());
     }
 }

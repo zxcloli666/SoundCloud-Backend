@@ -5,14 +5,8 @@ use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::prompt::{self, Features};
 use crate::llm::anthropic::{Answer, Anthropic, Call, LlmError, Spend, finished, text_of};
-
-pub const PROMPT: &str = "You see frames from a music video, sampled evenly in time and shown in order.
-Classify the visual track into one class:
-static = the same single picture the whole time. It may have a slow zoom or pan, a waveform or spectrum drawn over the still picture, or subtle overlays on the same picture (noise, grain, flicker, particles, color shifts).
-loop = a short segment of real motion that repeats again and again; the same frames come back in a cycle.
-clip = real footage or animation that changes over time, with different shots, cuts or scenes, and no short repetition.
-Answer with one word: clip, loop or static.";
 
 const CALL: &str = "vlm";
 const EFFORT: &str = "low";
@@ -21,15 +15,20 @@ const EFFORT: &str = "low";
 pub struct Judged {
     pub label: VideoLabel,
     pub model: String,
+    pub reason: String,
 }
 
 pub trait Vision: Send + Sync {
-    fn judge(&self, frames: &[Vec<u8>]) -> impl Future<Output = Answer<Judged>> + Send;
+    fn judge(
+        &self,
+        frames: &[Vec<u8>],
+        features: &Features,
+    ) -> impl Future<Output = Answer<Judged>> + Send;
 }
 
 impl Vision for Anthropic {
-    async fn judge(&self, frames: &[Vec<u8>]) -> Answer<Judged> {
-        let messages = [request(frames)];
+    async fn judge(&self, frames: &[Vec<u8>], features: &Features) -> Answer<Judged> {
+        let messages = [request(frames, &prompt::remote(frames.len(), features))];
         let call = Call {
             name: CALL,
             system: None,
@@ -41,10 +40,11 @@ impl Vision for Anthropic {
         let mut spend = Vec::new();
         let result = match self.send(&call, &mut spend).await {
             Ok(message) => finished(&message)
-                .and_then(|()| label_of(&text_of(&message)))
-                .map(|label| Judged {
-                    label,
+                .and_then(|()| reply_of(&text_of(&message)))
+                .map(|reply| Judged {
+                    label: reply.label,
                     model: model_of(&spend),
+                    reason: reply.reason,
                 }),
             Err(error) => Err(error),
         };
@@ -52,7 +52,7 @@ impl Vision for Anthropic {
     }
 }
 
-pub fn request(frames: &[Vec<u8>]) -> Value {
+pub fn request(frames: &[Vec<u8>], text: &str) -> Value {
     let mut content: Vec<Value> = frames
         .iter()
         .map(|frame| {
@@ -66,7 +66,7 @@ pub fn request(frames: &[Vec<u8>]) -> Value {
             })
         })
         .collect();
-    content.push(json!({"type": "text", "text": PROMPT}));
+    content.push(json!({"type": "text", "text": text}));
     json!({"role": "user", "content": content})
 }
 
@@ -74,22 +74,24 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "reason": {"type": "string"},
             "label": {"type": "string", "enum": ["clip", "loop", "static"]},
         },
-        "required": ["label"],
+        "required": ["reason", "label"],
         "additionalProperties": false,
     })
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Reply {
-    label: VideoLabel,
+pub struct Reply {
+    #[serde(default)]
+    pub reason: String,
+    pub label: VideoLabel,
 }
 
-pub fn label_of(text: &str) -> Result<VideoLabel, LlmError> {
+pub fn reply_of(text: &str) -> Result<Reply, LlmError> {
     serde_json::from_str::<Reply>(text.trim())
-        .map(|reply| reply.label)
         .map_err(|error| LlmError::Invalid(format!("label: {error}")))
 }
 
