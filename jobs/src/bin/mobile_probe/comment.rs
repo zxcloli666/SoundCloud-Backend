@@ -1,12 +1,38 @@
 use sc_mobile::{Caller, MobileClient, comments};
 use serde_json::{Value, json};
 
+use crate::args::{Args, CommentVia};
+use crate::comment_apiv1;
+use crate::datadome;
 use crate::journal::{Journal, Sent, failure_note, json_of};
 
-const BODY: &str = "probe";
-const TRACK_TIME_MS: u64 = 0;
+pub const BODY: &str = "probe";
+pub const TRACK_TIME_MS: u64 = 0;
 
-pub async fn probe(
+pub async fn run(
+    client: &MobileClient,
+    args: &Args,
+    caller: &Caller,
+    journal: &mut Journal,
+    own_urn: Option<&str>,
+) {
+    if let Some(comment) = &args.delete_comment {
+        comment_apiv1::delete_only(client, args, caller, journal, comment).await;
+        return;
+    }
+    let Some(track) = &args.comment_track else {
+        journal.skip("comment", "no --comment-track");
+        return;
+    };
+    match args.comment_via {
+        CommentVia::Mobile => probe(client, caller, journal, track, own_urn).await,
+        CommentVia::Apiv1 => {
+            comment_apiv1::post_then_delete(client, args, caller, journal, track).await
+        }
+    }
+}
+
+async fn probe(
     client: &MobileClient,
     caller: &Caller,
     journal: &mut Journal,
@@ -22,7 +48,16 @@ pub async fn probe(
         (None, None) => "the answer names no comment".to_owned(),
     };
     let refused = matches!(&outcome, Ok(reply) if (400..500).contains(&reply.status));
-    journal.reply("comment.post", Sent::of(&post), &outcome, vec![note]);
+    let blocked = datadome::is_datadome(&outcome);
+    journal.reply(
+        "comment.post",
+        Sent::of(&post),
+        &outcome,
+        comment_apiv1::with_datadome(note, blocked),
+    );
+    if blocked {
+        return;
+    }
 
     let list = comments::list(track);
     let outcome = client.call(caller, &list).await;
@@ -71,12 +106,12 @@ pub async fn probe(
     journal.reply("comment.delete", Sent::of(&delete), &outcome, vec![note]);
 }
 
-fn items_of(body: &Value) -> Vec<Value> {
+pub fn items_of(body: &Value) -> Vec<Value> {
     let list = body.get("collection").unwrap_or(body);
     list.as_array().cloned().unwrap_or_default()
 }
 
-fn comment_urn(item: &Value) -> Option<String> {
+pub fn comment_urn(item: &Value) -> Option<String> {
     let comment = item.get("comment").unwrap_or(item);
     if let Some(urn) = text_of(comment, "urn") {
         return Some(urn.to_owned());

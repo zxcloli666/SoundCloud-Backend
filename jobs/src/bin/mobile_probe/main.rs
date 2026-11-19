@@ -1,6 +1,9 @@
 mod account;
+mod apiv1;
 mod args;
 mod comment;
+mod comment_apiv1;
+mod datadome;
 mod journal;
 mod reaction;
 mod scrub;
@@ -88,10 +91,5 @@ async fn run(client: &MobileClient, args: &Args, journal: &mut Journal) {
         Some(track) => reaction::probe(client, &caller, journal, track).await,
         None => journal.skip("reaction", "no --reaction-track"),
     }
-    match &args.comment_track {
-        Some(track) => {
-            comment::probe(client, &caller, journal, track, own_urn.as_deref()).await;
-        }
-        None => journal.skip("comment", "no --comment-track"),
-    }
+    comment::run(client, args, &caller, journal, own_urn.as_deref()).await;
 }
