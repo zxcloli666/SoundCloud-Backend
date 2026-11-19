@@ -72,7 +72,10 @@ impl StarTiersHandler {
     }
 
     pub(crate) async fn refresh(&self) -> JobResult {
-        let refreshed = self.refresh_track_tiers().await.map_err(JobError::retryable)?;
+        let refreshed = self
+            .refresh_track_tiers()
+            .await
+            .map_err(JobError::retryable)?;
         let sweep = self
             .sweep
             .lock()
