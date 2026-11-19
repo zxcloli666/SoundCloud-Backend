@@ -1,7 +1,10 @@
-use serde_json::json;
+use serde_json::{Value, json};
 use url::Url;
 
+use crate::client::MobileReply;
 use crate::request::MobileRequest;
+
+const PREVIEW_SEGMENT: &str = "preview";
 
 pub const TRANSCODINGS_QUERY: &str = "query TrackTranscodings($urns: [ID!]!) {
   tracks(urns: $urns) {
@@ -52,12 +55,72 @@ pub fn media(url: Url) -> MobileRequest {
     MobileRequest::get_url(url)
 }
 
+pub fn stream_url(reply: &MobileReply) -> Option<Url> {
+    let url = if reply.is_redirect() {
+        reply.location.clone()
+    } else if reply.is_success() {
+        serde_json::from_slice::<Value>(&reply.body)
+            .ok()?
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(|url| Url::parse(url).ok())
+    } else {
+        None
+    }?;
+    let preview = url
+        .path_segments()
+        .is_some_and(|mut segments| segments.any(|segment| segment == PREVIEW_SEGMENT));
+    (url.scheme() == "https" && !preview).then_some(url)
+}
+
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use bytes::Bytes;
 
     use super::*;
     use crate::request::Kind;
+
+    fn reply(status: u16, location: Option<&str>, body: &'static [u8]) -> MobileReply {
+        MobileReply {
+            status,
+            plan: None,
+            location: location.and_then(|url| Url::parse(url).ok()),
+            body: Bytes::from_static(body),
+        }
+    }
+
+    #[test]
+    fn a_302_to_the_cdn_is_the_stream_url() {
+        let hls = reply(
+            302,
+            Some(
+                "https://cf-hls-media.sndcdn.com/playlist/a.128.mp3/playlist.m3u8?Policy=p&Signature=s",
+            ),
+            b"",
+        );
+
+        assert_eq!(
+            stream_url(&hls).as_ref().and_then(Url::host_str),
+            Some("cf-hls-media.sndcdn.com")
+        );
+    }
+
+    #[test]
+    fn a_json_url_also_resolves_and_a_refusal_or_preview_does_not() {
+        let json = reply(200, None, br#"{"url":"https://cf-media.sndcdn.com/a.mp3"}"#);
+        let missing = reply(404, None, b"{}");
+        let preview = reply(
+            302,
+            Some("https://cf-preview-media.sndcdn.com/preview/0/30/a.128.mp3"),
+            b"",
+        );
+        let plain = reply(302, Some("http://cf-media.sndcdn.com/a.mp3"), b"");
+
+        assert!(stream_url(&json).is_some());
+        assert!(stream_url(&missing).is_none());
+        assert!(stream_url(&preview).is_none());
+        assert!(stream_url(&plain).is_none());
+    }
 
     #[test]
     fn the_hls_stream_asks_for_the_full_secure_stream() {

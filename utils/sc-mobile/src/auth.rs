@@ -150,6 +150,9 @@ impl MobileClient {
 }
 
 fn token_set(reply: &MobileReply) -> Result<TokenSet, MobileError> {
+    if reply.is_captcha() {
+        return Err(MobileError::Captcha);
+    }
     if !(200..300).contains(&reply.status) {
         let refusal = serde_json::from_slice::<RefusalBody>(&reply.body).ok();
         return Err(MobileError::Refused {
@@ -322,6 +325,20 @@ mod tests {
             body: Bytes::from_static(br#"{"access_token":"a","refresh_token":""}"#),
         };
         assert!(token_set(&no_refresh).is_ok_and(|tokens| tokens.refresh_token.is_none()));
+    }
+
+    #[test]
+    fn a_captcha_challenge_is_its_own_refusal() {
+        let challenged = MobileReply {
+            status: 403,
+            plan: None,
+            location: None,
+            body: Bytes::from_static(
+                br#"{"url":"https://geo.captcha-delivery.com/interstitial/?initialCid=x&cid=y"}"#,
+            ),
+        };
+
+        assert!(matches!(token_set(&challenged), Err(MobileError::Captcha)));
     }
 
     #[test]

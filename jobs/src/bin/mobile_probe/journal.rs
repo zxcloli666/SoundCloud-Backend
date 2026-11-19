@@ -94,7 +94,7 @@ impl Journal {
         let (response, status, plan, outcome) = match outcome {
             Ok(reply) => {
                 let body = body_value(&reply.body);
-                let passed = reply.is_success() && graphql_errors(&body).is_none();
+                let passed = answered(reply) && graphql_errors(&body).is_none();
                 let plan = reply.plan.as_ref().map(|plan| plan.as_str().to_owned());
                 let response = json!({
                     "status": reply.status,
@@ -229,7 +229,7 @@ pub fn failure_note(outcome: &Result<MobileReply, MobileError>) -> Option<String
             .as_ref()
             .and_then(graphql_errors)
             .or_else(|| {
-                (!reply.is_success()).then(|| {
+                (!answered(reply)).then(|| {
                     let text = String::from_utf8_lossy(&reply.body);
                     format!(
                         "answer: {}",
@@ -238,6 +238,10 @@ pub fn failure_note(outcome: &Result<MobileReply, MobileError>) -> Option<String
                 })
             }),
     }
+}
+
+fn answered(reply: &MobileReply) -> bool {
+    reply.is_success() || reply.is_redirect()
 }
 
 fn passed_or_failed(passed: bool) -> Outcome {

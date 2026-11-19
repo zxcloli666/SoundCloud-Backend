@@ -27,11 +27,25 @@ pub enum MobileError {
 
     #[error("the token endpoint answered without an access token")]
     InvalidTokenResponse,
+
+    #[error("SoundCloud answered with a captcha challenge")]
+    Captcha,
 }
 
 impl MobileError {
     pub fn is_transport(&self) -> bool {
         matches!(self, Self::Transport(_))
+    }
+
+    pub fn status_class(&self) -> &'static str {
+        match self {
+            Self::Refused { status, .. } => crate::refusal::class_of(*status),
+            Self::Captcha => crate::refusal::CAPTCHA,
+            Self::Transport(_) => "transport",
+            Self::TooLarge(_) => "too_large",
+            Self::InvalidTokenResponse => "invalid",
+            Self::Client(_) | Self::ForeignHost | Self::Invalid(_) | Self::Random => "local",
+        }
     }
 
     pub(crate) fn transport(error: wreq::Error) -> Self {
