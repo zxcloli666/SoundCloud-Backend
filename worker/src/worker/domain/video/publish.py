@@ -8,6 +8,7 @@ from worker.domain.outcome import PermanentFailure, Reason
 from worker.settings import VideoSection
 
 CAP_SHARE = 0.9
+KEYFRAME_S = 2
 ENCODE_PRESET = "fast"
 ENCODE_TIMEOUT_S = 300.0
 
@@ -31,6 +32,7 @@ async def encode(
         "-i", str(source), "-fpsmax", str(settings.encode_fps),
         "-t", f"{cap_s:.3f}", "-an", "-vf", ",".join(filters),
         "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", str(settings.encode_crf),
+        "-g", str(settings.encode_fps * KEYFRAME_S), "-sc_threshold", "0",
         "-maxrate", f"{settings.encode_maxrate_kbps}k",
         "-bufsize", f"{settings.encode_maxrate_kbps * 2}k",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target),
