@@ -328,32 +328,41 @@ fn the_haiku_request_sends_every_frame_as_a_jpeg_before_the_prompt() {
 }
 
 #[test]
-fn the_schema_asks_for_a_reason_next_to_the_label() {
-    let schema = haiku::schema(&short());
+fn the_schema_asks_for_a_reason_next_to_a_static_or_clip_label() {
+    let schema = haiku::schema();
     assert_eq!(
         schema["properties"]["label"]["enum"],
-        json!(["clip", "loop", "static"])
+        json!(["clip", "static"])
     );
     assert_eq!(schema["properties"]["reason"]["type"], "string");
     assert_eq!(schema["required"], json!(["reason", "label"]));
 }
 
 #[test]
-fn a_video_over_30_s_cannot_be_a_loop() {
-    let schema = haiku::schema(&measured());
-    assert_eq!(
-        schema["properties"]["label"]["enum"],
-        json!(["clip", "static"])
-    );
+fn motion_up_to_30_s_is_a_loop_and_longer_is_a_clip() {
+    assert_eq!(short().kind(VideoLabel::Clip), VideoLabel::Loop);
+    assert_eq!(short().kind(VideoLabel::Static), VideoLabel::Static);
+    assert_eq!(measured().kind(VideoLabel::Clip), VideoLabel::Clip);
+    assert_eq!(measured().kind(VideoLabel::Loop), VideoLabel::Clip);
+    assert_eq!(Features::default().kind(VideoLabel::Loop), VideoLabel::Clip);
+    let edge = Features {
+        duration_s: Some(30.0),
+        ..Features::default()
+    };
+    assert_eq!(edge.kind(VideoLabel::Clip), VideoLabel::Loop);
+}
 
-    let text = prompt::remote(8, &measured());
-    assert!(text.contains("longer than 30 s, so it is clip or static, never loop"));
-    assert!(text.ends_with(r#""label": "static|clip"}"#));
-    assert!(prompt::local(&measured()).ends_with("Answer with one word: clip or static."));
-
+#[test]
+fn haiku_is_asked_static_or_clip_and_the_local_model_keeps_three_words() {
     let canvas = prompt::remote(8, &short());
-    assert!(!canvas.contains("longer than 30 s"));
-    assert!(canvas.ends_with(r#""label": "static|loop|clip"}"#));
+    assert!(!canvas.contains("loop -"));
+    assert!(canvas.contains("however short and even if it repeats"));
+    assert!(canvas.ends_with(r#""label": "static|clip"}"#));
+
+    assert!(prompt::local(&short()).ends_with("Answer with one word: clip, loop or static."));
+    let long = prompt::local(&measured());
+    assert!(long.contains("longer than 30 s, so it is clip or static, never loop"));
+    assert!(long.ends_with("Answer with one word: clip or static."));
 }
 
 #[test]
@@ -389,19 +398,18 @@ fn the_text_without_features_leaves_the_line_out_and_a_lone_feature_stays_alone(
 }
 
 #[test]
-fn the_local_text_shares_the_definitions_and_asks_for_one_word() {
+fn the_local_text_shares_the_static_rules_and_asks_for_one_word() {
     let local = prompt::local(&measured());
     let remote = prompt::remote(8, &measured());
 
-    assert!(local.ends_with("Answer with one word: clip or static."));
     assert!(!local.contains("JSON"));
     assert!(!local.contains("8 frames"));
-    let definitions = |text: &str| {
-        let from = text.find("Classify the video:").unwrap();
-        let to = text.find("is static, not loop.").unwrap();
-        text[from..to].to_owned()
-    };
-    assert_eq!(definitions(&local), definitions(&remote));
+    for shared in [
+        "static - no real filmed footage",
+        "Rules: lyrics written over the picture",
+    ] {
+        assert!(local.contains(shared) && remote.contains(shared));
+    }
     assert!(local.contains("median share of moving pixels 0.041"));
 }
 

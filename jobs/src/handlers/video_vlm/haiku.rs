@@ -34,7 +34,7 @@ impl Vision for Anthropic {
             system: None,
             messages: &messages,
             tools: None,
-            format: Some(schema(features)),
+            format: Some(schema()),
             effort: Some(EFFORT),
         };
         let mut spend = Vec::new();
@@ -42,7 +42,7 @@ impl Vision for Anthropic {
             Ok(message) => finished(&message)
                 .and_then(|()| reply_of(&text_of(&message)))
                 .map(|reply| Judged {
-                    label: reply.label,
+                    label: features.kind(reply.label),
                     model: model_of(&spend),
                     reason: reply.reason,
                 }),
@@ -70,12 +70,12 @@ pub fn request(frames: &[Vec<u8>], text: &str) -> Value {
     json!({"role": "user", "content": content})
 }
 
-pub fn schema(features: &Features) -> Value {
+pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "reason": {"type": "string"},
-            "label": {"type": "string", "enum": features.labels()},
+            "label": {"type": "string", "enum": ["clip", "static"]},
         },
         "required": ["reason", "label"],
         "additionalProperties": false,
