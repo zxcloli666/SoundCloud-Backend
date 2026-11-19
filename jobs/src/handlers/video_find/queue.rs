@@ -22,11 +22,19 @@ impl Claimed {
     }
 }
 
-pub(super) async fn requeue_unanswered(pool: &PgPool, timeout: Duration) -> JobResult {
-    sqlx::query_file!("queries/video_find/unanswered.sql", timeout.as_secs_f64())
-        .execute(pool)
-        .await
-        .map_err(JobError::retryable)?;
+pub(super) async fn requeue_unanswered(
+    pool: &PgPool,
+    timeout: Duration,
+    unstaged: Duration,
+) -> JobResult {
+    sqlx::query_file!(
+        "queries/video_find/unanswered.sql",
+        timeout.as_secs_f64(),
+        unstaged.as_secs_f64()
+    )
+    .execute(pool)
+    .await
+    .map_err(JobError::retryable)?;
     Ok(())
 }
 

@@ -50,6 +50,7 @@ pub struct VideoFindConfig {
     pub static_recheck: Duration,
     pub max_candidates: usize,
     pub download_timeout: Duration,
+    pub stage_timeout: Duration,
     pub max_file_mib: u64,
     pub temp_ttl: Duration,
     pub sweep_every: Duration,
@@ -95,6 +96,10 @@ impl VideoFindConfig {
             download_timeout: Duration::from_secs(env::positive_u64(
                 "VIDEO_DOWNLOAD_TIMEOUT_SECONDS",
                 240,
+            )?),
+            stage_timeout: Duration::from_secs(env::positive_u64(
+                "VIDEO_STAGE_TIMEOUT_SECONDS",
+                1_800,
             )?),
             max_file_mib: env::positive_u64("VIDEO_MAX_FILE_MIB", 96)?,
             temp_ttl: Duration::from_secs(env::positive_u64("VIDEO_TEMP_TTL_DAYS", 3)? * 86_400),

@@ -41,6 +41,7 @@ use self::ytdlp::Tube;
 const RETRY_NO_ACCOUNT: Duration = Duration::from_secs(60);
 const RETRY_PUBLISH: Duration = Duration::from_secs(120);
 const POOL_EVERY: Duration = Duration::from_secs(600);
+const UNSTAGED_SLACK: Duration = Duration::from_secs(300);
 
 pub(crate) struct Pacing {
     pub(crate) retry_base: Duration,
@@ -131,7 +132,8 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
     }
 
     async fn dispatch(&self, bus: &Bus, cancellation: &CancellationToken) -> JobResult {
-        queue::requeue_unanswered(&self.pool, self.config.timeout).await?;
+        let unstaged = self.config.stage_timeout + UNSTAGED_SLACK;
+        queue::requeue_unanswered(&self.pool, self.config.timeout, unstaged).await?;
         let free = self.config.in_flight - queue::busy(&self.pool).await?;
         if free <= 0 {
             return Ok(());
@@ -142,11 +144,20 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         }
         let mut waiting = claimed.into_iter();
         while let Some(claim) = waiting.next() {
-            if cancellation.is_cancelled() {
-                queue::release(&self.pool, &claim, Duration::ZERO, "shutdown").await;
+            let sent = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    queue::release(&self.pool, &claim, Duration::ZERO, "shutdown").await;
+                    continue;
+                }
+                sent = tokio::time::timeout(self.config.stage_timeout, self.send(bus, &claim)) => sent,
+            };
+            let Ok(sent) = sent else {
+                warn!(track = %claim.sc_track_id, "video candidates took too long to stage");
+                queue::release(&self.pool, &claim, RETRY_PUBLISH, "stage_timeout").await;
                 continue;
-            }
-            match self.send(bus, &claim).await {
+            };
+            match sent {
                 Ok(true) => {}
                 Ok(false) => {
                     queue::release(&self.pool, &claim, RETRY_NO_ACCOUNT, "no_account").await;
