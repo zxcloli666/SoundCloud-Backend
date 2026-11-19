@@ -689,6 +689,24 @@ impl VideoKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoLabel {
+    Clip,
+    Loop,
+    Static,
+}
+
+impl VideoLabel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clip => "clip",
+            Self::Loop => "loop",
+            Self::Static => "static",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
 pub struct VideoCandidate {
     #[schemars(range(min = 0))]
@@ -782,6 +800,56 @@ pub struct VideoFindResult {
     pub part: Option<VideoPart>,
 }
 
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
+pub struct VideoVlmRequest {
+    #[schemars(pattern(SC_TRACK_ID_PATTERN))]
+    pub sc_track_id: String,
+    #[schemars(range(min = 1))]
+    pub attempt: i64,
+    #[schemars(pattern(HTTP_URL_PATTERN), length(max = MAX_URL_CHARS))]
+    pub video_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 1))]
+    pub duration_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 0))]
+    pub offset_ms: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct VideoVlmResult {
+    #[schemars(pattern(SC_TRACK_ID_PATTERN))]
+    pub sc_track_id: String,
+    #[schemars(range(min = 1))]
+    pub attempt: i64,
+    pub status: WorkerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "WorkerReason")]
+    pub reason: Option<WorkerReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(max = MAX_DETAIL_CHARS))]
+    pub detail: Option<String>,
+    pub producer: Producer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoLabel")]
+    pub label: Option<VideoLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(min = 1, max = MAX_VIDEO_NAME_CHARS))]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "BTreeMap<String, f32>", length(max = MAX_VIDEO_SCORES))]
+    pub scores: Option<BTreeMap<String, f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 1))]
+    pub duration_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoClip")]
+    pub clip: Option<VideoClip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "VideoPart")]
+    pub part: Option<VideoPart>,
+}
+
 pub const MSG_ID_HEADER: &str = "Nats-Msg-Id";
 pub const REPLY_TO_HEADER: &str = "X-Reply-To";
 pub const DEADLINE_HEADER: &str = "X-Deadline";
@@ -815,6 +883,7 @@ pub const TRAIN_COLLAB: &str = "train.collab.new";
 pub const TRAIN_TASTE: &str = "train.taste.new";
 pub const HIGHLIGHT_TRACK: &str = "highlight.track.new";
 pub const VIDEO_FIND: &str = "video.find.new";
+pub const VIDEO_VLM: &str = "video.vlm.new";
 
 pub const DONE_INDEX_AUDIO: &str = "done.index_audio";
 pub const DONE_EMBED_LYRICS: &str = "done.embed_lyrics";
@@ -824,6 +893,7 @@ pub const DONE_TRAIN_TASTE: &str = "done.train_taste";
 pub const DONE_ENCODE: &str = "done.encode";
 pub const DONE_HIGHLIGHT: &str = "done.highlight";
 pub const DONE_VIDEO_FIND: &str = "done.video_find";
+pub const DONE_VIDEO_VLM: &str = "done.video_vlm";
 pub const HIGHLIGHT_VERSION: i16 = 2;
 
 pub const WORKER_INVALID_SUBJECT: &str = "worker.invalid.<lane>";
@@ -892,6 +962,8 @@ pub const HIGHLIGHT_STREAM: PipelineStreamSpec =
     work_stream("HIGHLIGHT", &["highlight.>"], DAY, DAY);
 pub const VIDEO_FIND_STREAM: PipelineStreamSpec =
     work_stream("VIDEO_FIND", &["video.find.>"], DAY, DAY);
+pub const VIDEO_VLM_STREAM: PipelineStreamSpec =
+    work_stream("VIDEO_VLM", &["video.vlm.>"], DAY, DAY);
 pub const WORKER_INVALID_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     name: "WORKER_INVALID",
     subjects: &["worker.invalid.>"],
@@ -927,7 +999,7 @@ pub const STORAGE_EVENTS_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     allow_direct: false,
 };
 
-pub const WORKER_STREAMS: [PipelineStreamSpec; 13] = [
+pub const WORKER_STREAMS: [PipelineStreamSpec; 14] = [
     INDEX_AUDIO_STREAM,
     EMBED_LYRICS_STREAM,
     TRANSCRIBE_STREAM,
@@ -936,6 +1008,7 @@ pub const WORKER_STREAMS: [PipelineStreamSpec; 13] = [
     TRAIN_TASTE_STREAM,
     HIGHLIGHT_STREAM,
     VIDEO_FIND_STREAM,
+    VIDEO_VLM_STREAM,
     AI_RPC_STREAM,
     SPEAK_RPC_STREAM,
     SPEAK_REPLY_STREAM,
@@ -955,6 +1028,7 @@ pub const PIPELINE_STREAMS: &[PipelineStreamSpec] = &[
     TRAIN_TASTE_STREAM,
     HIGHLIGHT_STREAM,
     VIDEO_FIND_STREAM,
+    VIDEO_VLM_STREAM,
     WORKER_INVALID_STREAM,
     DONE_STREAM,
     STORAGE_EVENTS_STREAM,

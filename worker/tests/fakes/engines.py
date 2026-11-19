@@ -15,6 +15,7 @@ from worker.domain.ports import (
     Completion,
     Draft,
     Float32Array,
+    FrameVerdict,
     Int16Array,
     LanguageGuess,
     Separation,
@@ -52,6 +53,7 @@ class FakeEngines:
         self.completion = Completion(
             "{}", input_tokens=7, reused_tokens=0, output_tokens=2, finished=True
         )
+        self.frame_verdict = FrameVerdict("loop", {"clip": 0.1, "loop": 0.8, "static": 0.1})
         self.speech = Speech(np.full(SPEECH_SAMPLES, 0.25, np.float32), loaded=False, load_s=0.0)
 
     def fail(self, method: str, error: Exception) -> None:
@@ -206,6 +208,17 @@ class FakeEngines:
         vectors = np.zeros((frames.shape[0], 8), dtype=np.float32)
         vectors[np.arange(frames.shape[0]), np.arange(frames.shape[0]) % 8] = 1.0
         return vectors
+
+    async def classify_frames(
+        self, frames: Uint8Array, prompt: str, labels: Sequence[str], deadline: Deadline
+    ) -> FrameVerdict:
+        deadline.check("classify_frames")
+        forced = self._record(
+            "classify_frames", frames=tuple(frames.shape), prompt=prompt, labels=tuple(labels)
+        )
+        if forced is not None:
+            return forced
+        return self.frame_verdict
 
     async def train_collab(
         self,

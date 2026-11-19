@@ -118,6 +118,12 @@ class Completion:
 
 
 @dataclass(frozen=True)
+class FrameVerdict:
+    label: str
+    scores: Mapping[str, float]
+
+
+@dataclass(frozen=True)
 class Speech:
     samples: Float32Array
     loaded: bool
@@ -185,6 +191,10 @@ class Engines(Protocol):
     ) -> str | None: ...
 
     async def embed_frames(self, frames: Uint8Array, deadline: Deadline) -> Float32Array: ...
+
+    async def classify_frames(
+        self, frames: Uint8Array, prompt: str, labels: Sequence[str], deadline: Deadline
+    ) -> FrameVerdict: ...
 
     async def train_collab(
         self,

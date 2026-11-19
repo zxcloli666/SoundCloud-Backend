@@ -101,6 +101,21 @@ def test_local_llm_weights_come_as_one_pinned_file_with_the_ai_lane(env: dict[st
         ], profile
 
 
+def test_vlm_weights_come_as_the_model_and_its_projector_only_with_the_lane(
+    env: dict[str, str],
+) -> None:
+    off = {**env, s.PROFILE_ENV: "cpu"}
+    assert [i for i in fm.plan(s.load(CONFIG_DIR, off), off) if i.slot == s.VLM_SLOT] == []
+    on = {**off, "WORKER__LANES__ENABLED": '["video-vlm"]'}
+    settings = s.load(CONFIG_DIR, on)
+    slot, vlm = settings.slots[s.VLM_SLOT], settings.vlm
+    files = [item.artifact for item in fm.plan(settings, on) if item.slot == s.VLM_SLOT]
+    assert files == [
+        fm.HubFile(slot.model, slot.revision, vlm.file, vlm.sha256),
+        fm.HubFile(slot.model, slot.revision, vlm.mmproj, vlm.mmproj_sha256),
+    ]
+
+
 def test_a_worker_without_the_ai_lane_needs_no_local_model_weights(env: dict[str, str]) -> None:
     environ = {
         **env,

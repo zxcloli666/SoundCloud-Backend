@@ -21,6 +21,7 @@ from worker.domain.ports import (
     Draft,
     EngineUnavailable,
     Float32Array,
+    FrameVerdict,
     Int16Array,
     LanguageGuess,
     Separation,
@@ -47,7 +48,14 @@ from worker.runtime.engine_client import (
 )
 from worker.runtime.protocol import Arrays, Call, ErrorKind
 from worker.runtime.supervisor import Supervisor
-from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT, TTS_METHOD, TTS_SLOT
+from worker.settings import (
+    LOCAL_LLM_METHOD,
+    LOCAL_LLM_SLOT,
+    TTS_METHOD,
+    TTS_SLOT,
+    VLM_METHOD,
+    VLM_SLOT,
+)
 
 BATCHED_SLOTS = ("muq", "mulan", "text")
 AUDIO = "audio"
@@ -344,6 +352,27 @@ class RuntimeEngines:
             "clip", "embed_frames", {"frames": frames}, {}, deadline
         )
         return float32(arrays, "vectors", "clip")
+
+    async def classify_frames(
+        self, frames: Uint8Array, prompt: str, labels: Sequence[str], deadline: Deadline
+    ) -> FrameVerdict:
+        _, result = await self._slots.direct(
+            VLM_SLOT,
+            VLM_METHOD,
+            {"frames": frames},
+            {"prompt": prompt, "labels": list(labels)},
+            deadline,
+        )
+        label = result.get("label")
+        scores = result.get("scores")
+        if not isinstance(label, str) or label not in labels:
+            raise invalid(VLM_SLOT, f"label {label!r} is not one of {list(labels)}")
+        if not isinstance(scores, Mapping):
+            raise invalid(VLM_SLOT, "scores are not an object")
+        return FrameVerdict(
+            label=label,
+            scores={str(name): as_number(value, VLM_SLOT) for name, value in scores.items()},
+        )
 
     async def train_collab(
         self,

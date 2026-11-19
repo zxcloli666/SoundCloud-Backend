@@ -90,6 +90,7 @@ DESIGN = {
     "gpu-tts": Profile("lane", "public", {"speak": 1}, {}),
 }
 SPEAK_ONLY = {"speak"}
+NOT_YET = {"video-vlm"}
 
 
 def load(profile: str) -> s.Settings:
@@ -209,7 +210,7 @@ def test_cpu_profile_serves_every_lane_with_one_copy_of_each_model() -> None:
     assert settings.runtime.onednn is False
     assert settings.runtime.allow_slow_lanes is True
     assert settings.runtime.isolate_encode is True
-    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY
+    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY - NOT_YET
     assert all(settings.slots[slot].replicas == 1 for slot in SYNC_X2)
     assert all(settings.lanes.capacity[lane] > 1 for lane in ("audio", "lyrics", "transcribe"))
 

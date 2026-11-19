@@ -8,18 +8,19 @@ use crate::pipeline::{
     COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest, CollabTrainResult,
     CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT,
     DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, DONE_VIDEO_FIND,
-    EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest,
-    EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult,
-    INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult,
-    MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES,
-    MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES,
-    MAX_SAY_TEXT_CHARS, MAX_VIDEO_PARTS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError,
-    SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB,
-    TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
-    TasteTrainRequest, TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_FIND,
-    VIDEO_FIND_STREAM, VIDEO_PART_BYTES, VideoFindRequest, VideoFindResult, WORKER_HEALTH_SUBJECT,
-    WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS,
-    collab_vectors_suffix,
+    DONE_VIDEO_VLM, EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel,
+    EncodeRequest, EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest,
+    HighlightResult, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
+    LyricsEmbeddingResult, MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES,
+    MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS,
+    MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS, MAX_VIDEO_PARTS,
+    PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY,
+    SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM,
+    TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest, TasteTrainResult, TranscriptionRequest,
+    TranscriptionResult, VIDEO_FIND, VIDEO_FIND_STREAM, VIDEO_PART_BYTES, VIDEO_VLM,
+    VIDEO_VLM_STREAM, VideoFindRequest, VideoFindResult, VideoVlmRequest, VideoVlmResult,
+    WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT,
+    WORKER_STREAMS, collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -58,10 +59,11 @@ pub enum WorkerLane {
     Speak,
     Highlight,
     VideoFind,
+    VideoVlm,
 }
 
 impl WorkerLane {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Audio,
         Self::Lyrics,
         Self::Transcribe,
@@ -72,6 +74,7 @@ impl WorkerLane {
         Self::Speak,
         Self::Highlight,
         Self::VideoFind,
+        Self::VideoVlm,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -86,6 +89,7 @@ impl WorkerLane {
             Self::Speak => "speak",
             Self::Highlight => "highlight",
             Self::VideoFind => "video-find",
+            Self::VideoVlm => "video-vlm",
         }
     }
 
@@ -101,6 +105,7 @@ impl WorkerLane {
             Self::Speak => &SPEAK_LANE,
             Self::Highlight => &HIGHLIGHT_LANE,
             Self::VideoFind => &VIDEO_FIND_LANE,
+            Self::VideoVlm => &VIDEO_VLM_LANE,
         }
     }
 }
@@ -435,7 +440,29 @@ pub const VIDEO_FIND_LANE: WorkerLaneSpec = WorkerLaneSpec {
     priority_group: None,
 };
 
-pub const WORKER_LANES: [WorkerLaneSpec; 10] = [
+pub const VIDEO_VLM_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::VideoVlm,
+    stream: VIDEO_VLM_STREAM,
+    durable: "video-vlm-workers",
+    filter_subject: VIDEO_VLM,
+    done_subject: Some(DONE_VIDEO_VLM),
+    correlation_prefix: "video_vlm",
+    correlation: &["sc_track_id", "attempt"],
+    echo: &[("sc_track_id", "sc_track_id"), ("attempt", "attempt")],
+    deadline_s: 600,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 4,
+    nak: Some(NakBackoff {
+        base_s: 60,
+        cap_s: 1800,
+    }),
+    result_max_bytes: 800_000,
+    public: false,
+    priority_group: None,
+};
+
+pub const WORKER_LANES: [WorkerLaneSpec; 11] = [
     AUDIO_LANE,
     LYRICS_LANE,
     TRANSCRIBE_LANE,
@@ -446,6 +473,7 @@ pub const WORKER_LANES: [WorkerLaneSpec; 10] = [
     SPEAK_LANE,
     HIGHLIGHT_LANE,
     VIDEO_FIND_LANE,
+    VIDEO_VLM_LANE,
 ];
 
 pub const fn done_duplicate_window_seconds() -> u64 {
@@ -690,6 +718,8 @@ pub fn schemas() -> BTreeMap<String, Value> {
         done::<HighlightResult>(WorkerLane::Highlight),
         request::<VideoFindRequest>(VIDEO_FIND),
         done::<VideoFindResult>(WorkerLane::VideoFind),
+        request::<VideoVlmRequest>(VIDEO_VLM),
+        done::<VideoVlmResult>(WorkerLane::VideoVlm),
     ])
 }
 
@@ -810,6 +840,7 @@ fn required_on(lane: WorkerLane, status: WorkerStatus) -> Vec<&'static str> {
             "loop",
             "scores",
         ],
+        (WorkerLane::VideoVlm, WorkerStatus::Ok) => vec!["label", "model", "scores"],
         _ => Vec::new(),
     }
 }
@@ -885,6 +916,7 @@ mod tests {
             (WorkerLane::Taste, 60, 39_900, 126_300, None),
             (WorkerLane::Highlight, 12, 1050, 87_450, None),
             (WorkerLane::VideoFind, 12, 3900, 90_300, None),
+            (WorkerLane::VideoVlm, 12, 3900, 90_300, None),
         ];
         for (lane, heartbeat, window, quarantine, bridge) in table {
             let spec = lane.spec();
@@ -1563,5 +1595,28 @@ mod tests {
             assert!(!required.contains(&json!(secret)));
             assert!(request["properties"].get(secret).is_none());
         }
+    }
+
+    #[test]
+    fn the_video_vlm_lane_is_private_and_an_ok_answer_names_label_and_model() {
+        let schemas = schemas();
+        let exported = contract();
+        let lane = &exported["lanes"]["video-vlm"];
+        let ok = rule_of(&schemas, DONE_VIDEO_VLM, "ok");
+        let request = &schemas[VIDEO_VLM];
+
+        assert_eq!(lane["stream"], "VIDEO_VLM");
+        assert_eq!(lane["durable"], "video-vlm-workers");
+        assert_eq!(lane["public"], false);
+        assert_eq!(ok["required"], json!(["label", "model", "scores"]));
+        assert_eq!(
+            request["required"],
+            json!(["sc_track_id", "attempt", "video_url"])
+        );
+        assert!(
+            WorkerLane::VideoVlm
+                .reasons()
+                .contains(&WorkerReason::InputsGone)
+        );
     }
 }

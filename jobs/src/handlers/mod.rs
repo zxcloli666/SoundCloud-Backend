@@ -49,6 +49,7 @@ pub(crate) mod taste;
 mod telemetry;
 pub(crate) mod video_accounts;
 pub(crate) mod video_find;
+pub(crate) mod video_vlm;
 mod wanted;
 mod worker_backlog;
 
@@ -97,6 +98,7 @@ use self::telemetry::TelemetryHandler;
 use self::video_accounts::{Checker, Proxied, Seal, SpotifyKey, Telegram, VideoAccounts};
 use self::video_find::ytdlp::YtDlp;
 use self::video_find::{Pooled, ProxyPool, VideoFind};
+use self::video_vlm::VideoVlm;
 use self::wanted::{AiMatcherClient, WantedHandler};
 use crate::objects::Objects;
 
@@ -438,6 +440,21 @@ impl JobHandlers {
             YtDlp::new(&config.video_find, proxies),
             self.video_accounts.seal(),
         ))))
+    }
+
+    pub async fn video_vlm(
+        &self,
+        pool: sqlx::PgPool,
+        config: &JobsConfig,
+    ) -> Option<Arc<VideoVlm<Objects>>> {
+        let objects = config.video_find.objects.as_ref()?;
+        Some(Arc::new(VideoVlm::new(
+            pool,
+            config.sync_queue.storage_url.clone(),
+            config.video_vlm.clone(),
+            &config.video_find,
+            Objects::connect(objects).await,
+        )))
     }
 
     pub async fn bootstrap(&self) -> JobResult {

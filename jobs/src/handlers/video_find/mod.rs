@@ -1,6 +1,6 @@
 mod fetch;
 mod leads;
-mod parts;
+pub(crate) mod parts;
 mod pick;
 mod pool;
 mod queue;
@@ -9,7 +9,7 @@ mod sources;
 mod stage;
 mod temp;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 pub(crate) mod ytdlp;
 
 use std::sync::Arc;
@@ -34,6 +34,7 @@ pub(crate) use self::fetch::Pooled;
 use self::parts::Parts;
 pub(crate) use self::pool::ProxyPool;
 use self::queue::Claimed;
+pub(crate) use self::result::final_key;
 use self::sources::{Sources, Wanted};
 use self::ytdlp::Tube;
 

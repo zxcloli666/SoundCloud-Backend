@@ -28,6 +28,7 @@ DESIGN_CORRELATION = {
     "taste": "train_taste:taste-input-9f2e",
     "highlight": "highlight:98765:2",
     "video-find": "video_find:98765:2",
+    "video-vlm": "video_vlm:98765:2",
 }
 LRC_LINE = "[59:59.99]а\n"
 REFERENCE_TEXT_BYTES = 16000

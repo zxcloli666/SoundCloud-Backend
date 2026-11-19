@@ -32,6 +32,7 @@ LANES = (
     "speak",
     "highlight",
     "video-find",
+    "video-vlm",
 )
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
@@ -42,6 +43,15 @@ CONFIDENCE_MODELS = ("v1", "calibrated")
 AI_LANE = "ai"
 VIDEO_LANE = "video-find"
 LOCAL_LLM_SLOT = "llm-local"
+VLM_SLOT = "vlm"
+VLM_METHOD = "classify"
+VLM_DEVICE = "llama-cpu"
+VLM_FILE_SUFFIX = ".gguf"
+VLM_MIN_FRAME_SIDE = 64
+VLM_MAX_FRAME_SIDE = 1024
+VLM_MAX_FRAMES = 32
+VLM_FRAME_SIDE_STEP = 32
+VLM_PROMPT_TOKENS = 512
 LOCAL_LLM_METHOD = "complete"
 LOCAL_LLM_DEVICE = "llama-cpu"
 LOCAL_LLM_FILE_SUFFIX = ".gguf"
@@ -68,6 +78,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "speak": (TTS_SLOT,),
         "highlight": (),
         "video-find": ("clip", "cpu-tools"),
+        "video-vlm": (VLM_SLOT,),
     }
 )
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})
@@ -327,6 +338,21 @@ class LlmSection:
 
 
 @dataclass(frozen=True)
+class VlmSettings:
+    file: str
+    sha256: str
+    mmproj: str
+    mmproj_sha256: str
+    frames: int
+    frame_side: int
+    context_tokens: int
+    threads: int
+    nice: int
+    gpu_layers: int
+    idle_unload_s: int
+
+
+@dataclass(frozen=True)
 class TtsEngine:
     directory: str
     program: str
@@ -380,6 +406,7 @@ class Settings:
     collab: CollabSection
     taste: TasteSection
     llm: LlmSection
+    vlm: VlmSettings
     tts: TtsSection
     profile: str = ""
 
@@ -599,6 +626,7 @@ def validate(settings: Settings) -> None:
         *validate_taste(settings),
         *validate_video(settings),
         *validate_local_llm(settings),
+        *validate_vlm(settings),
         *validate_tts(settings),
     ]
     if problems:
@@ -761,6 +789,47 @@ def validate_local_llm(settings: Settings) -> list[str]:
     return problems
 
 
+def validate_vlm(settings: Settings) -> list[str]:
+    vlm = settings.vlm
+    problems = []
+    slot = settings.slots.get(VLM_SLOT)
+    if (
+        "video-vlm" in settings.lanes.enabled
+        and slot is not None
+        and not (slot.model and slot.revision)
+    ):
+        problems.append(f"lane video-vlm needs slots.{VLM_SLOT}.model and revision")
+    for name, file in (("file", vlm.file), ("mmproj", vlm.mmproj)):
+        if not file.endswith(VLM_FILE_SUFFIX):
+            problems.append(f"vlm.{name} must be a {VLM_FILE_SUFFIX} file of the model repo")
+    for name, digest in (("sha256", vlm.sha256), ("mmproj_sha256", vlm.mmproj_sha256)):
+        if not SHA256_HEX.fullmatch(digest):
+            problems.append(f"vlm.{name} must be 64 lowercase hex characters")
+    if not 1 <= vlm.frames <= VLM_MAX_FRAMES:
+        problems.append(f"vlm.frames must be within 1..{VLM_MAX_FRAMES}")
+    if (
+        not VLM_MIN_FRAME_SIDE <= vlm.frame_side <= VLM_MAX_FRAME_SIDE
+        or vlm.frame_side % VLM_FRAME_SIDE_STEP
+    ):
+        problems.append(
+            f"vlm.frame_side must be a multiple of {VLM_FRAME_SIDE_STEP} "
+            f"within {VLM_MIN_FRAME_SIDE}..{VLM_MAX_FRAME_SIDE}"
+        )
+    elif vlm.frames * (vlm.frame_side // VLM_FRAME_SIDE_STEP) ** 2 + VLM_PROMPT_TOKENS > (
+        vlm.context_tokens
+    ):
+        problems.append("vlm.context_tokens do not fit vlm.frames at vlm.frame_side")
+    if vlm.threads < 1:
+        problems.append("vlm.threads must be >= 1")
+    if not 0 <= vlm.nice <= MAX_NICE:
+        problems.append(f"vlm.nice must be within 0..{MAX_NICE}")
+    if vlm.gpu_layers < -1:
+        problems.append("vlm.gpu_layers must be >= -1 (-1 is every layer)")
+    if vlm.idle_unload_s < 0:
+        problems.append("vlm.idle_unload_s must be >= 0")
+    return problems
+
+
 def validate_tts(settings: Settings) -> list[str]:
     tts = settings.tts
     problems = []
@@ -874,6 +943,11 @@ def model_ref(settings: Settings, slot: str) -> str:
 def local_llm_ref(settings: Settings) -> str:
     slot = settings.slots[LOCAL_LLM_SLOT]
     return f"{slot.model}/{settings.llm.local.file}@{slot.revision[:8]}"
+
+
+def vlm_ref(settings: Settings) -> str:
+    slot = settings.slots[VLM_SLOT]
+    return f"{slot.model}/{settings.vlm.file}@{slot.revision[:8]}"
 
 
 def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) -> tuple[str, ...]:

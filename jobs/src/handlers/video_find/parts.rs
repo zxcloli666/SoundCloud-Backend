@@ -18,12 +18,12 @@ struct Assembly {
 }
 
 #[derive(Default)]
-pub(super) struct Parts {
+pub(crate) struct Parts {
     open: Mutex<HashMap<Key, Assembly>>,
 }
 
 impl Parts {
-    pub(super) fn add(
+    pub(crate) fn add(
         &self,
         track: &str,
         attempt: i64,

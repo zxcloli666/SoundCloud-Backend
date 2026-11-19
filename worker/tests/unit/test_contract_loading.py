@@ -30,6 +30,7 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "speak",
         "highlight",
         "video-find",
+        "video-vlm",
     }
     assert contract.public_lanes == {"audio", "lyrics", "transcribe", "speak"}
     assert all(lane.durable == f"{name}-workers" for name, lane in contract.lanes.items())

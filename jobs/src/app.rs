@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, ensure};
 use backend_contracts::pipeline::{
     AudioIndexResult, EncodeResult, HighlightResult, LyricsEmbeddingResult, StorageTrackRejected,
-    StorageTrackUploaded, TranscriptionResult, VideoFindResult,
+    StorageTrackUploaded, TranscriptionResult, VideoFindResult, VideoVlmResult,
 };
 use backend_contracts::{ImpressionBatch, JobCommand};
 use chrono::{DateTime, Utc};
@@ -93,6 +93,7 @@ pub async fn run() -> anyhow::Result<()> {
     let taste_results = bus.taste_results(&config.nats).await?;
     let highlight_results = bus.highlight_results(&config.nats).await?;
     let video_results = bus.video_find_results(&config.nats).await?;
+    let video_vlm_results = bus.video_vlm_results(&config.nats).await?;
     let highlights = Arc::new(HighlightHandler::new(
         databases.main.bulk.clone(),
         bus.clone(),
@@ -226,6 +227,7 @@ pub async fn run() -> anyhow::Result<()> {
             .serve(bus.clone(), cancellation.clone()),
     );
     let video_bus = bus.clone();
+    let video_vlm_bus = bus.clone();
     let video_accounts = handlers.video_accounts();
     supervisor.spawn(
         "admin video RPC",
@@ -297,6 +299,23 @@ pub async fn run() -> anyhow::Result<()> {
             video_find.clone().sweep(video_bus, cancellation.clone()),
         );
         supervisor.spawn("video temp sweep", video_find.expire(cancellation.clone()));
+    }
+    if let Some(video_vlm) = handlers
+        .video_vlm(databases.main.bulk.clone(), &config)
+        .await
+    {
+        let vlm_receiver = video_vlm.clone();
+        supervisor.spawn(
+            "video VLM result consumer",
+            video_vlm_results.run_raw(cancellation.clone(), move |result: VideoVlmResult| {
+                let video_vlm = vlm_receiver.clone();
+                async move { video_vlm.finish(result).await }
+            }),
+        );
+        supervisor.spawn(
+            "video VLM sweep",
+            video_vlm.sweep(video_vlm_bus, cancellation.clone()),
+        );
     }
     let lyrics_handlers = handlers.clone();
     supervisor.spawn(

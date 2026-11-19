@@ -33,6 +33,7 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 | `speak` | `SPEAK_RPC` | `speak.rpc.>` | ответ на `X-Reply-To` | да |
 | `highlight` | `HIGHLIGHT` | `highlight.track.new` | `done.highlight` | нет |
 | `video-find` | `VIDEO_FIND` | `video.find.new` | `done.video_find` | нет |
+| `video-vlm` | `VIDEO_VLM` | `video.vlm.new` | `done.video_vlm` | нет |
 
 Лейн держит на сервере один pull-запрос на свои свободные места со сроком 5 с, без `no_wait` и
 heartbeat, и отдаёт задачу обработчику сразу, как она пришла. Пустой запрос, закрытый раньше срока,
@@ -52,6 +53,13 @@ CLIP из слота `clip`. В задаче только `s3_url` трека, �
 512 КиБ, каждое сообщение `done.video_find` несёт вердикт, `clip {bytes, sha256, parts}` и `part {index, data}`
 в base64; `loop` и `uncertain` дают только номер кандидата `candidate`; static и «ничего» только вердикт.
 Если файла кандидата уже нет (404), причина `inputs_gone`, jobs собирает задачу заново.
+
+`video-vlm` решает спорные случаи `video-find`. В задаче `video_url` одноразового файла (`video-tmp/...`),
+длительность трека и смещение Chromaprint. Воркер берёт N кадров (`vlm.frames`, сторона `vlm.frame_side`)
+равномерно из окна и просит Qwen3-VL (GGUF и mmproj через llama.cpp, слот `vlm`) ответить одним словом:
+clip, loop или static; грамматика не даёт другого ответа. Ответ: `label`, `scores` по классам, `model`.
+Для `clip` кусок режется и приходит частями, как у `video-find`. Если файла уже нет, причина
+`inputs_gone`. Лейн выключен в профиле `cpu`, пока бенчмарк не выберет модель; веса тянет `fetch_models`.
 
 `highlight` ищет момент трека: самое цепляющее окно 30 с (`start_ms`, `length_ms`, `score` от 0 до 1).
 Только numpy на CPU, моделей нет; включён в профиле `cpu` (worker1). Кадры по 0,5 с: громкость и
