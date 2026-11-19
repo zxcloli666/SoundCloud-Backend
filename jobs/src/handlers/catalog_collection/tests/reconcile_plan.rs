@@ -19,7 +19,9 @@ fn reconciles() -> [Reconcile; 2] {
             target: "catalog_audience",
             types: "text, text, timestamptz, text, uuid",
             sql: include_str!("../../../../queries/catalog_collection/audience_reconcile.sql"),
-            args: format!("'soundcloud:tracks:big', 'track-favoriters', now(), 'big', '{SNAPSHOT}'"),
+            args: format!(
+                "'soundcloud:tracks:big', 'track-favoriters', now(), 'big', '{SNAPSHOT}'"
+            ),
         },
         Reconcile {
             target: "user_followers",
@@ -120,7 +122,10 @@ async fn a_reconcile_probes_the_seen_key_once_per_row_even_when_the_snapshot_loo
             .filter(|node| node.get("Rows Removed by Join Filter").is_some())
             .map(|node| number(node, "Rows Removed by Join Filter"))
             .sum();
-        assert_eq!(matched, 0.0, "{target} matches rows by a join filter: {plan}");
+        assert_eq!(
+            matched, 0.0,
+            "{target} matches rows by a join filter: {plan}"
+        );
         let deleted = all
             .iter()
             .find(|node| node["Node Type"] == "ModifyTable")
