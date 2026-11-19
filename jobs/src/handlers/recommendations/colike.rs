@@ -5,7 +5,7 @@ mod tests;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use sqlx::{Connection, PgConnection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::queue::{JobError, JobResult};
@@ -14,16 +14,26 @@ const SHRINKAGE: f64 = 8.0;
 const TOP_K_PER_ARTIST: i64 = 80;
 const WEIGHT_TOLERANCE: f64 = 0.01;
 const BUILD_SESSION: [&str; 2] = [
-    "SET LOCAL statement_timeout = '7000s'",
+    "SET LOCAL statement_timeout = '1800s'",
     "SET LOCAL work_mem = '512MB'",
 ];
+const PREPARE_FRESH: [&str; 4] = [
+    include_str!("../../../queries/recommendations/colike/likers_fresh.sql"),
+    include_str!("../../../queries/recommendations/colike/likers_key.sql"),
+    include_str!("../../../queries/recommendations/colike/fresh_table.sql"),
+    include_str!("../../../queries/recommendations/colike/analyze_users.sql"),
+];
+const PAIRS_BY_A: &str = include_str!("../../../queries/recommendations/colike/pairs_by_a.sql");
+const PAIRS_BY_B: &str = include_str!("../../../queries/recommendations/colike/pairs_by_b.sql");
 const PACING: Pacing = Pacing {
+    shards: 64,
     batch_edges: 500,
     pause: Duration::from_millis(150),
 };
 
 #[derive(Clone, Copy)]
 struct Pacing {
+    shards: i32,
     batch_edges: i64,
     pause: Duration,
 }
@@ -45,7 +55,7 @@ pub(super) async fn rebuild(pool: &PgPool) -> JobResult<Rebuild> {
 }
 
 async fn rebuild_on(connection: &mut PgConnection, pacing: Pacing) -> Result<Rebuild, sqlx::Error> {
-    let (fresh, started_at) = build_fresh(connection).await?;
+    let (fresh, started_at) = build_fresh(connection, pacing).await?;
     let mut rebuild = Rebuild {
         fresh,
         ..Rebuild::default()
@@ -67,34 +77,55 @@ async fn rebuild_on(connection: &mut PgConnection, pacing: Pacing) -> Result<Reb
     }
 }
 
-async fn build_fresh(connection: &mut PgConnection) -> Result<(u64, DateTime<Utc>), sqlx::Error> {
+async fn build_fresh(
+    connection: &mut PgConnection,
+    pacing: Pacing,
+) -> Result<(u64, DateTime<Utc>), sqlx::Error> {
+    let mut transaction = build_step(connection).await?;
+    let started_at = sqlx::query_file_scalar!("queries/recommendations/colike/started_at.sql")
+        .fetch_one(&mut *transaction)
+        .await?;
+    sqlx::query_file!(
+        "queries/recommendations/colike/users_fresh.sql",
+        pacing.shards
+    )
+    .execute(&mut *transaction)
+    .await?;
+    for statement in PREPARE_FRESH {
+        sqlx::query(statement).execute(&mut *transaction).await?;
+    }
+    transaction.commit().await?;
+    let mut fresh = 0;
+    for pairs in [PAIRS_BY_A, PAIRS_BY_B] {
+        for shard in 0..pacing.shards {
+            let mut transaction = build_step(connection).await?;
+            fresh += sqlx::query(pairs)
+                .bind(SHRINKAGE)
+                .bind(TOP_K_PER_ARTIST)
+                .bind(shard)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
+            transaction.commit().await?;
+            tokio::time::sleep(pacing.pause).await;
+        }
+    }
+    sqlx::query(include_str!(
+        "../../../queries/recommendations/colike/analyze_fresh.sql"
+    ))
+    .execute(&mut *connection)
+    .await?;
+    Ok((fresh, started_at))
+}
+
+async fn build_step(
+    connection: &mut PgConnection,
+) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
     let mut transaction = connection.begin().await?;
     for setting in BUILD_SESSION {
         sqlx::query(setting).execute(&mut *transaction).await?;
     }
-    let started_at = sqlx::query_file_scalar!("queries/recommendations/colike/started_at.sql")
-        .fetch_one(&mut *transaction)
-        .await?;
-    let fresh = sqlx::query_file!(
-        "queries/recommendations/colike/build_fresh.sql",
-        SHRINKAGE,
-        TOP_K_PER_ARTIST
-    )
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    sqlx::query(include_str!(
-        "../../../queries/recommendations/colike/index_fresh.sql"
-    ))
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(include_str!(
-        "../../../queries/recommendations/colike/analyze_fresh.sql"
-    ))
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-    Ok((fresh, started_at))
+    Ok(transaction)
 }
 
 async fn batch_upper(
