@@ -39,7 +39,11 @@ impl MobileRefresh {
         }
     }
 
-    pub async fn refresh(&self, connection_id: Uuid) -> Result<MobileAnswer, sqlx::Error> {
+    pub async fn refresh(
+        &self,
+        connection_id: Uuid,
+        rejected: Option<&str>,
+    ) -> Result<MobileAnswer, sqlx::Error> {
         let Some(credential) = Credential::load(&self.pool, connection_id).await? else {
             return Ok(MobileAnswer {
                 outcome: RefreshOutcome::NotConnected,
@@ -47,9 +51,9 @@ impl MobileRefresh {
                 state: None,
             });
         };
-        let (outcome, retry_after_sec) = match credential.standing() {
+        let (outcome, retry_after_sec) = match credential.standing(rejected) {
             Some(standing) => standing,
-            None => self.attempt(connection_id, credential).await?,
+            None => self.attempt(connection_id, credential, rejected).await?,
         };
         let state = Credential::load(&self.pool, connection_id)
             .await?
@@ -65,6 +69,7 @@ impl MobileRefresh {
         &self,
         connection_id: Uuid,
         credential: Credential,
+        rejected: Option<&str>,
     ) -> Result<Standing, sqlx::Error> {
         let Some(app) = credential.app.clone() else {
             return Ok((RefreshOutcome::ReauthorizationRequired, None));
@@ -77,7 +82,7 @@ impl MobileRefresh {
             return Ok((RefreshOutcome::RateLimited, Some(seconds)));
         }
         let Some(claim) = credential.claim(&self.pool).await? else {
-            return self.settled(connection_id).await;
+            return self.settled(connection_id, rejected).await;
         };
         let answer = match MobileClient::new(app, self.egress()) {
             Ok(client) => {
@@ -94,7 +99,7 @@ impl MobileRefresh {
         };
         match recorded {
             Some(standing) => Ok(standing),
-            None => self.settled(connection_id).await,
+            None => self.settled(connection_id, rejected).await,
         }
     }
 
@@ -135,12 +140,16 @@ impl MobileRefresh {
         Ok(recorded.then_some((failure.outcome(), Some(i64::from(seconds)))))
     }
 
-    async fn settled(&self, connection_id: Uuid) -> Result<Standing, sqlx::Error> {
+    async fn settled(
+        &self,
+        connection_id: Uuid,
+        rejected: Option<&str>,
+    ) -> Result<Standing, sqlx::Error> {
         let standing = Credential::load(&self.pool, connection_id)
             .await?
             .map(|credential| {
                 credential
-                    .standing()
+                    .standing(rejected)
                     .unwrap_or((RefreshOutcome::RetryLater, Some(1)))
             });
         Ok(standing.unwrap_or((RefreshOutcome::NotConnected, None)))

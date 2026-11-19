@@ -117,6 +117,22 @@ fn a_soundcloud_failure_is_counted_by_class_and_its_retry_after_is_kept() {
 }
 
 #[test]
+fn mobile_counters_are_scraped_before_the_first_link() {
+    init();
+
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
+    let rendered = handle.render();
+
+    assert!(rendered.contains("sc_mobile_link_total{outcome=\"timed_out\"}"));
+    assert!(rendered.contains("sc_mobile_link_total{outcome=\"account_mismatch\"}"));
+    assert!(rendered.contains("sc_mobile_requests_total{"));
+    assert!(rendered.contains("op=\"token\""));
+    assert!(rendered.contains("op=\"me\""));
+}
+
+#[test]
 fn every_outcome_has_a_stable_name() {
     assert_eq!(
         [

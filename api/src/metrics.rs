@@ -105,6 +105,7 @@ pub fn init() {
     match builder.install_recorder() {
         Ok(handle) => {
             if HANDLE.set(handle.clone()).is_ok() {
+                mobile::register();
                 start_upkeep(handle);
             }
         }

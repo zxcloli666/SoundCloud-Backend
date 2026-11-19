@@ -91,6 +91,15 @@ pub fn mime_to_content_type(mime: &str) -> &'static str {
     }
 }
 
+pub fn playlist_seconds(content: &str) -> f64 {
+    content
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("#EXTINF:"))
+        .filter_map(|rest| rest.split(',').next()?.trim().parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .sum()
+}
+
 pub async fn fetch_m3u8_source(
     client: &Client,
     proxy_url: &str,
@@ -98,6 +107,21 @@ pub async fn fetch_m3u8_source(
     m3u8_headers: HashMap<String, String>,
     direct_only: bool,
 ) -> Result<SegmentSource, BoxErr> {
+    let text = fetch_m3u8_text(client, proxy_url, m3u8_url, m3u8_headers, direct_only).await?;
+    let source = parse_m3u8(&text, m3u8_url);
+    if source.1.is_empty() {
+        return Err("no segments found in m3u8".into());
+    }
+    Ok(source)
+}
+
+pub async fn fetch_m3u8_text(
+    client: &Client,
+    proxy_url: &str,
+    m3u8_url: &str,
+    m3u8_headers: HashMap<String, String>,
+    direct_only: bool,
+) -> Result<String, BoxErr> {
     let data = fetch_validated(
         client,
         proxy_url,
@@ -107,12 +131,7 @@ pub async fn fetch_m3u8_source(
         m3u8_validator(),
     )
     .await?;
-    let text = String::from_utf8_lossy(&data);
-    let source = parse_m3u8(&text, m3u8_url);
-    if source.1.is_empty() {
-        return Err("no segments found in m3u8".into());
-    }
-    Ok(source)
+    Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
 pub async fn download_progressive(
@@ -163,9 +182,18 @@ pub async fn download_hls(
         return Ok((Bytes::from(audio), mime_to_content_type(mime_type)));
     }
 
-    let (init_url, mut segment_urls) =
-        fetch_m3u8_source(client, proxy_url, m3u8_url, m3u8_headers, direct_only).await?;
+    let source = fetch_m3u8_source(client, proxy_url, m3u8_url, m3u8_headers, direct_only).await?;
+    download_segments(client, proxy_url, source, mime_type, direct_only, refresher).await
+}
 
+pub async fn download_segments(
+    client: &Client,
+    proxy_url: &str,
+    (init_url, mut segment_urls): SegmentSource,
+    mime_type: &str,
+    direct_only: bool,
+    refresher: Option<M3u8Refresher>,
+) -> Result<(Bytes, &'static str), BoxErr> {
     let mut buf = BytesMut::new();
 
     if let Some(ref init) = init_url {
@@ -311,6 +339,28 @@ mod tests {
                 "https://cf-hls-media.sndcdn.com/media/0/1/segment-1.m4s".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn a_playlist_lasts_as_long_as_its_segments_say() {
+        let snippet = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-TARGETDURATION:10\n",
+            "#EXTINF:1.985272,\n",
+            "segment-0.mp3\n",
+            "#EXTINF:2.977908,\n",
+            "segment-1.mp3\n",
+            "#EXTINF:4.963180,\n",
+            "segment-2.mp3\n",
+            "#EXT-X-ENDLIST\n",
+        );
+
+        assert!((playlist_seconds(snippet) - 9.92636).abs() < 1e-6);
+        assert_eq!(
+            playlist_seconds("#EXTM3U\n#EXTINF:nan,\nsegment.mp3\n"),
+            0.0
+        );
+        assert_eq!(playlist_seconds(""), 0.0);
     }
 
     #[test]

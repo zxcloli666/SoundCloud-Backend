@@ -5,8 +5,11 @@ pub const HQ: &str = "hq";
 pub const UQ: &str = "uq";
 
 pub fn of_transcoding(t: &Transcoding) -> &'static str {
-    let preset = t.preset.as_deref().unwrap_or("");
-    if t.quality.as_deref() == Some("hq") || preset.starts_with("aac_256") {
+    of_preset(t.preset.as_deref().unwrap_or(""), t.quality.as_deref())
+}
+
+pub fn of_preset(preset: &str, label: Option<&str>) -> &'static str {
+    if label == Some("hq") || preset.starts_with("aac_256") {
         UQ
     } else if preset == "aac_160k" {
         HQ

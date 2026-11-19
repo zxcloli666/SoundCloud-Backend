@@ -95,7 +95,12 @@ impl AuthRpc {
 
     pub async fn refresh(&self, request: RefreshRequest) -> anyhow::Result<RefreshReply> {
         if request.target == RefreshTarget::Mobile {
-            return self.refresh_mobile(request.connection_id).await;
+            return self
+                .refresh_mobile(
+                    request.connection_id,
+                    request.rejected_token_fingerprint.as_deref(),
+                )
+                .await;
         }
         let turn = self.turns.of(request.connection_id);
         let Ok(_turn) = tokio::time::timeout(TURN_WAIT, turn.lock()).await else {
@@ -180,8 +185,12 @@ impl AuthRpc {
         Ok(AppTokenReply { token })
     }
 
-    async fn refresh_mobile(&self, connection_id: Uuid) -> anyhow::Result<RefreshReply> {
-        let answer = self.mobile.refresh(connection_id).await?;
+    async fn refresh_mobile(
+        &self,
+        connection_id: Uuid,
+        rejected: Option<&str>,
+    ) -> anyhow::Result<RefreshReply> {
+        let answer = self.mobile.refresh(connection_id, rejected).await?;
         Ok(RefreshReply {
             outcome: answer.outcome,
             connection: None,

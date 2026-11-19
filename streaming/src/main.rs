@@ -34,6 +34,7 @@ use db::postgres::PgPool;
 use stream::anon::AnonClient;
 use stream::cookies_pool::CookiesPool;
 use stream::free_hq::FreeHq;
+use stream::mobile::Mobile;
 use stream::storage::StorageClient;
 
 #[derive(Clone)]
@@ -48,6 +49,7 @@ pub struct AppState {
     pub decryptor: Option<Arc<decrypt::Engine>>,
     pub readiness: ready::ReadyCache,
     pub free_hq: Arc<FreeHq>,
+    pub mobile: Option<Arc<Mobile>>,
 }
 
 #[tokio::main]
@@ -153,6 +155,21 @@ async fn main() {
             .unwrap_or_else(|| "off".into())
     );
 
+    let mobile = if config.mobile_streaming {
+        info!("Mobile profile streaming on");
+        Some(Arc::new(Mobile::new(
+            stream::mobile::token_refresh(&config.nats_url).await,
+            http_client.clone(),
+            config.sc_proxy_url.clone(),
+            config.sc_proxy_fallback,
+            decryptor.is_some()
+                || (config.edge_wvd_url.is_some() && config.edge_wvd_token.is_some()),
+        )))
+    } else {
+        info!("Mobile profile streaming off (MOBILE_STREAMING is not on)");
+        None
+    };
+
     let config = Arc::new(config);
 
     if config.hq_upgrade {
@@ -180,6 +197,7 @@ async fn main() {
         decryptor,
         readiness: ready::ReadyCache::default(),
         free_hq: Arc::new(FreeHq::new(config.free_hq_fetches)),
+        mobile,
     };
 
     let cors = CorsLayer::new()

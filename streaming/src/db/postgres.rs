@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 
+pub mod mobile;
 pub mod storage;
 #[cfg(test)]
 pub mod test_nodes;
@@ -48,6 +49,7 @@ impl PgPool {
 pub struct SessionInfo {
     pub access_token: Option<String>,
     pub soundcloud_user_id: Option<String>,
+    pub mobile: Option<mobile::MobileSession>,
 }
 
 const SESSION_QUERY: &str = r#"SELECT CASE
@@ -56,10 +58,25 @@ const SESSION_QUERY: &str = r#"SELECT CASE
                                    AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
                                       THEN connection.access_token
                                END,
-                               connection.soundcloud_user_id
+                               connection.soundcloud_user_id,
+                               connection.id,
+                               CASE WHEN mobile.status = 'active' THEN mobile.access_token END,
+                               mobile.expires_at > now() + interval '1 minute',
+                               mobile.device_id,
+                               mobile.plan,
+                               app.client_id,
+                               app.app_id,
+                               app.app_version,
+                               app.user_agent
                         FROM sessions AS session
                         LEFT JOIN soundcloud_connections AS connection
                             ON connection.id = session.soundcloud_connection_id
+                        LEFT JOIN mobile_credentials AS mobile
+                            ON mobile.soundcloud_user_id = connection.soundcloud_user_id
+                        LEFT JOIN oauth_apps AS app
+                            ON app.id = mobile.oauth_app_id
+                           AND app.active
+                           AND app.client_kind = 'mobile'
                         WHERE session.id = $1"#;
 
 pub struct TrackRecord {
@@ -149,17 +166,17 @@ impl PgPool {
                 "SELECT EXISTS (
                      SELECT 1
                      FROM _sqlx_migrations
-                     WHERE version = 267
+                     WHERE version = 459
                        AND success = true
                  )
-                 AND to_regclass('soundcloud_connections') IS NOT NULL",
+                 AND to_regclass('mobile_credentials') IS NOT NULL",
                 &[],
             )
             .await?
             .get(0);
         if !schema_ready {
             return Err(
-                "PostgreSQL schema is incompatible; apply core migrations through 0267".into(),
+                "PostgreSQL schema is incompatible; apply core migrations through 0459".into(),
             );
         }
         info!(pool_max = config.database_pool_max, "PostgreSQL connected");
@@ -177,6 +194,7 @@ impl PgPool {
         Ok(row.map(|r| SessionInfo {
             access_token: r.get(0),
             soundcloud_user_id: r.get(1),
+            mobile: mobile::MobileSession::from_row(&r),
         }))
     }
 

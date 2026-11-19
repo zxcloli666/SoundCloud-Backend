@@ -35,6 +35,10 @@ decrypt = { path = "../utils/decrypt" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
 entity-ref = { version = "0.1.0", path = "../utils/entity-ref" }
 telemetry = { version = "0.1.0", path = "../utils/telemetry" }
+sc-mobile = { path = "../utils/sc-mobile" }
+redact = { path = "../utils/redact" }
+backend-contracts = { path = "../backend-contracts" }
+async-nats = "0.49"
 wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["tokio-postgres"] }
 once_cell = "1"
 rand = "0.8"

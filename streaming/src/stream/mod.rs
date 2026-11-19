@@ -13,6 +13,7 @@ pub mod free_hq;
 pub mod handler;
 pub mod hls;
 pub mod internal;
+pub mod mobile;
 pub mod oauth;
 pub mod proxy;
 pub mod quality;

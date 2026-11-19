@@ -11,6 +11,8 @@ use crate::config::Config;
 use crate::quality;
 use crate::transcode;
 
+const MIN_SHARE_OF_TRACK: f64 = 0.9;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
     #[error("track too short: {duration_secs:.3}s <= {min_duration_secs:.3}s")]
@@ -307,7 +309,7 @@ fn spawn_commit(
 fn gate_duration(cfg: &Config, expected_ms: Option<i64>, secs: f64) -> Option<PipelineError> {
     if let Some(exp_ms) = expected_ms {
         let expected_secs = exp_ms as f64 / 1000.0;
-        if (secs - expected_secs).abs() > cfg.duration_tolerance_secs {
+        if off_the_track(expected_secs, secs, cfg.duration_tolerance_secs) {
             return Some(PipelineError::DurationMismatch {
                 actual_secs: secs,
                 expected_secs,
@@ -327,6 +329,10 @@ fn gate_duration(cfg: &Config, expected_ms: Option<i64>, secs: f64) -> Option<Pi
         });
     }
     None
+}
+
+fn off_the_track(expected_secs: f64, secs: f64, tolerance_secs: f64) -> bool {
+    (secs - expected_secs).abs() > tolerance_secs || secs < expected_secs * MIN_SHARE_OF_TRACK
 }
 
 async fn reject(bus: &BusClient, job: PipelineJob, err: PipelineError) {
@@ -500,3 +506,7 @@ async fn process_writer_job(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pipeline_tests.rs"]
+mod tests;

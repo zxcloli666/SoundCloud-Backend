@@ -6,12 +6,14 @@ WORKDIR /build
 
 FROM scratch AS sources
 COPY scripts/cargo-skeleton.sh /scripts/cargo-skeleton.sh
+COPY backend-contracts /backend-contracts
 COPY utils/call /utils/call
 COPY utils/decrypt /utils/decrypt
 COPY utils/decrypt-client /utils/decrypt-client
 COPY utils/entity-ref /utils/entity-ref
 COPY utils/redact /utils/redact
 COPY utils/sc-fingerprint /utils/sc-fingerprint
+COPY utils/sc-mobile /utils/sc-mobile
 COPY utils/stream-ticket /utils/stream-ticket
 COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
@@ -22,15 +24,16 @@ COPY streaming/sc_methods /streaming/sc_methods
 
 FROM toolchain AS skeleton
 COPY --from=sources / ./
-RUN sh scripts/cargo-skeleton.sh /skeleton streaming utils
+RUN sh scripts/cargo-skeleton.sh /skeleton streaming backend-contracts utils
 
 FROM toolchain AS public
 COPY --from=skeleton /skeleton ./
 RUN cargo build --release --manifest-path streaming/Cargo.toml
 
 FROM public AS own
+COPY --from=sources /backend-contracts ./backend-contracts
 COPY --from=sources /utils ./utils
-RUN find utils -type f -exec touch {} + \
+RUN find backend-contracts utils -type f -exec touch {} + \
     && cargo build --release --manifest-path streaming/Cargo.toml
 
 FROM own AS app
