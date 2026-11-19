@@ -64,7 +64,7 @@ async fn rpc(pool: &PgPool, answer: Answer) -> anyhow::Result<(Arc<AuthRpc>, Arc
         token_url: format!("http://{address}/token").parse()?,
         bootstrap_app: None,
     };
-    Ok((Arc::new(AuthRpc::new(pool.clone(), &oauth)?), calls))
+    Ok((Arc::new(AuthRpc::new(pool.clone(), &oauth, None)?), calls))
 }
 
 async fn connection(pool: &PgPool, access_token: &str, expires_in: &str) -> anyhow::Result<Uuid> {
@@ -96,6 +96,7 @@ fn request(connection_id: Uuid, rejected: Option<&str>, hold: bool) -> RefreshRe
         connection_id,
         rejected_token_fingerprint: rejected.map(token_fingerprint),
         hold,
+        target: RefreshTarget::Connection,
     }
 }
 

@@ -29,6 +29,7 @@ mod indexing;
 mod lyrics;
 mod maintenance;
 mod metadata;
+mod mobile_refresh;
 mod oauth_apps;
 mod oauth_cooldowns;
 mod playlist_legacy;

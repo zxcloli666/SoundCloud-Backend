@@ -158,3 +158,31 @@ async fn auth_cleanup_waits_only_for_active_lagging_replicas(pool: PgPool) -> an
     assert!(after_resume.0 > after_idle.0 && after_resume.1 > after_idle.1);
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn expired_mobile_link_requests_go_with_the_login_cleanup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO mobile_link_requests (
+             id, state, code_verifier, oauth_app_id, session_id,
+             expected_soundcloud_user_id, device_id, expires_at
+         )
+         SELECT gen_random_uuid(), 'state-' || n, 'verifier', gen_random_uuid(),
+                gen_random_uuid(), '4242', gen_random_uuid(),
+                now() + CASE WHEN n <= 3 THEN interval '-1 minute' ELSE interval '15 minutes' END
+         FROM generate_series(1, 5) AS n",
+    )
+    .execute(&pool)
+    .await?;
+    let mut maintenance = MaintenanceHandler::new(pool.clone());
+    maintenance.auth_cleanup_pause = Duration::ZERO;
+
+    maintenance.cleanup_login_requests().await?;
+
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM mobile_link_requests")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 2);
+    Ok(())
+}

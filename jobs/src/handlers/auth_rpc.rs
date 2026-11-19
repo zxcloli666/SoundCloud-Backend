@@ -4,18 +4,20 @@ use std::time::Duration;
 
 use backend_contracts::auth::{
     AUTH_APP_TOKEN_SUBJECT, AUTH_REFRESH_SUBJECT, AUTH_RPC_QUEUE, AppToken, AppTokenReply,
-    AppTokenRequest, ConnectionState, RefreshOutcome, RefreshReply, RefreshRequest,
+    AppTokenRequest, ConnectionState, RefreshOutcome, RefreshReply, RefreshRequest, RefreshTarget,
     token_fingerprint,
 };
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 use uuid::Uuid;
 
 use crate::bus::Bus;
 use crate::config::OAuthConfig;
 
+use super::mobile_refresh::MobileRefresh;
 use super::sync_queue::{Connection, ConnectionError, ConnectionManager, TokenRefreshClient};
 
 const CONCURRENCY: usize = 64;
@@ -29,6 +31,7 @@ pub struct AuthRpc {
     pool: PgPool,
     connections: ConnectionManager,
     client: TokenRefreshClient,
+    mobile: MobileRefresh,
     turns: Turns,
 }
 
@@ -44,10 +47,15 @@ impl Turns {
 }
 
 impl AuthRpc {
-    pub fn new(pool: PgPool, oauth: &OAuthConfig) -> Result<Self, wreq::Error> {
+    pub fn new(
+        pool: PgPool,
+        oauth: &OAuthConfig,
+        mobile_proxy: Option<Url>,
+    ) -> Result<Self, wreq::Error> {
         Ok(Self {
             connections: ConnectionManager::new(pool.clone()),
             client: TokenRefreshClient::new(oauth)?,
+            mobile: MobileRefresh::new(pool.clone(), mobile_proxy),
             pool,
             turns: Turns::default(),
         })
@@ -86,6 +94,9 @@ impl AuthRpc {
     }
 
     pub async fn refresh(&self, request: RefreshRequest) -> anyhow::Result<RefreshReply> {
+        if request.target == RefreshTarget::Mobile {
+            return self.refresh_mobile(request.connection_id).await;
+        }
         let turn = self.turns.of(request.connection_id);
         let Ok(_turn) = tokio::time::timeout(TURN_WAIT, turn.lock()).await else {
             return self
@@ -97,6 +108,7 @@ impl AuthRpc {
                 outcome: RefreshOutcome::RetryLater,
                 connection: None,
                 retry_after_sec: Some(1),
+                mobile: None,
             });
         };
         let rejected = request
@@ -168,6 +180,16 @@ impl AuthRpc {
         Ok(AppTokenReply { token })
     }
 
+    async fn refresh_mobile(&self, connection_id: Uuid) -> anyhow::Result<RefreshReply> {
+        let answer = self.mobile.refresh(connection_id).await?;
+        Ok(RefreshReply {
+            outcome: answer.outcome,
+            connection: None,
+            retry_after_sec: answer.retry_after_sec,
+            mobile: answer.state,
+        })
+    }
+
     async fn after_lease(&self, connection_id: Uuid) -> anyhow::Result<RefreshOutcome> {
         let deadline = Instant::now() + LEASE_WAIT;
         loop {
@@ -219,6 +241,7 @@ impl AuthRpc {
             outcome,
             connection,
             retry_after_sec,
+            mobile: None,
         })
     }
 }

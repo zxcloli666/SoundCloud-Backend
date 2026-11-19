@@ -23,6 +23,21 @@ pub struct MaintenanceHandler {
     auth_cleanup_pause: Duration,
 }
 
+#[derive(Clone, Copy)]
+enum AuthRequests {
+    Login,
+    MobileLink,
+}
+
+impl AuthRequests {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Login => "login_requests",
+            Self::MobileLink => "mobile_link_requests",
+        }
+    }
+}
+
 impl MaintenanceHandler {
     pub fn new(pool: PgPool) -> Self {
         Self {
@@ -33,19 +48,37 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_login_requests(&self) -> JobResult {
+        self.cleanup_auth_requests(AuthRequests::Login).await?;
+        self.cleanup_auth_requests(AuthRequests::MobileLink).await
+    }
+
+    async fn cleanup_auth_requests(&self, requests: AuthRequests) -> JobResult {
+        let table = requests.table();
         for round in 1..=AUTH_CLEANUP_ROUNDS {
             if self.replicas_behind().await? {
-                crate::metrics::record_auth_cleanup_skipped("login_requests", "replication_lag");
+                crate::metrics::record_auth_cleanup_skipped(table, "replication_lag");
                 return Ok(());
             }
-            let removed = sqlx::query_file!(
-                "queries/maintenance/cleanup_login_requests.sql",
-                AUTH_CLEANUP_BATCH
-            )
-            .execute(&self.pool)
-            .await
+            let removed = match requests {
+                AuthRequests::Login => {
+                    sqlx::query_file!(
+                        "queries/maintenance/cleanup_login_requests.sql",
+                        AUTH_CLEANUP_BATCH
+                    )
+                    .execute(&self.pool)
+                    .await
+                }
+                AuthRequests::MobileLink => {
+                    sqlx::query_file!(
+                        "queries/maintenance/cleanup_mobile_link_requests.sql",
+                        AUTH_CLEANUP_BATCH
+                    )
+                    .execute(&self.pool)
+                    .await
+                }
+            }
             .map_err(JobError::retryable)?;
-            crate::metrics::record_auth_cleanup_progress("login_requests");
+            crate::metrics::record_auth_cleanup_progress(table);
             if removed.rows_affected() < AUTH_CLEANUP_BATCH.unsigned_abs() {
                 return Ok(());
             }
@@ -53,7 +86,7 @@ impl MaintenanceHandler {
                 tokio::time::sleep(self.auth_cleanup_pause).await;
             }
         }
-        crate::metrics::record_auth_cleanup_skipped("login_requests", "batch_cap");
+        crate::metrics::record_auth_cleanup_skipped(table, "batch_cap");
         Ok(())
     }
 
