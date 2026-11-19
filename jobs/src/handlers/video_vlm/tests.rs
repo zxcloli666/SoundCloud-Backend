@@ -12,11 +12,13 @@ use super::queue;
 use super::result::{Verdict, judge};
 use super::{Step, VideoVlm};
 use crate::config::VideoVlmConfig;
-use crate::handlers::video_find::tests::{Memory, config};
+use crate::handlers::video_find::tests::{Memory, config as find_config};
 
 mod fakes;
+mod find;
 mod haiku;
 mod local;
+mod stored;
 
 use self::fakes::{Eyes, Inbox, Wire};
 
@@ -29,6 +31,7 @@ fn vlm_config(haiku: bool) -> VideoVlmConfig {
         timeout: Duration::from_secs(4_200),
         month_usd: 5.0,
         recheck: Duration::from_secs(1_800),
+        verify_stored: 0,
         haiku: haiku.then(|| crate::config::AnthropicLadder {
             steps: Vec::new(),
             reset_day: 17,
@@ -42,15 +45,23 @@ fn rig(pool: &PgPool) -> (Rig, Memory) {
 }
 
 fn bench(pool: &PgPool, haiku: bool) -> (Rig, Memory, Wire, Eyes, Inbox) {
-    let blobs = Memory::default();
+    bench_on(pool, vlm_config(haiku), Memory::default())
+}
+
+fn bench_on(
+    pool: &PgPool,
+    config: VideoVlmConfig,
+    blobs: Memory,
+) -> (Rig, Memory, Wire, Eyes, Inbox) {
+    let haiku = config.haiku.is_some();
     let wire = Wire::default();
     let eyes = Eyes::default();
     let inbox = Inbox::default();
     let vlm = VideoVlm::new(
         pool.clone(),
         "https://storage.test/".parse().unwrap(),
-        vlm_config(haiku),
-        &config(),
+        config,
+        &find_config(),
         blobs.clone(),
         wire.clone(),
         haiku.then(|| eyes.clone()),

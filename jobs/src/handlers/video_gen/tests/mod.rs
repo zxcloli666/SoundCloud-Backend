@@ -191,6 +191,13 @@ impl Blobs for Memory {
         Ok(())
     }
 
+    async fn copy(&self, from: &str, to: &str) -> Result<(), ObjectsError> {
+        let mut files = self.files.lock().unwrap();
+        let bytes = files.get(from).cloned().unwrap();
+        files.insert(to.to_owned(), bytes);
+        Ok(())
+    }
+
     async fn delete(&self, key: &str) -> Result<(), ObjectsError> {
         self.files.lock().unwrap().remove(key);
         Ok(())

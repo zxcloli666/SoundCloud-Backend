@@ -26,6 +26,7 @@ LANE = "video-find"
 CANVAS = "canvas"
 SKIPPED = (PermanentFailure,)
 MS = 1000.0
+MAX_NEXT = 2
 
 log = logging.getLogger(__name__)
 
@@ -107,11 +108,13 @@ class VideoFindLane:
             track = await self._track(job, folder, deadline)
             if isinstance(track, Outcome):
                 return track
-            best, verified = await self._search(job, track, folder, deadline)
-            if best is None or (best.verdict.kind == "static" and not best.verdict.uncertain):
-                reason = Reason.STATIC_VIDEO if verified else Reason.NO_VIDEO_FOUND
-                return Outcome.of(reason, best.verdict.rule if best else None)
-            return await self._deliver(best, folder, deadline)
+            ranked = await self._search(job, track, folder, deadline)
+            if not ranked or ranked[0].rank == 0:
+                reason = Reason.STATIC_VIDEO if ranked else Reason.NO_VIDEO_FOUND
+                return Outcome.of(reason, ranked[0].verdict.rule if ranked else None)
+            best, *rest = ranked
+            others = [one for one in rest if one.rank > 0 and not one.candidate.kept]
+            return await self._deliver(best, others[:MAX_NEXT], folder, deadline)
 
     async def _track(self, job: Job, folder: Path, deadline: Deadline) -> Track | Outcome:
         path = folder / "track"
@@ -137,22 +140,16 @@ class VideoFindLane:
 
     async def _search(
         self, job: Job, track: Track, folder: Path, deadline: Deadline
-    ) -> tuple[Evaluated | None, int]:
-        best: Evaluated | None = None
-        verified = 0
+    ) -> list[Evaluated]:
+        verified: list[Evaluated] = []
         for candidate in job.candidates:
             evaluated = await self._evaluate(candidate, track, folder, deadline)
             if evaluated is None:
                 continue
-            verified += 1
-            if best is None or evaluated.rank > best.rank:
-                drop(best)
-                best = evaluated
-            else:
-                drop(evaluated)
-            if best.rank == 4 or verified >= self._video.max_verified:
+            verified.append(evaluated)
+            if len(verified) >= self._video.max_verified:
                 break
-        return best, verified
+        return sorted(verified, key=lambda one: one.rank, reverse=True)
 
     async def _evaluate(
         self, candidate: Candidate, track: Track, folder: Path, deadline: Deadline
@@ -226,10 +223,12 @@ class VideoFindLane:
             match.verify, track.raw, raw, track.mono, signal, self._video
         )
 
-    async def _deliver(self, best: Evaluated, folder: Path, deadline: Deadline) -> Outcome:
-        kind = "loop" if best.verdict.kind == "loop" else "clip"
-        scores = {**best.measured.scores(), **best.proof}
-        if best.verdict.uncertain or best.candidate.kept:
+    async def _deliver(
+        self, best: Evaluated, others: list[Evaluated], folder: Path, deadline: Deadline
+    ) -> Outcome:
+        kind = kind_of(best)
+        scores = scores_of(best)
+        if best.candidate.kept:
             info = await features.probe(best.path, deadline)
             return Outcome.ok(
                 kind=kind,
@@ -240,7 +239,8 @@ class VideoFindLane:
                 loop=kind == "loop",
                 scores=scores,
             )
-        return await self._encoded(best, kind, folder, scores, deadline)
+        nexts = [await next_of(one, deadline) for one in others]
+        return await self._encoded(best, kind, folder, scores, nexts, deadline)
 
     async def _encoded(
         self,
@@ -248,6 +248,7 @@ class VideoFindLane:
         kind: str,
         folder: Path,
         scores: Mapping[str, float],
+        nexts: list[dict[str, object]],
         deadline: Deadline,
     ) -> Outcome:
         looped = kind == "loop"
@@ -266,7 +267,7 @@ class VideoFindLane:
         return Outcome.ok_in_parts(
             parts,
             kind=kind,
-            uncertain=False,
+            uncertain=best.verdict.uncertain,
             candidate=best.candidate.index,
             offset_ms=max(offset_ms, 0),
             duration_ms=max(1, round(encoded.duration_s * MS)),
@@ -277,12 +278,31 @@ class VideoFindLane:
                 "sha256": hashlib.sha256(blob).hexdigest(),
                 "parts": len(parts),
             },
+            **({"next": nexts} if nexts else {}),
         )
 
 
-def drop(evaluated: Evaluated | None) -> None:
-    if evaluated is not None:
-        drop_path(evaluated.path)
+def kind_of(evaluated: Evaluated) -> str:
+    return "loop" if evaluated.verdict.kind == "loop" else "clip"
+
+
+def scores_of(evaluated: Evaluated) -> dict[str, float]:
+    return {**evaluated.measured.scores(), **evaluated.proof}
+
+
+async def next_of(evaluated: Evaluated, deadline: Deadline) -> dict[str, object]:
+    looped = kind_of(evaluated) == "loop"
+    offset_ms = 0 if looped else evaluated.offset_ms
+    info = await features.probe(evaluated.path, deadline)
+    return {
+        "candidate": evaluated.candidate.index,
+        "kind": kind_of(evaluated),
+        "offset_ms": max(offset_ms, 0),
+        "pad_ms": max(-offset_ms, 0),
+        "duration_ms": max(1, round(info.duration_s * MS)),
+        "loop": looped,
+        "scores": scores_of(evaluated),
+    }
 
 
 def drop_path(path: Path) -> None:

@@ -44,6 +44,7 @@ pub const MAX_VIDEO_NAME_CHARS: u32 = 256;
 pub const MAX_VLM_PROMPT_CHARS: u32 = 4000;
 pub const MAX_VLM_FRAMES: u32 = 32;
 pub const MAX_VIDEO_SCORES: u32 = 32;
+pub const MAX_VIDEO_NEXT: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct Producer {
@@ -804,6 +805,28 @@ pub struct VideoFindResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "VideoPart")]
     pub part: Option<VideoPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<VideoNext>", length(max = MAX_VIDEO_NEXT))]
+    pub next: Option<Vec<VideoNext>>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct VideoNext {
+    #[schemars(range(min = 0))]
+    pub candidate: u32,
+    pub kind: VideoKind,
+    #[schemars(range(min = 0))]
+    pub offset_ms: i32,
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    pub pad_ms: i32,
+    #[schemars(range(min = 1))]
+    pub duration_ms: i32,
+    #[serde(rename = "loop")]
+    pub looped: bool,
+    #[serde(default)]
+    #[schemars(length(max = MAX_VIDEO_SCORES))]
+    pub scores: BTreeMap<String, f32>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq, Serialize)]
@@ -820,6 +843,9 @@ pub struct VideoVlmRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i32", range(min = 0))]
     pub offset_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i32", range(min = 1))]
+    pub pad_ms: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "bool")]
     pub frames: Option<bool>,

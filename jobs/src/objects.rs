@@ -71,6 +71,7 @@ pub trait Blobs: Send + Sync {
         key: &str,
         bytes: Vec<u8>,
     ) -> impl Future<Output = Result<(), ObjectsError>> + Send;
+    fn copy(&self, from: &str, to: &str) -> impl Future<Output = Result<(), ObjectsError>> + Send;
     fn delete(&self, key: &str) -> impl Future<Output = Result<(), ObjectsError>> + Send;
     fn list(&self, prefix: &str) -> impl Future<Output = Result<Vec<Listed>, ObjectsError>> + Send;
 }
@@ -131,6 +132,18 @@ impl Blobs for Objects {
             .send()
             .await
             .map_err(|error| failed("put", key, error))?;
+        Ok(())
+    }
+
+    async fn copy(&self, from: &str, to: &str) -> Result<(), ObjectsError> {
+        self.client
+            .copy_object()
+            .bucket(&self.bucket)
+            .copy_source(format!("{}/{from}", self.bucket))
+            .key(to)
+            .send()
+            .await
+            .map_err(|error| failed("copy", to, error))?;
         Ok(())
     }
 

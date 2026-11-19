@@ -9,7 +9,7 @@ use super::stage::{Staged, StagedCandidate};
 use crate::queue::{JobError, JobResult};
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Claimed {
+pub(crate) struct Claimed {
     pub(super) sc_track_id: String,
     pub(super) attempt: i32,
     pub(super) title: String,
@@ -46,6 +46,14 @@ pub(super) async fn busy(pool: &PgPool) -> JobResult<i64> {
         .await
         .map_err(JobError::retryable)?;
     Ok(row.busy)
+}
+
+pub(super) async fn vlm_backlog(pool: &PgPool) -> JobResult<i64> {
+    let row = sqlx::query_file!("queries/video_find/vlm_backlog.sql")
+        .fetch_one(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(row.backlog)
 }
 
 const FILL_BATCH: i64 = 5_000;

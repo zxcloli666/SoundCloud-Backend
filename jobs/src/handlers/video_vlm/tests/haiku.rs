@@ -18,7 +18,7 @@ use crate::llm::ledger;
 
 const FRAMES: [&[u8]; 3] = [b"jpeg-zero", b"jpeg-one", b"jpeg-two"];
 
-fn frames_result(id: &str, attempt: i64) -> VideoVlmResult {
+pub(super) fn frames_result(id: &str, attempt: i64) -> VideoVlmResult {
     let blob: Vec<u8> = FRAMES.concat();
     let digest = Sha256::digest(&blob);
     let mut offset = 0;
@@ -49,7 +49,7 @@ fn frames_result(id: &str, attempt: i64) -> VideoVlmResult {
     result
 }
 
-fn cut_part(label: VideoLabel, id: &str, file: &[u8]) -> VideoVlmResult {
+pub(super) fn cut_part(label: VideoLabel, id: &str, file: &[u8]) -> VideoVlmResult {
     let mut result = file_part(label, id, 1, file, &[file], 0);
     result.model = None;
     result.scores = None;

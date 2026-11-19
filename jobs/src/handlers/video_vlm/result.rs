@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use super::VideoVlm;
 use super::haiku::Vision;
-use super::queue::{self, Held, Known};
+use super::queue::{self, Held, HeldFile, Known};
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::{Pacing, final_key};
 use crate::handlers::video_gen::Lanes;
@@ -103,6 +103,20 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         held: &Held,
         model: &str,
     ) -> JobResult {
+        if held.file == HeldFile::Stored {
+            return self.drop_stored(track, attempt, held, model).await;
+        }
+        if !held.next.is_empty() && queue::advance(&self.pool, track, attempt).await? {
+            info!(
+                track,
+                attempt,
+                model,
+                left = held.next.len(),
+                "VLM found the video static; the next candidate goes to the check"
+            );
+            self.drop_temp(&held.s3_key).await;
+            return Ok(());
+        }
         let wait = self.pacing.static_recheck;
         let why = Some(WorkerReason::StaticVideo.as_str());
         queue::settle(
@@ -116,7 +130,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         )
         .await?;
         info!(track, attempt, model, "VLM found a static video");
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(held).await;
         Ok(())
     }
 
@@ -133,6 +147,38 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             .put_bytes(&key, file)
             .await
             .map_err(JobError::retryable)?;
+        self.keep(track, attempt, held, answer, &key).await
+    }
+
+    pub(super) async fn keep_cut(
+        &self,
+        track: &str,
+        attempt: i32,
+        held: &Held,
+        known: &Known,
+    ) -> JobResult {
+        let key = final_key(track, attempt);
+        self.blobs
+            .copy(&held.s3_key, &key)
+            .await
+            .map_err(JobError::retryable)?;
+        let answer = Judged {
+            label: known.label,
+            model: known.model.clone(),
+            scores: Value::Object(known.scores.clone()),
+            duration_ms: None,
+        };
+        self.keep(track, attempt, held, &answer, &key).await
+    }
+
+    async fn keep(
+        &self,
+        track: &str,
+        attempt: i32,
+        held: &Held,
+        answer: &Judged,
+        key: &str,
+    ) -> JobResult {
         let duration_ms = answer.duration_ms.unwrap_or(held.duration_ms);
         let offset_ms = match answer.label {
             VideoLabel::Loop => 0,
@@ -147,7 +193,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                 kind: answer.label,
                 offset_ms,
                 duration_ms,
-                key: &key,
+                key,
             },
             held,
             answer,
@@ -155,12 +201,12 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         .await?;
         match stored {
             None => {
-                let _ = self.blobs.delete(&key).await;
+                let _ = self.blobs.delete(key).await;
             }
             Some(Some(replaced)) if replaced != key => self.drop_replaced(&replaced).await,
             Some(_) => {}
         }
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(held).await;
         Ok(())
     }
 
@@ -169,6 +215,9 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             debug!(track, attempt, "stale VLM result ignored");
             return Ok(());
         };
+        if held.file == HeldFile::Stored {
+            return self.fail_stored(track, attempt, &held, reason).await;
+        }
         let wait = self.pacing.none_recheck;
         queue::settle(
             &self.pool,
@@ -186,7 +235,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             reason = reason.as_str(),
             "VLM check failed for good"
         );
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(&held).await;
         Ok(())
     }
 
@@ -203,8 +252,10 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             stage,
             "VLM check failed; it will be sent again"
         );
-        if matches!(stage.as_deref(), Some("none" | "found")) {
-            self.drop_temp(&held.s3_key).await;
+        match (held.file, stage.as_deref()) {
+            (_, None | Some("pending_vlm")) => {}
+            (HeldFile::Stored, _) => self.mark_stored(track, &held, reason).await?,
+            _ => self.drop_temps(&held).await,
         }
         Ok(())
     }
@@ -214,14 +265,23 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             debug!(track, attempt, "stale VLM result ignored");
             return Ok(());
         };
+        if held.file == HeldFile::Stored {
+            return self.gone_stored(track, attempt, &held).await;
+        }
         let reason = WorkerReason::InputsGone.as_str();
         let stage = queue::rebuild(&self.pool, track, attempt, reason, &self.pacing).await?;
         info!(
             track,
             attempt, stage, "held video is gone; the search starts over"
         );
-        self.drop_temp(&held.s3_key).await;
+        self.drop_temps(&held).await;
         Ok(())
+    }
+
+    async fn drop_temps(&self, held: &Held) {
+        for key in held.temps() {
+            self.drop_temp(key).await;
+        }
     }
 
     pub(super) async fn drop_temp(&self, key: &str) {

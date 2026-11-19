@@ -1,12 +1,14 @@
 use anyhow::{bail, ensure};
-use backend_contracts::pipeline::{VideoClip, VideoFindResult, VideoKind, VideoPart};
+use backend_contracts::pipeline::{
+    MAX_VIDEO_NEXT, VideoClip, VideoFindResult, VideoKind, VideoNext, VideoPart,
+};
 use backend_contracts::reasons::{FailureClass, WorkerReason, WorkerStatus};
 use backend_contracts::worker_contract::WorkerLane;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
 
-use super::stage::{Staged, StagedCandidate};
+use super::stage::{Staged, StagedCandidate, cut_key};
 use super::ytdlp::Tube;
 use super::{Pacing, VideoFind, queue};
 use crate::handlers::video_accounts::Fetch;
@@ -21,13 +23,13 @@ pub(super) struct Found {
     pub(super) duration_ms: i32,
     pub(super) looped: bool,
     pub(super) scores: Value,
+    pub(super) next: Vec<VideoNext>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Verdict {
     Found(Box<Found>, (VideoClip, VideoPart)),
     Bare(Box<Found>),
-    Held(Box<Found>),
     Settle(WorkerReason),
     Retry(WorkerReason),
 }
@@ -44,7 +46,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     .add(track, result.attempt, &clip, &part)
                     .map_err(JobError::permanent)?;
                 match file {
-                    Some(file) => self.finish_clip(track, attempt, &found, file).await,
+                    Some(file) => self.finish_cut(track, attempt, &found, file).await,
                     None => Ok(()),
                 }
             }
@@ -66,11 +68,11 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         let held = self
             .settle_verdict(track, attempt, verdict, &staged, result)
             .await?;
-        self.drop_temps(&leftover(&staged, held)).await;
+        self.drop_temps(&leftover(&staged, &held)).await;
         Ok(())
     }
 
-    async fn finish_clip(
+    async fn finish_cut(
         &self,
         track: &str,
         attempt: i32,
@@ -87,35 +89,27 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
             self.drop_temps(&staged.keys()).await;
             return Ok(());
         }
-        let key = final_key(track, attempt);
+        let key = cut_key(track, attempt);
         self.blobs
             .put_bytes(&key, file)
             .await
             .map_err(JobError::retryable)?;
-        let stored = store_found(
+        let held = hold(
             &self.pool,
             &self.pacing,
             track,
             attempt,
             found,
-            candidate,
+            &staged,
             &key,
-        );
-        match stored.await? {
-            None => {
-                let _ = self.blobs.delete(&key).await;
-            }
-            Some(Some(replaced)) if replaced != key => self.drop_replaced(&replaced).await,
-            Some(_) => {}
-        }
-        self.drop_temps(&staged.keys()).await;
+        )
+        .await?;
+        let Some(held) = held else {
+            self.drop_temps(std::slice::from_ref(&key)).await;
+            return Ok(());
+        };
+        self.drop_temps(&leftover(&staged, &held)).await;
         Ok(())
-    }
-
-    async fn drop_replaced(&self, key: &str) {
-        if let Err(error) = self.blobs.delete(key).await {
-            warn!(key, %error, "a replaced video file was not deleted");
-        }
     }
 
     async fn settle_verdict(
@@ -125,30 +119,22 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         verdict: &Verdict,
         staged: &Staged,
         result: &VideoFindResult,
-    ) -> JobResult<Option<u32>> {
+    ) -> JobResult<Vec<u32>> {
         let detail = result.detail.as_deref();
         match verdict {
-            Verdict::Held(found) | Verdict::Bare(found)
-                if candidate_of(staged, found.candidate)?.kept =>
-            {
+            Verdict::Bare(found) if candidate_of(staged, found.candidate)?.kept => {
                 keep(&self.pool, &self.pacing, track, attempt).await?;
-                Ok(None)
+                Ok(Vec::new())
             }
-            Verdict::Held(found) => {
-                let candidate = candidate_of(staged, found.candidate)?;
-                hold(&self.pool, &self.pacing, track, attempt, found, candidate).await?;
-                Ok(Some(found.candidate))
+            Verdict::Bare(found) => {
+                let key = &candidate_of(staged, found.candidate)?.key;
+                let held =
+                    hold(&self.pool, &self.pacing, track, attempt, found, staged, key).await?;
+                let mut held = held.unwrap_or_default();
+                held.push(found.candidate);
+                Ok(held)
             }
-            Verdict::Bare(found) if found.kind == VideoKind::Loop => {
-                let reason = WorkerReason::InternalError;
-                retry(&self.pool, &self.pacing, track, attempt, reason).await?;
-                warn!(track, attempt, "video loop result carries no file");
-                Ok(None)
-            }
-            Verdict::Bare(_) => Err(JobError::permanent(anyhow::anyhow!(
-                "video clip result carries no file"
-            ))),
-            Verdict::Found(..) => Ok(None),
+            Verdict::Found(..) => Ok(Vec::new()),
             Verdict::Settle(reason) => {
                 settle(&self.pool, &self.pacing, track, attempt, *reason).await?;
                 info!(
@@ -158,7 +144,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     detail,
                     "video search settled"
                 );
-                Ok(None)
+                Ok(Vec::new())
             }
             Verdict::Retry(reason) => {
                 retry(&self.pool, &self.pacing, track, attempt, *reason).await?;
@@ -169,17 +155,17 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
                     detail,
                     "video search failed"
                 );
-                Ok(None)
+                Ok(Vec::new())
             }
         }
     }
 }
 
-fn leftover(staged: &Staged, held: Option<u32>) -> Vec<String> {
+fn leftover(staged: &Staged, held: &[u32]) -> Vec<String> {
     staged
         .candidates
         .iter()
-        .filter(|candidate| !candidate.kept && Some(candidate.index) != held)
+        .filter(|candidate| !candidate.kept && !held.contains(&candidate.index))
         .map(|candidate| candidate.key.clone())
         .collect()
 }
@@ -218,74 +204,39 @@ async fn keep(pool: &PgPool, pacing: &Pacing, track: &str, attempt: i32) -> JobR
     Ok(())
 }
 
-async fn store_found(
-    pool: &PgPool,
-    pacing: &Pacing,
-    track: &str,
-    attempt: i32,
-    found: &Found,
-    candidate: &StagedCandidate,
-    key: &str,
-) -> JobResult<Option<Option<String>>> {
-    let mut transaction = pool.begin().await.map_err(JobError::retryable)?;
-    let settled = sqlx::query_file!(
-        "queries/video_find/settle.sql",
-        track,
-        attempt,
-        "found",
-        0.0_f64,
-        None::<&str>,
-        None::<Value>,
-        pacing.research_fresh.as_secs_f64(),
-        pacing.research_old.as_secs_f64(),
-        pacing.research_fresh_age.as_secs_f64()
-    )
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(JobError::retryable)?;
-    if settled.is_none() {
-        debug!(track, attempt, "stale video result ignored");
-        return Ok(None);
-    }
-    let stored = sqlx::query_file!(
-        "queries/video_find/store_video.sql",
-        track,
-        found.kind.as_str(),
-        candidate.source.as_str(),
-        candidate.source_ref,
-        key,
-        found.offset_ms,
-        found.looped,
-        found.duration_ms,
-        found.scores
-    )
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(JobError::retryable)?;
-    transaction.commit().await.map_err(JobError::retryable)?;
-    info!(track, attempt, kind = found.kind.as_str(), "video stored");
-    Ok(Some(stored.replaced))
-}
-
 async fn hold(
     pool: &PgPool,
     pacing: &Pacing,
     track: &str,
     attempt: i32,
     found: &Found,
-    candidate: &StagedCandidate,
-) -> JobResult {
+    staged: &Staged,
+    key: &str,
+) -> JobResult<Option<Vec<u32>>> {
+    let candidate = candidate_of(staged, found.candidate)?;
+    let cut = key != candidate.key;
+    let next: Vec<(u32, Value)> = found
+        .next
+        .iter()
+        .filter_map(|next| {
+            let candidate = staged.candidate(next.candidate).filter(|one| !one.kept)?;
+            Some((next.candidate, held_next(next, candidate)))
+        })
+        .take(MAX_VIDEO_NEXT as usize)
+        .collect();
     let payload = json!({
         "kind": found.kind.as_str(),
-        "s3_key": candidate.key,
+        "s3_key": key,
+        "file": if cut { "cut" } else { "raw" },
         "offset_ms": found.offset_ms,
         "duration_ms": found.duration_ms,
         "loop": found.looped,
         "source": candidate.source.as_str(),
         "source_ref": candidate.source_ref,
         "scores": found.scores,
+        "next": next.iter().map(|(_, next)| next).collect::<Vec<_>>(),
     });
-    sqlx::query_file!(
+    let held = sqlx::query_file!(
         "queries/video_find/settle.sql",
         track,
         attempt,
@@ -300,8 +251,32 @@ async fn hold(
     .fetch_optional(pool)
     .await
     .map_err(JobError::retryable)?;
-    info!(track, attempt, "uncertain video waits for the VLM check");
-    Ok(())
+    if held.is_none() {
+        return Ok(None);
+    }
+    info!(
+        track,
+        attempt,
+        kind = found.kind.as_str(),
+        cut,
+        next = next.len(),
+        "video waits for the VLM check"
+    );
+    Ok(Some(next.into_iter().map(|(index, _)| index).collect()))
+}
+
+fn held_next(next: &VideoNext, candidate: &StagedCandidate) -> Value {
+    json!({
+        "kind": next.kind.as_str(),
+        "s3_key": candidate.key,
+        "offset_ms": next.offset_ms,
+        "pad_ms": next.pad_ms,
+        "duration_ms": next.duration_ms,
+        "loop": next.looped,
+        "source": candidate.source.as_str(),
+        "source_ref": candidate.source_ref,
+        "scores": next.scores,
+    })
 }
 
 pub(super) async fn settle(
@@ -409,10 +384,8 @@ fn found(result: &VideoFindResult) -> anyhow::Result<Verdict> {
         duration_ms,
         looped: result.looped.unwrap_or(kind == VideoKind::Loop),
         scores: serde_json::to_value(result.scores.clone().unwrap_or_default())?,
+        next: result.next.clone().unwrap_or_default(),
     });
-    if result.uncertain.unwrap_or(false) {
-        return Ok(Verdict::Held(window));
-    }
     Ok(match file {
         Some(file) => Verdict::Found(window, file),
         None => Verdict::Bare(window),

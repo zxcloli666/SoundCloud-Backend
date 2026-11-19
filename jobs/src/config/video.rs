@@ -56,6 +56,7 @@ pub struct VideoFindConfig {
     pub stage_timeout: Duration,
     pub max_file_mib: u64,
     pub temp_ttl: Duration,
+    pub vlm_backlog: i64,
     pub sweep_every: Duration,
     pub ytdlp: PathBuf,
     pub proxy_list: Option<PathBuf>,
@@ -115,6 +116,8 @@ impl VideoFindConfig {
             )?),
             max_file_mib: env::positive_u64("VIDEO_MAX_FILE_MIB", 96)?,
             temp_ttl: Duration::from_secs(env::positive_u64("VIDEO_TEMP_TTL_DAYS", 3)? * 86_400),
+            vlm_backlog: i64::try_from(env::positive_u64("VIDEO_FIND_VLM_BACKLOG", 24)?)
+                .unwrap_or(i64::MAX),
             sweep_every: Duration::from_secs(env::positive_u64("VIDEO_TEMP_SWEEP_SECONDS", 3_600)?),
             ytdlp: env::parse("VIDEO_YTDLP_PATH", "yt-dlp")?,
             proxy_list: env::optional("VIDEO_PROXY_LIST").map(PathBuf::from),
@@ -131,6 +134,7 @@ pub struct VideoVlmConfig {
     pub timeout: Duration,
     pub month_usd: f64,
     pub recheck: Duration,
+    pub verify_stored: i64,
     pub haiku: Option<AnthropicLadder>,
 }
 
@@ -151,6 +155,7 @@ impl VideoVlmConfig {
             timeout: Duration::from_secs(env::positive_u64("VIDEO_VLM_TIMEOUT_SECONDS", 4_200)?),
             month_usd,
             recheck: Duration::from_secs(env::positive_u64("VIDEO_VLM_RECHECK_SECONDS", 1_800)?),
+            verify_stored: env::parse("VIDEO_VLM_VERIFY_STORED", "0")?,
             haiku,
         })
     }

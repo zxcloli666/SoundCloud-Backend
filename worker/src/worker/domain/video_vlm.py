@@ -37,6 +37,7 @@ class Job:
     video_url: str
     duration_ms: int | None
     offset_ms: int | None
+    pad_ms: int
     frames_only: bool
     label: str | None
     prompt: str | None
@@ -76,7 +77,7 @@ class VideoVlmLane:
             path = folder / "video.mp4"
             await self._download(job, path, deadline)
             if job.label is not None:
-                return await self._encoded(job.label, path, folder, deadline)
+                return await self._encoded(job, path, folder, deadline)
             frames = await self._frames(job, path, deadline)
             if job.frames_only:
                 return await self._delivered(frames)
@@ -123,15 +124,16 @@ class VideoVlmLane:
         scores = {name: round(value, 4) for name, value in verdict.scores.items()}
         return Outcome.ok(label=verdict.label, model=self._model, scores=scores)
 
-    async def _encoded(self, label: str, path: Path, folder: Path, deadline: Deadline) -> Outcome:
+    async def _encoded(self, job: Job, path: Path, folder: Path, deadline: Deadline) -> Outcome:
         target = folder / "out.mp4"
-        await publish.encode(path, target, pad_s=0.0, settings=self._video, deadline=deadline)
+        pad_s = job.pad_ms / MS
+        await publish.encode(path, target, pad_s=pad_s, settings=self._video, deadline=deadline)
         encoded = await features.probe(target, deadline)
         blob = await asyncio.to_thread(target.read_bytes)
         parts = publish.split(blob, self._part_bytes)
         return Outcome.ok_in_parts(
             parts,
-            label=label,
+            label=job.label,
             duration_ms=max(1, round(encoded.duration_s * MS)),
             clip={
                 "bytes": len(blob),
@@ -152,6 +154,7 @@ def parse(request: Mapping[str, object]) -> Job:
         video_url=required_text(request, "video_url"),
         duration_ms=optional_int(request, "duration_ms"),
         offset_ms=optional_int(request, "offset_ms"),
+        pad_ms=optional_int(request, "pad_ms") or 0,
         frames_only=request.get("frames") is True,
         label=label if isinstance(label, str) else None,
         prompt=prompt if isinstance(prompt, str) and prompt else None,
