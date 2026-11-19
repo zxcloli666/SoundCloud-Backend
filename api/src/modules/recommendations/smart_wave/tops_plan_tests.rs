@@ -10,7 +10,7 @@ const ARTISTS_READ: i64 = 160;
 const TRACKS_KEPT: i64 = 64;
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn wave_and_shelf_tops_read_tracks_only_through_their_partial_index_and_stop_at_the_cut(
+async fn wave_and_shelf_tops_read_only_the_playable_table_and_stop_at_the_cut(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     seed(&pool).await?;
@@ -18,10 +18,7 @@ async fn wave_and_shelf_tops_read_tracks_only_through_their_partial_index_and_st
         .bind(ARTISTS_READ)
         .fetch_all(&pool)
         .await?;
-    for (sql, index) in [
-        (WAVE_TOPS, "tracks_playable_idx"),
-        (HOME_TOPS, "tracks_stored_idx"),
-    ] {
+    for (name, sql) in [("wave", WAVE_TOPS), ("home", HOME_TOPS)] {
         let explain = format!("EXPLAIN (FORMAT JSON) {sql}");
         let plan = sqlx::query_scalar::<_, Value>(&explain)
             .bind(&artists)
@@ -29,23 +26,35 @@ async fn wave_and_shelf_tops_read_tracks_only_through_their_partial_index_and_st
             .fetch_one(&pool)
             .await?;
         let nodes = nodes(&plan);
-        let tracks: Vec<_> = nodes
-            .iter()
-            .filter(|node| text(node, "Relation Name") == Some("tracks"))
-            .collect();
-        assert!(!tracks.is_empty(), "{index}: tracks are not read: {plan}");
         assert!(
-            tracks.iter().all(|node| {
-                text(node, "Node Type") == Some("Index Only Scan")
-                    && text(node, "Index Name") == Some(index)
+            nodes.iter().all(|node| {
+                !matches!(
+                    text(node, "Relation Name"),
+                    Some("tracks" | "track_artists")
+                )
             }),
-            "{index}: tracks are read past it: {plan}"
+            "{name}: tracks or credits are read: {plan}"
+        );
+        let playable: Vec<_> = nodes
+            .iter()
+            .filter(|node| text(node, "Relation Name") == Some("artist_playable_tracks"))
+            .collect();
+        assert!(
+            !playable.is_empty(),
+            "{name}: the playable table is not read: {plan}"
+        );
+        assert!(
+            playable.iter().all(|node| {
+                text(node, "Node Type") == Some("Index Only Scan")
+                    && text(node, "Index Name") == Some("artist_playable_tracks_read_idx")
+            }),
+            "{name}: the playable table is read past its covering index: {plan}"
         );
         assert!(
             nodes.iter().any(|node| {
                 text(node, "Node Type") == Some("WindowAgg") && node.contains_key("Run Condition")
             }),
-            "{index}: the row number has no run condition: {plan}"
+            "{name}: the row number has no run condition: {plan}"
         );
     }
     Ok(())
@@ -94,9 +103,12 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          SELECT sc_track_id, sc_track_id::bigint * 7919 % 100003 FROM made",
     )
     .await?;
-    sqlx::query("VACUUM ANALYZE artists, tracks, track_artists, sc_track_counters")
-        .execute(pool)
-        .await?;
+    crate::db::replicate_artist_playable_tracks(pool).await?;
+    sqlx::query(
+        "VACUUM ANALYZE artists, tracks, track_artists, sc_track_counters, artist_playable_tracks",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
