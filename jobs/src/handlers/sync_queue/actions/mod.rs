@@ -281,6 +281,55 @@ pub async fn apply_local(
     Ok(())
 }
 
+pub async fn settle_refused(
+    connection: &mut PgConnection,
+    action_type: &str,
+    user_id: &str,
+    target: &str,
+) -> Result<(), sqlx::Error> {
+    let sc_user = extract_sc_id(user_id);
+    let undone = match action_type {
+        "follow_user" | "unfollow_user" => {
+            if action_type == "follow_user" {
+                sqlx::query_file!(
+                    "queries/sync_queue/actions/refuse_follow.sql",
+                    sc_user,
+                    target
+                )
+                .execute(&mut *connection)
+                .await?;
+            }
+            "unfollow_user"
+        }
+        "like_track" | "unlike_track" => {
+            if action_type == "like_track" {
+                sqlx::query_file!(
+                    "queries/sync_queue/actions/refuse_like_track.sql",
+                    sc_user,
+                    extract_sc_id(target)
+                )
+                .execute(&mut *connection)
+                .await?;
+            }
+            "unlike_track"
+        }
+        _ => {
+            if action_type == "like_playlist" {
+                sqlx::query_file!(
+                    "queries/sync_queue/actions/refuse_like_playlist.sql",
+                    sc_user,
+                    target
+                )
+                .execute(&mut *connection)
+                .await?;
+            }
+            "unlike_playlist"
+        }
+    };
+    settle_mirror(connection, undone, user_id, target).await?;
+    Ok(())
+}
+
 pub async fn settle_mirror(
     connection: &mut PgConnection,
     action_type: &str,
@@ -359,7 +408,7 @@ fn unconfirmed(desired: Option<&Value>) -> Option<&Value> {
     desired.filter(|desired| desired.as_object().is_some_and(|fields| !fields.is_empty()))
 }
 
-fn extract_sc_id(value: &str) -> &str {
+pub fn extract_sc_id(value: &str) -> &str {
     value.rsplit(':').next().unwrap_or(value)
 }
 

@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use axum::http::StatusCode;
 use backend_contracts::{CatalogCollection, CatalogCollectionPayload, JobKind};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::background_jobs::queue;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::{ColdRefreshService, FOLLOWINGS};
 use crate::modules::subscriptions::service::PremiumStatus;
 use crate::modules::sync_queue::SyncQueueService;
@@ -64,6 +65,15 @@ impl MeService {
     pub async fn follow_user(&self, sc_user_id: &str, target_user_urn: &str) -> AppResult<Value> {
         let target_user_urn = super::feed::target_urn(target_user_urn)?;
         let target_user_urn = target_user_urn.as_str();
+        if crate::common::sc_ids::extract_sc_id(sc_user_id)
+            == crate::common::sc_ids::extract_sc_id(target_user_urn)
+        {
+            return Err(AppError::coded(
+                StatusCode::BAD_REQUEST,
+                "cannot_follow_self",
+                "You cannot follow yourself",
+            ));
+        }
         crate::db::retry_conflicts(|| async move {
             let mut tx = self.pg.begin().await?;
             crate::modules::sync_queue::mirror::set_wanted(
