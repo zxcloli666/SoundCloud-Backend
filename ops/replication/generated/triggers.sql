@@ -3142,12 +3142,16 @@ BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.active := OLD.active;
+            NEW.app_id := OLD.app_id;
+            NEW.app_version := OLD.app_version;
             NEW.client_id := OLD.client_id;
+            NEW.client_kind := OLD.client_kind;
             NEW.client_secret := OLD.client_secret;
             NEW.created_at := OLD.created_at;
             NEW.name := OLD.name;
             NEW.redirect_uri := OLD.redirect_uri;
             NEW.updated_at := OLD.updated_at;
+            NEW.user_agent := OLD.user_agent;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
@@ -3159,12 +3163,16 @@ BEGIN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.oauth_apps t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                    app_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.app_id ELSE o.app_id END,
+                    app_version = CASE WHEN NEW.row_v > o.row_v THEN NEW.app_version ELSE o.app_version END,
                     client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
+                    client_kind = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_kind ELSE o.client_kind END,
                     client_secret = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_secret ELSE o.client_secret END,
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
                     redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_uri ELSE o.redirect_uri END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                    user_agent = CASE WHEN NEW.row_v > o.row_v THEN NEW.user_agent ELSE o.user_agent END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE t.id = o.id;
                 GET DIAGNOSTICS n = ROW_COUNT;
@@ -3182,12 +3190,16 @@ BEGIN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.oauth_apps t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                    app_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.app_id ELSE o.app_id END,
+                    app_version = CASE WHEN NEW.row_v > o.row_v THEN NEW.app_version ELSE o.app_version END,
                     client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
+                    client_kind = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_kind ELSE o.client_kind END,
                     client_secret = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_secret ELSE o.client_secret END,
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
                     redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_uri ELSE o.redirect_uri END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                    user_agent = CASE WHEN NEW.row_v > o.row_v THEN NEW.user_agent ELSE o.user_agent END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE t.id = o.id;
                 GET DIAGNOSTICS n = ROW_COUNT;
@@ -3199,8 +3211,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.oauth_apps (active, client_id, client_secret, created_at, id, last_used_at, name, redirect_uri, row_v, updated_at)
-        VALUES (NEW.active, NEW.client_id, NEW.client_secret, NEW.created_at, NEW.id, NEW.last_used_at, NEW.name, NEW.redirect_uri, NEW.row_v, NEW.updated_at)
+        INSERT INTO public.oauth_apps (active, app_id, app_version, client_id, client_kind, client_secret, created_at, id, last_used_at, name, redirect_uri, row_v, updated_at, user_agent)
+        VALUES (NEW.active, NEW.app_id, NEW.app_version, NEW.client_id, NEW.client_kind, NEW.client_secret, NEW.created_at, NEW.id, NEW.last_used_at, NEW.name, NEW.redirect_uri, NEW.row_v, NEW.updated_at, NEW.user_agent)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -3223,7 +3235,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
     END IF;
-    IF (NEW.active, NEW.client_id, NEW.client_secret, NEW.created_at, NEW.name, NEW.redirect_uri, NEW.updated_at) IS DISTINCT FROM (OLD.active, OLD.client_id, OLD.client_secret, OLD.created_at, OLD.name, OLD.redirect_uri, OLD.updated_at) THEN
+    IF (NEW.active, NEW.app_id, NEW.app_version, NEW.client_id, NEW.client_kind, NEW.client_secret, NEW.created_at, NEW.name, NEW.redirect_uri, NEW.updated_at, NEW.user_agent) IS DISTINCT FROM (OLD.active, OLD.app_id, OLD.app_version, OLD.client_id, OLD.client_kind, OLD.client_secret, OLD.created_at, OLD.name, OLD.redirect_uri, OLD.updated_at, OLD.user_agent) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);

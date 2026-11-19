@@ -75,7 +75,7 @@ SELECT count(*) FILTER (
        (
            (
                NOT EXISTS (SELECT 1 FROM writer)
-               AND EXISTS (SELECT 1 FROM oauth_apps WHERE active)
+               AND EXISTS (SELECT 1 FROM oauth_apps WHERE active AND client_kind = 'default')
            )
            OR (
                EXISTS (SELECT 1 FROM writer WHERE refused)
@@ -83,6 +83,7 @@ SELECT count(*) FILTER (
                    SELECT 1
                    FROM oauth_apps AS app
                    WHERE app.active
+                     AND app.client_kind = 'default'
                      AND app.id NOT IN (SELECT oauth_app_id FROM refused)
                )
            )

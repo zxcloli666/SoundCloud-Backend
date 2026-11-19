@@ -9,5 +9,6 @@ SELECT app.id,
 FROM oauth_apps AS app
 LEFT JOIN soundcloud_connections AS connection ON connection.oauth_app_id = app.id
 LEFT JOIN sessions AS session ON session.soundcloud_connection_id = connection.id
+WHERE app.client_kind = 'default'
 GROUP BY app.id, app.name, app.client_id, app.active, app.last_used_at
 ORDER BY "sessions_total!" DESC, app.name

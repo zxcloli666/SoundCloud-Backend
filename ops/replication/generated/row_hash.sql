@@ -655,7 +655,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.active, t.client_id, t.client_secret, t.created_at, t.id, t.name, t.redirect_uri, t.row_v, t.updated_at)::text) FROM public.oauth_apps t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.active, t.app_id, t.app_version, t.client_id, t.client_kind, t.client_secret, t.created_at, t.id, t.name, t.redirect_uri, t.row_v, t.updated_at, t.user_agent)::text) FROM public.oauth_apps t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_pipeline_event_receipts(k jsonb)

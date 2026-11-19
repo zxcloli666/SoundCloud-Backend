@@ -273,6 +273,37 @@ async fn the_app_token_is_cores_live_token(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_mobile_app_has_no_app_token(pool: PgPool) -> anyhow::Result<()> {
+    let (rpc, _) = rpc(&pool, Answer::NewPair).await?;
+    let app_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO oauth_apps
+             (id, name, client_id, client_secret, redirect_uri, client_kind, app_id, app_version, user_agent)
+         VALUES ($1, 'app', 'client', 'secret', 'sc://auth', 'mobile', 'app.id', '1.0', 'agent')",
+    )
+    .bind(app_id)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO oauth_app_tokens (oauth_app_id, generation, access_token, expires_at)
+         VALUES ($1, $2, 'app-access', now() + interval '1 hour')",
+    )
+    .bind(app_id)
+    .bind(Uuid::from_u128(7))
+    .execute(&pool)
+    .await?;
+
+    let reply = rpc
+        .app_token(AppTokenRequest {
+            oauth_app_id: app_id,
+        })
+        .await?;
+
+    assert!(reply.token.is_none());
+    Ok(())
+}
+
 async fn app_of(pool: &PgPool, connection_id: Uuid) -> anyhow::Result<Uuid> {
     Ok(
         sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections WHERE id = $1")

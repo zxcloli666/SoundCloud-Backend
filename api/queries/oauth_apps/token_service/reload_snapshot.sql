@@ -13,3 +13,4 @@ JOIN oauth_apps AS app ON app.id = token.oauth_app_id
 WHERE token.expires_at > $1
   AND token.access_token IS NOT NULL
   AND app.active = true
+  AND app.client_kind = 'default'

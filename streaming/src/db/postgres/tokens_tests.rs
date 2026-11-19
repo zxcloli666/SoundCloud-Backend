@@ -5,8 +5,11 @@ const APPS: &str = "INSERT INTO oauth_apps (id, name, client_id, client_secret, 
        ('00000000-0000-4000-8000-00000000000b', 'local', 'client-b', 'secret-b', 'https://b.test/cb', true),
        ('00000000-0000-4000-8000-00000000000c', 'retired', 'client-c', 'secret-c', 'https://c.test/cb', false),
        ('00000000-0000-4000-8000-00000000000d', 'stale', 'client-d', 'secret-d', 'https://d.test/cb', true);
-     INSERT INTO oauth_app_tokens (oauth_app_id, access_token, expires_at)
-     VALUES ('00000000-0000-4000-8000-00000000000a', 'token-shared', now() + interval '1 hour');
+     INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri, active, client_kind, app_id, app_version, user_agent) VALUES
+       ('00000000-0000-4000-8000-00000000000e', 'mobile', 'client-e', 'secret-e', 'sc://auth', true, 'mobile', 'app.id', '1.0', 'agent');
+     INSERT INTO oauth_app_tokens (oauth_app_id, access_token, expires_at) VALUES
+       ('00000000-0000-4000-8000-00000000000a', 'token-shared', now() + interval '1 hour'),
+       ('00000000-0000-4000-8000-00000000000e', 'token-mobile', now() + interval '1 hour');
      INSERT INTO oauth_app_tokens_local (oauth_app_id, access_token, expires_at) VALUES
        ('00000000-0000-4000-8000-00000000000a', 'token-shared', now() + interval '1 hour'),
        ('00000000-0000-4000-8000-00000000000b', 'token-local', now() + interval '1 hour'),

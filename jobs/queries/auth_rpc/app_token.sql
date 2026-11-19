@@ -7,3 +7,4 @@ WHERE token.oauth_app_id = $1
   AND token.access_token IS NOT NULL
   AND token.expires_at > now()
   AND app.active
+  AND app.client_kind = 'default'

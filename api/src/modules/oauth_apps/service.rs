@@ -5,7 +5,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::modules::oauth_apps::model::OAuthApp;
+use crate::modules::oauth_apps::dto::{CreateOAuthAppDto, UpdateOAuthAppDto};
+use crate::modules::oauth_apps::model::{ClientKind, OAuthApp};
+
+const MOBILE_REDIRECT_URI: &str = "sc://auth";
 
 pub struct OAuthAppsService {
     pool: PgPool,
@@ -75,18 +78,15 @@ impl OAuthAppsService {
         Ok(rows)
     }
 
-    pub async fn create(
-        &self,
-        name: &str,
-        client_id: &str,
-        client_secret: &str,
-        redirect_uri: &str,
-        active: Option<bool>,
-    ) -> AppResult<OAuthApp> {
-        let name = normalized_non_blank("name", name)?;
-        let client_id = normalized_non_blank("clientId", client_id)?;
-        let client_secret = non_blank_secret(client_secret)?;
-        let redirect_uri = normalized_redirect_uri(redirect_uri)?;
+    pub async fn create(&self, dto: &CreateOAuthAppDto) -> AppResult<OAuthApp> {
+        let kind = dto.client_kind;
+        let name = normalized_non_blank("name", &dto.name)?;
+        let client_id = normalized_non_blank("clientId", &dto.client_id)?;
+        let client_secret = non_blank_secret(&dto.client_secret)?;
+        let redirect_uri = normalized_redirect_uri(&dto.redirect_uri, kind)?;
+        let app_id = profile_field(kind, "appId", dto.app_id.as_deref())?;
+        let app_version = profile_field(kind, "appVersion", dto.app_version.as_deref())?;
+        let user_agent = profile_field(kind, "userAgent", dto.user_agent.as_deref())?;
         let row: OAuthApp = sqlx::query_file_as!(
             OAuthApp,
             "queries/oauth_apps/service/create.sql",
@@ -95,7 +95,11 @@ impl OAuthAppsService {
             &client_id,
             client_secret,
             &redirect_uri,
-            active.unwrap_or(true)
+            dto.active.unwrap_or(true),
+            kind.as_str(),
+            app_id,
+            app_version,
+            user_agent
         )
         .fetch_one(&self.pool)
         .await
@@ -103,30 +107,64 @@ impl OAuthAppsService {
         Ok(row)
     }
 
-    pub async fn update(
-        &self,
-        id: &str,
-        name: Option<&str>,
-        client_id: Option<&str>,
-        client_secret: Option<&str>,
-        redirect_uri: Option<&str>,
-        active: Option<bool>,
-    ) -> AppResult<OAuthApp> {
+    pub async fn update(&self, id: &str, dto: &UpdateOAuthAppDto) -> AppResult<OAuthApp> {
         let uuid = Uuid::parse_str(id).map_err(|_| AppError::not_found("OAuth app not found"))?;
         let current = self
             .get_by_id(id)
             .await?
             .ok_or_else(|| AppError::not_found("OAuth app not found"))?;
-        if client_id.is_some_and(|value| value.trim() != current.client_id.trim()) {
+        if dto
+            .client_id
+            .as_deref()
+            .is_some_and(|value| value.trim() != current.client_id.trim())
+        {
             return Err(AppError::bad_request(
                 "clientId is immutable; create a new OAuth app",
             ));
         }
-        let name = name
+        if dto
+            .client_kind
+            .is_some_and(|kind| kind.as_str() != current.client_kind)
+        {
+            return Err(AppError::bad_request(
+                "clientKind is immutable; create a new OAuth app",
+            ));
+        }
+        let kind = if current.client_kind == ClientKind::Mobile.as_str() {
+            ClientKind::Mobile
+        } else {
+            ClientKind::Default
+        };
+        let name = dto
+            .name
+            .as_deref()
             .map(|value| normalized_non_blank("name", value))
             .transpose()?;
-        let client_secret = client_secret.map(non_blank_secret).transpose()?;
-        let redirect_uri = redirect_uri.map(normalized_redirect_uri).transpose()?;
+        let client_secret = dto
+            .client_secret
+            .as_deref()
+            .map(non_blank_secret)
+            .transpose()?;
+        let redirect_uri = dto
+            .redirect_uri
+            .as_deref()
+            .map(|value| normalized_redirect_uri(value, kind))
+            .transpose()?;
+        let app_id = dto
+            .app_id
+            .as_deref()
+            .map(|value| normalized_non_blank("appId", value))
+            .transpose()?;
+        let app_version = dto
+            .app_version
+            .as_deref()
+            .map(|value| normalized_non_blank("appVersion", value))
+            .transpose()?;
+        let user_agent = dto
+            .user_agent
+            .as_deref()
+            .map(|value| normalized_non_blank("userAgent", value))
+            .transpose()?;
         let row: Option<OAuthApp> = sqlx::query_file_as!(
             OAuthApp,
             "queries/oauth_apps/service/update.sql",
@@ -134,7 +172,10 @@ impl OAuthAppsService {
             name.as_deref(),
             client_secret,
             redirect_uri.as_deref(),
-            active
+            dto.active,
+            app_id.as_deref(),
+            app_version.as_deref(),
+            user_agent.as_deref()
         )
         .fetch_optional(&self.pool)
         .await
@@ -169,14 +210,29 @@ fn non_blank_secret(value: &str) -> AppResult<&str> {
     Ok(value)
 }
 
-fn normalized_redirect_uri(value: &str) -> AppResult<String> {
+fn normalized_redirect_uri(value: &str, kind: ClientKind) -> AppResult<String> {
     let value = normalized_non_blank("redirectUri", value)?;
     let uri = url::Url::parse(&value)
         .map_err(|_| AppError::bad_request("redirectUri must be a valid URL"))?;
-    if !matches!(uri.scheme(), "http" | "https") {
+    let allowed = match uri.scheme() {
+        "http" | "https" => true,
+        "sc" => kind == ClientKind::Mobile && value == MOBILE_REDIRECT_URI,
+        _ => false,
+    };
+    if !allowed {
         return Err(AppError::bad_request("redirectUri must use HTTP or HTTPS"));
     }
     Ok(value)
+}
+
+fn profile_field(kind: ClientKind, field: &str, value: Option<&str>) -> AppResult<Option<String>> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => Ok(Some(value.to_owned())),
+        None if kind == ClientKind::Mobile => Err(AppError::bad_request(format!(
+            "{field} is required for a mobile app"
+        ))),
+        None => Ok(None),
+    }
 }
 
 fn oauth_app_write_error(error: sqlx::Error) -> AppError {
@@ -205,6 +261,10 @@ mod tests {
                 client_secret text NOT NULL,
                 redirect_uri text NOT NULL,
                 active boolean NOT NULL DEFAULT true,
+                client_kind text NOT NULL DEFAULT 'default',
+                app_id text,
+                app_version text,
+                user_agent text,
                 last_used_at timestamptz,
                 created_at timestamp NOT NULL DEFAULT now(),
                 updated_at timestamp NOT NULL DEFAULT now()
@@ -296,11 +356,10 @@ mod tests {
         let error = service
             .update(
                 &app_id.to_string(),
-                None,
-                Some("another-client"),
-                None,
-                None,
-                None,
+                &UpdateOAuthAppDto {
+                    client_id: Some("another-client".to_owned()),
+                    ..Default::default()
+                },
             )
             .await
             .expect_err("client identity must be immutable");
@@ -321,17 +380,152 @@ mod tests {
         let service = OAuthAppsService::new(pool);
 
         let error = service
-            .create(
-                "duplicate",
-                " client ",
-                "secret",
-                "https://example.com/callback",
-                None,
-            )
+            .create(&web_dto(" client ", "https://example.com/callback"))
             .await
             .expect_err("normalized duplicate must be rejected");
 
         assert!(matches!(error, AppError::BadRequest(_)));
+        Ok(())
+    }
+
+    fn web_dto(client_id: &str, redirect_uri: &str) -> CreateOAuthAppDto {
+        CreateOAuthAppDto {
+            name: "app".to_owned(),
+            client_id: client_id.to_owned(),
+            client_secret: "secret".to_owned(),
+            redirect_uri: redirect_uri.to_owned(),
+            active: None,
+            client_kind: ClientKind::Default,
+            app_id: None,
+            app_version: None,
+            user_agent: None,
+        }
+    }
+
+    fn mobile_dto(client_id: &str, redirect_uri: &str) -> CreateOAuthAppDto {
+        CreateOAuthAppDto {
+            client_kind: ClientKind::Mobile,
+            app_id: Some("app.id".to_owned()),
+            app_version: Some("1.0".to_owned()),
+            user_agent: Some("agent".to_owned()),
+            ..web_dto(client_id, redirect_uri)
+        }
+    }
+
+    async fn insert_mobile_app(pool: &PgPool) -> anyhow::Result<Uuid> {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO oauth_apps
+                 (id, name, client_id, client_secret, redirect_uri, client_kind, app_id, app_version, user_agent)
+             VALUES ($1, 'mobile', 'mobile-client', 'secret', 'sc://auth', 'mobile', 'app.id', '1.0', 'agent')",
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(id)
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn pickers_skip_mobile_apps(pool: PgPool) -> anyhow::Result<()> {
+        let web = install_oauth_apps(&pool).await?;
+        let mobile = insert_mobile_app(&pool).await?;
+        let service = OAuthAppsService::new(pool.clone());
+
+        let picked = service.pick_lru_from(&[web, mobile]).await?;
+        let only_mobile = service.pick_lru_from(&[mobile]).await.unwrap_err();
+        let held = sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT last_used_at FROM oauth_apps WHERE id = $1",
+        )
+        .bind(mobile)
+        .fetch_one(&pool)
+        .await?;
+
+        assert_eq!(picked.id, web);
+        assert_eq!(picked.client_kind, "default");
+        assert_eq!(
+            only_mobile.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(held.is_none());
+        assert_eq!(service.count_active().await?, 1);
+        assert_eq!(service.find_all().await?.len(), 2);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn mobile_redirect_is_allowed_only_for_mobile_apps(pool: PgPool) -> anyhow::Result<()> {
+        install_oauth_apps(&pool).await?;
+        let service = OAuthAppsService::new(pool);
+
+        let web = service.create(&web_dto("web-2", "sc://auth")).await;
+        let mobile = service.create(&mobile_dto("mobile-2", "sc://auth")).await?;
+        let other_scheme = service.create(&mobile_dto("mobile-3", "sc://other")).await;
+        let mobile_web = service
+            .create(&mobile_dto("mobile-4", "https://example.com/callback"))
+            .await?;
+
+        assert!(matches!(web, Err(AppError::BadRequest(_))));
+        assert!(matches!(other_scheme, Err(AppError::BadRequest(_))));
+        assert_eq!(mobile.client_kind, "mobile");
+        assert_eq!(mobile.app_version.as_deref(), Some("1.0"));
+        assert_eq!(mobile_web.redirect_uri, "https://example.com/callback");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn mobile_app_needs_its_profile_fields(pool: PgPool) -> anyhow::Result<()> {
+        install_oauth_apps(&pool).await?;
+        let service = OAuthAppsService::new(pool);
+        let mut dto = mobile_dto("mobile-5", "sc://auth");
+        dto.user_agent = Some("  ".to_owned());
+
+        let error = service
+            .create(&dto)
+            .await
+            .expect_err("user agent is required");
+
+        assert!(matches!(error, AppError::BadRequest(_)));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn update_keeps_the_redirect_rule_and_kind(pool: PgPool) -> anyhow::Result<()> {
+        let web = install_oauth_apps(&pool).await?;
+        let service = OAuthAppsService::new(pool.clone());
+        let mobile = insert_mobile_app(&pool).await?;
+
+        let web_redirect = service
+            .update(
+                &web.to_string(),
+                &UpdateOAuthAppDto {
+                    redirect_uri: Some("sc://auth".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let kind_change = service
+            .update(
+                &web.to_string(),
+                &UpdateOAuthAppDto {
+                    client_kind: Some(ClientKind::Mobile),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let mobile_update = service
+            .update(
+                &mobile.to_string(),
+                &UpdateOAuthAppDto {
+                    redirect_uri: Some("sc://auth".to_owned()),
+                    app_version: Some("2.0".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        assert!(matches!(web_redirect, Err(AppError::BadRequest(_))));
+        assert!(matches!(kind_change, Err(AppError::BadRequest(_))));
+        assert_eq!(mobile_update.app_version.as_deref(), Some("2.0"));
         Ok(())
     }
 }

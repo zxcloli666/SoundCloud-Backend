@@ -1392,7 +1392,10 @@
   "oauth_apps": {
    "columns": [
     {"default": "true", "generated": false, "name": "active", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "app_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "app_version", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "client_id", "notnull": true, "type": "text"},
+    {"default": "'default'::text", "generated": false, "name": "client_kind", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "client_secret", "notnull": true, "type": "text"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
@@ -1400,7 +1403,8 @@
     {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "redirect_uri", "notnull": true, "type": "text"},
     {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
-    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "user_agent", "notnull": false, "type": "text"}
    ],
    "fks": [
    ],

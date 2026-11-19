@@ -258,3 +258,30 @@ async fn a_rejected_exchange_in_cooldown_penalizes_once_from_soundcloud(
     assert_eq!(failures, 2);
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn login_never_picks_a_mobile_app(pool: PgPool) -> anyhow::Result<()> {
+    let (auth, _) = auth(&pool)?;
+    let mobile = oauth_app(&pool).await?;
+    sqlx::query(
+        "UPDATE oauth_apps
+         SET client_kind = 'mobile', app_id = 'app.id', app_version = '1.0', user_agent = 'agent',
+             redirect_uri = 'sc://auth'
+         WHERE id = $1",
+    )
+    .bind(mobile)
+    .execute(&pool)
+    .await?;
+    let web = oauth_app(&pool).await?;
+
+    for _ in 0..4 {
+        assert_eq!(login_app(&pool, &auth).await?, web);
+    }
+    let used: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT last_used_at FROM oauth_apps WHERE id = $1")
+            .bind(mobile)
+            .fetch_one(&pool)
+            .await?;
+    assert!(used.is_none());
+    Ok(())
+}

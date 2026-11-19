@@ -150,3 +150,41 @@ async fn a_live_shared_token_needs_no_fallback(pool: PgPool) -> anyhow::Result<(
     assert_eq!(local_tokens(&pool, app).await?, 0);
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn mobile_apps_get_no_fallback_and_no_served_token(pool: PgPool) -> anyhow::Result<()> {
+    let (auth_base, calls) = token_endpoint().await?;
+    let web = app(&pool).await?;
+    let mobile = app(&pool).await?;
+    sqlx::query(
+        "UPDATE oauth_apps
+         SET client_kind = 'mobile', app_id = 'app.id', app_version = '1.0', user_agent = 'agent',
+             redirect_uri = 'sc://auth'
+         WHERE id = $1",
+    )
+    .bind(mobile)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO oauth_app_tokens (oauth_app_id, generation, access_token, expires_at)
+         VALUES ($1, gen_random_uuid(), 'mobile-shared', now() + interval '1 hour')",
+    )
+    .bind(mobile)
+    .execute(&pool)
+    .await?;
+    let process = process(&pool, &auth_base, Some(CORE_DOWN_FOR))?;
+
+    process.top_up().await;
+    let served = OAuthAppTokenService::new(pool.clone()).snapshot().await?;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(local_tokens(&pool, web).await?, 1);
+    assert_eq!(local_tokens(&pool, mobile).await?, 0);
+    assert_eq!(served.len(), 1);
+    assert!(
+        served
+            .iter()
+            .all(|token| token.access_token != "mobile-shared")
+    );
+    Ok(())
+}
