@@ -1848,5 +1848,56 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
     Ok(())
 }
 
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_finished_public_walk_drops_its_seen_keys_and_an_owner_walk_keeps_its_last_snapshot(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, mut payload, writer) = setup(&pool).await?;
+    let owner = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing owner snapshot"))?;
+    assert!(
+        !writer
+            .persist(
+                &job,
+                &payload,
+                &owner,
+                page(&[1, 2], None),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+    payload.collection = CatalogCollection::TrackFavoriters;
+    payload.owner = false;
+    let public = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing public snapshot"))?;
+    assert!(
+        !writer
+            .persist(
+                &job,
+                &payload,
+                &public,
+                fans(vec![fan(17, "A", 1), fan(18, "B", 1)], None),
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+    let seen: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT collection, scope, count(*) FROM catalog_collection_seen
+         WHERE subject_id = '42' GROUP BY collection, scope ORDER BY collection, scope",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(seen, [("liked-tracks".to_owned(), "owner".to_owned(), 2)]);
+    let audience: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM catalog_audience WHERE subject_urn = 'soundcloud:tracks:42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(audience, 2);
+    Ok(())
+}
+
 mod giving_up;
 mod reconcile_plan;
