@@ -1,5 +1,6 @@
 mod frames;
 pub mod haiku;
+pub mod prompt;
 mod queue;
 mod result;
 #[cfg(test)]
@@ -172,7 +173,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                 Step::Cut(label) => Some(label),
                 _ => None,
             },
-            prompt: (step == Step::Classify).then(|| haiku::PROMPT.to_owned()),
+            prompt: (step == Step::Classify).then(|| prompt::local(&prompt::Features::of(held))),
         })
     }
 

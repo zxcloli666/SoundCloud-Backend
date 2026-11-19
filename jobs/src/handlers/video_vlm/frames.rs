@@ -4,6 +4,7 @@ use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use super::haiku::{Judged, Vision};
+use super::prompt::Features;
 use super::queue::{self, Known};
 use super::result::Frames;
 use super::{LADDER, VideoVlm};
@@ -27,7 +28,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             return Ok(());
         };
         let pictures = cut(&blob, &frames.files).map_err(JobError::permanent)?;
-        match self.ask(track, &pictures).await? {
+        match self.ask(track, &pictures, &Features::of(&held)).await? {
             Some(judged) if judged.label == VideoLabel::Static => {
                 self.settle_static(track, attempt, &held, &judged.model)
                     .await
@@ -43,14 +44,19 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         }
     }
 
-    async fn ask(&self, track: &str, pictures: &[Vec<u8>]) -> JobResult<Option<Judged>> {
+    async fn ask(
+        &self,
+        track: &str,
+        pictures: &[Vec<u8>],
+        features: &Features,
+    ) -> JobResult<Option<Judged>> {
         let Some(haiku) = &self.haiku else {
             return Ok(None);
         };
         if !self.haiku_open().await? {
             return Ok(None);
         }
-        let answer = haiku.judge(pictures).await;
+        let answer = haiku.judge(pictures, features).await;
         let period = ledger::period(Utc::now(), self.reset_day);
         ledger::record(&self.pool, LADDER, period, track, &answer.spend).await?;
         match answer.result {
@@ -59,6 +65,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                     track,
                     label = judged.label.as_str(),
                     model = judged.model,
+                    reason = judged.reason,
                     "Haiku judged a video"
                 );
                 Ok(Some(judged))

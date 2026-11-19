@@ -6,6 +6,7 @@ use backend_contracts::pipeline::VideoLabel;
 use serde_json::Value;
 
 use super::super::haiku::{Judged, Vision};
+use super::super::prompt::Features;
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_gen::Lanes;
 use crate::llm::anthropic::{Answer, LlmError, Spend};
@@ -52,6 +53,7 @@ impl Lanes for Wire {
 pub(super) struct Eyes {
     answers: Arc<Mutex<VecDeque<Result<VideoLabel, LlmError>>>>,
     pub(super) seen: Arc<Mutex<Vec<Vec<Vec<u8>>>>>,
+    pub(super) features: Arc<Mutex<Vec<Features>>>,
 }
 
 impl Eyes {
@@ -61,7 +63,8 @@ impl Eyes {
 }
 
 impl Vision for Eyes {
-    async fn judge(&self, frames: &[Vec<u8>]) -> Answer<Judged> {
+    async fn judge(&self, frames: &[Vec<u8>], features: &Features) -> Answer<Judged> {
+        self.features.lock().unwrap().push(*features);
         self.seen.lock().unwrap().push(frames.to_vec());
         let next = self.answers.lock().unwrap().pop_front();
         let result = next
@@ -69,6 +72,7 @@ impl Vision for Eyes {
             .map(|label| Judged {
                 label,
                 model: HAIKU.to_owned(),
+                reason: "scripted".to_owned(),
             });
         let spend = match &result {
             Err(LlmError::Down(_)) => Vec::new(),
