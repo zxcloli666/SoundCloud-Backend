@@ -3,7 +3,7 @@ SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION public.scd_cmd_mobile_credential_link(args jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     account text := args ->> 'soundcloud_user_id';
@@ -55,7 +55,7 @@ $f$;
 CREATE OR REPLACE FUNCTION public.scd_cmd_mobile_credential_drop(args jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     account text := args ->> 'soundcloud_user_id';
@@ -77,7 +77,7 @@ $f$;
 CREATE OR REPLACE FUNCTION public.scd_cmd_connection_drop_orphan(args jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     connection_id uuid := (args ->> 'connection_id')::uuid;
@@ -118,7 +118,7 @@ CREATE OR REPLACE FUNCTION public.scd_redact_args(kind text, args jsonb)
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 SELECT CASE
     WHEN kind IN ('connection.login', 'mobile_credential.link') AND args ?| ARRAY['access_token', 'refresh_token']
@@ -131,7 +131,7 @@ CREATE OR REPLACE FUNCTION public.scd_mobile_link_replayable(args jsonb)
 RETURNS boolean
 LANGUAGE plpgsql
 STABLE
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 BEGIN
     RETURN EXISTS (
@@ -146,7 +146,7 @@ $f$;
 CREATE OR REPLACE FUNCTION public.scd_dead_redact(batch integer DEFAULT 1000)
 RETURNS bigint
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 SET lock_timeout = '2s'
 AS $f$
 DECLARE
@@ -181,7 +181,7 @@ CREATE OR REPLACE FUNCTION public.scd_node_retention_batch(
     OUT held text
 )
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 SET lock_timeout = '2s'
 AS $f$
 DECLARE
