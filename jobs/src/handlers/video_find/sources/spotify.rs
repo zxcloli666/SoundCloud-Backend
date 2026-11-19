@@ -58,7 +58,9 @@ async fn find_track<F: Fetch>(
 ) -> Result<Option<String>, Failure> {
     if let Some(isrc) = wanted.isrc.as_deref().filter(|isrc| !isrc.is_empty()) {
         let reply = search(fetch, token, &format!("isrc:{isrc}")).await?;
-        return Ok(tracks(&reply).first().map(|found| found.uri.clone()));
+        if let Some(found) = tracks(&reply).into_iter().next() {
+            return Ok(Some(found.uri));
+        }
     }
     let query = format!("track:{} artist:{}", wanted.title, wanted.artist);
     let reply = search(fetch, token, &query).await?;
