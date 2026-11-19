@@ -1,8 +1,9 @@
 use sc_mobile::{Caller, MobileClient, playlists};
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::actions::{Answer, LEFT, step};
-use crate::journal::Journal;
+use crate::actions::{LEFT, step};
+use crate::datadome;
+use crate::journal::{Journal, json_of};
 
 const TITLE: &str = "probe";
 
@@ -12,7 +13,19 @@ pub async fn run(
     journal: &mut Journal,
     track: Option<&str>,
 ) {
-    let created = create(client, caller, journal).await;
+    let create = playlists::create(TITLE, &[]);
+    let created = step(
+        client,
+        caller,
+        journal,
+        "playlist.create",
+        &create,
+        |body| match playlist_urn(body) {
+            Some(urn) => format!("created {urn}"),
+            None => "the answer names no playlist".to_owned(),
+        },
+    )
+    .await;
     if !created.ok {
         return;
     }
@@ -24,14 +37,16 @@ pub async fn run(
         return;
     };
 
-    match track {
-        Some(track) => {
-            if !with_track(client, caller, journal, &urn, track).await {
-                journal.skip("playlist.left", LEFT);
-                return;
-            }
+    let steady = match track {
+        Some(track) => with_track(client, caller, journal, &urn, track).await,
+        None => {
+            journal.skip("playlist.add", "no --actions-track");
+            true
         }
-        None => journal.skip("playlist.add", "no --actions-track"),
+    };
+    if !steady {
+        journal.skip("playlist.left", LEFT);
+        return;
     }
 
     let delete = playlists::delete(&urn);
@@ -39,44 +54,18 @@ pub async fn run(
         format!("deleted {urn}")
     })
     .await;
+    if deleted.blocked {
+        journal.skip("playlist.left", LEFT);
+        return;
+    }
     if !deleted.ok {
         journal.skip(
             "playlist.left",
-            &format!(
-                "the notes give no delete shape; {urn} may be left for the owner to delete by hand"
-            ),
+            &format!("{urn} may be left for the owner to delete by hand"),
         );
+        return;
     }
-}
-
-async fn create(client: &MobileClient, caller: &Caller, journal: &mut Journal) -> Answer {
-    let mut last = None;
-    for (label, request) in playlists::create_variants(TITLE) {
-        let name = format!("playlist.create#{label}");
-        let answer = step(
-            client,
-            caller,
-            journal,
-            &name,
-            &request,
-            |body| match playlist_urn(body) {
-                Some(urn) => format!("created {urn}"),
-                None => "the answer names no playlist".to_owned(),
-            },
-        )
-        .await;
-        let retry = !answer.ok && !answer.blocked && matches!(answer.status, Some(400 | 422));
-        last = Some(answer);
-        if !retry {
-            break;
-        }
-    }
-    last.unwrap_or(Answer {
-        body: Value::Null,
-        ok: false,
-        blocked: false,
-        status: None,
-    })
+    confirm_gone(client, caller, journal, &urn).await;
 }
 
 async fn with_track(
@@ -94,16 +83,44 @@ async fn with_track(
     if added.blocked {
         return false;
     }
-    journal.skip(
-        "playlist.read",
-        "no read: the playlist answer shape is unconfirmed",
-    );
+
+    let read = playlists::read(playlist);
+    let seen = step(client, caller, journal, "playlist.read", &read, |body| {
+        format!("{} tracks listed", track_count(body))
+    })
+    .await;
+    if seen.blocked {
+        return false;
+    }
+
     let remove = playlists::remove_track(playlist, track);
     let removed = step(client, caller, journal, "playlist.remove", &remove, |_| {
         "removed".to_owned()
     })
     .await;
     !removed.blocked
+}
+
+async fn confirm_gone(
+    client: &MobileClient,
+    caller: &Caller,
+    journal: &mut Journal,
+    playlist: &str,
+) {
+    let outcome = client.call(caller, &playlists::read(playlist)).await;
+    let blocked = datadome::is_datadome(&outcome);
+    let status = outcome.as_ref().ok().map(|reply| reply.status);
+    let gone = matches!(status, Some(404 | 410));
+    let note = match status {
+        Some(code) => format!("read after delete answered {code}"),
+        None => "read after delete got no answer".to_owned(),
+    };
+    journal.event(
+        "playlist.gone",
+        gone,
+        json!({ "status": status, "shape": shape_of(&json_of(&outcome)) }),
+        vec![datadome::with_datadome(note, blocked)],
+    );
 }
 
 fn playlist_urn(body: &Value) -> Option<String> {
@@ -115,6 +132,23 @@ fn playlist_urn(body: &Value) -> Option<String> {
         .get("id")
         .and_then(Value::as_u64)
         .map(|id| format!("soundcloud:playlists:{id}"))
+}
+
+fn track_count(body: &Value) -> usize {
+    let playlist = body.get("playlist").unwrap_or(body);
+    playlist
+        .get("tracks")
+        .or_else(|| playlist.get("track_urns"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+fn shape_of(body: &Option<Value>) -> Vec<String> {
+    match body {
+        Some(Value::Object(map)) => map.keys().cloned().collect(),
+        Some(_) => vec!["not an object".to_owned()],
+        None => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -134,5 +168,15 @@ mod tests {
             Some("soundcloud:playlists:2")
         );
         assert_eq!(playlist_urn(&json!({})), None);
+    }
+
+    #[test]
+    fn tracks_are_counted_in_either_answer_shape() {
+        assert_eq!(track_count(&json!({ "tracks": [{}, {}] })), 2);
+        assert_eq!(
+            track_count(&json!({ "playlist": { "track_urns": ["a"] } })),
+            1
+        );
+        assert_eq!(track_count(&json!({})), 0);
     }
 }

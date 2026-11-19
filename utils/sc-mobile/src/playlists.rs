@@ -2,29 +2,18 @@ use serde_json::json;
 
 use crate::request::MobileRequest;
 
-pub fn create_variants(title: &str) -> Vec<(&'static str, MobileRequest)> {
-    let bodies = [
-        (
-            "flat",
-            json!({ "title": title, "public": false, "track_urns": [] }),
-        ),
-        (
-            "wrapped",
-            json!({ "playlist": { "title": title, "public": false, "track_urns": [] } }),
-        ),
-        (
-            "wrapped_sharing",
-            json!({ "playlist": { "title": title, "sharing": "private", "tracks": [] } }),
-        ),
-    ];
-    bodies
-        .into_iter()
-        .map(|(label, body)| (label, MobileRequest::post(&["playlists"], &body)))
-        .collect()
+pub fn create(title: &str, track_urns: &[&str]) -> MobileRequest {
+    MobileRequest::post(
+        &["playlists"],
+        &json!({
+            "playlist": { "title": title, "public": false },
+            "track_urns": track_urns,
+        }),
+    )
 }
 
 pub fn read(playlist_urn: &str) -> MobileRequest {
-    MobileRequest::get(&["playlists", playlist_urn])
+    MobileRequest::get(&["playlists", playlist_urn, "info"])
 }
 
 pub fn add_track(playlist_urn: &str, track_urn: &str) -> MobileRequest {
@@ -60,23 +49,18 @@ mod tests {
     }
 
     #[test]
-    fn a_private_playlist_is_tried_in_three_shapes_in_order() {
-        let variants = create_variants("probe");
-        let labels: Vec<&str> = variants.iter().map(|(label, _)| *label).collect();
-
-        assert_eq!(labels, vec!["flat", "wrapped", "wrapped_sharing"]);
-        let shapes: Vec<_> = variants.iter().map(|(_, request)| shape(request)).collect();
-        let bodies = [
-            json!({ "title": "probe", "public": false, "track_urns": [] }),
-            json!({ "playlist": { "title": "probe", "public": false, "track_urns": [] } }),
-            json!({ "playlist": { "title": "probe", "sharing": "private", "tracks": [] } }),
-        ];
-        for (shape, body) in shapes.into_iter().zip(bodies) {
-            assert_eq!(
-                shape,
-                (Method::POST, Some("/playlists".to_owned()), Some(body))
-            );
-        }
+    fn a_private_playlist_is_created_with_the_tracks_beside_it() {
+        assert_eq!(
+            shape(&create("probe", &["soundcloud:tracks:1"])),
+            (
+                Method::POST,
+                Some("/playlists".to_owned()),
+                Some(json!({
+                    "playlist": { "title": "probe", "public": false },
+                    "track_urns": ["soundcloud:tracks:1"],
+                }))
+            )
+        );
     }
 
     #[test]
@@ -110,7 +94,7 @@ mod tests {
             shape(&read(playlist)),
             (
                 Method::GET,
-                Some("/playlists/soundcloud:playlists:5".to_owned()),
+                Some("/playlists/soundcloud:playlists:5/info".to_owned()),
                 None
             )
         );
