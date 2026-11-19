@@ -4,12 +4,18 @@ const REQUESTS: &str = "sc_mobile_requests_total";
 const ACTIONS: &str = "jobs_mobile_actions_total";
 const SERVICE: &str = "jobs";
 
-pub const ACTION_TYPES: [&str; 5] = [
+pub const ACTION_TYPES: [&str; 11] = [
     "track_reaction_set",
     "track_reaction_remove",
     "comment_delete",
     "follow_user",
     "unfollow_user",
+    "like_track",
+    "unlike_track",
+    "comment_like",
+    "comment_unlike",
+    "playlist_create",
+    "playlist_delete",
 ];
 pub const OUTCOMES: [&str; 8] = [
     "written",
@@ -21,13 +27,19 @@ pub const OUTCOMES: [&str; 8] = [
     "held",
     "cooling",
 ];
-const REQUEST_OPS: [&str; 6] = [
+const REQUEST_OPS: [&str; 12] = [
     "refresh",
     "track_reaction_set",
     "track_reaction_remove",
     "comment_delete",
     "follow_user",
     "unfollow_user",
+    "like_track",
+    "unlike_track",
+    "comment_like",
+    "comment_unlike",
+    "playlist_create",
+    "playlist_delete",
 ];
 const STATUS_CLASSES: [&str; 10] = [
     "2xx",

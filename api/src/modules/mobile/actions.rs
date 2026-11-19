@@ -4,13 +4,15 @@ use crate::error::{AppError, AppResult};
 use crate::modules::sync_queue::SyncQueueService;
 
 use super::credential::RELINK_REQUIRED;
-use super::refusal::{not_linked, relink_required};
+use super::refusal::{invalid, not_linked, relink_required};
 use super::service::MobileService;
 use super::validate;
 
 const REACTION_SET: &str = "track_reaction_set";
 const REACTION_REMOVE: &str = "track_reaction_remove";
 const COMMENT_DELETE: &str = "comment_delete";
+const COMMENT_LIKE: &str = "comment_like";
+const COMMENT_UNLIKE: &str = "comment_unlike";
 
 impl MobileService {
     pub(super) async fn set_reaction(
@@ -64,6 +66,28 @@ impl MobileService {
         Ok(queued(COMMENT_DELETE, &urn))
     }
 
+    pub(super) async fn like_comment(
+        &self,
+        queue: &SyncQueueService,
+        account: &str,
+        comment: &str,
+        track: Option<&str>,
+    ) -> AppResult<Value> {
+        self.comment_reaction(queue, COMMENT_LIKE, account, comment, track)
+            .await
+    }
+
+    pub(super) async fn unlike_comment(
+        &self,
+        queue: &SyncQueueService,
+        account: &str,
+        comment: &str,
+        track: Option<&str>,
+    ) -> AppResult<Value> {
+        self.comment_reaction(queue, COMMENT_UNLIKE, account, comment, track)
+            .await
+    }
+
     pub(super) async fn require_active(&self, account: &str) -> AppResult<()> {
         let status = sqlx::query_file_scalar!("queries/mobile/status_of.sql", account)
             .fetch_optional(&self.pool)
@@ -73,6 +97,33 @@ impl MobileService {
             Some(RELINK_REQUIRED) => Err(relink_required()),
             Some(_) => Ok(()),
         }
+    }
+
+    async fn comment_reaction(
+        &self,
+        queue: &SyncQueueService,
+        action: &'static str,
+        account: &str,
+        comment: &str,
+        track: Option<&str>,
+    ) -> AppResult<Value> {
+        let urn = validate::comment_urn(comment)?;
+        let asked = track.map(validate::track_urn).transpose()?;
+        self.require_active(account).await?;
+        let id = urn.rsplit(':').next().unwrap_or_default();
+        let known = sqlx::query_file_scalar!("queries/mobile/comment_track.sql", id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|track_id| format!("soundcloud:tracks:{track_id}"));
+        let parent = known.or(asked).ok_or_else(|| {
+            invalid(
+                "track_urn_required",
+                "The track of this comment is not known, pass trackUrn",
+            )
+        })?;
+        let payload = json!({ "parent_urn": parent });
+        queue.enqueue(account, action, &urn, Some(&payload)).await?;
+        Ok(queued(action, &urn))
     }
 
     async fn react(

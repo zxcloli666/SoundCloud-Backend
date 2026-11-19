@@ -18,6 +18,12 @@ pub(super) struct ValueQuery {
     value_urn: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TrackQuery {
+    track_urn: Option<String>,
+}
+
 #[tracing::instrument(skip_all)]
 pub(super) async fn set_reaction(
     State(mobile): State<Arc<MobileService>>,
@@ -70,6 +76,46 @@ pub(super) async fn delete_comment(
     mobile.limits.admit(Action::Change, ctx.session_id)?;
     let queued = mobile
         .delete_comment(&queue, &ctx.sc_user_id, &comment_urn)
+        .await?;
+    Ok(Json(queued))
+}
+
+#[tracing::instrument(skip_all)]
+pub(super) async fn like_comment(
+    State(mobile): State<Arc<MobileService>>,
+    State(queue): State<Arc<SyncQueueService>>,
+    ctx: SessionCtx,
+    Path(comment_urn): Path<String>,
+    Query(query): Query<TrackQuery>,
+) -> AppResult<Json<Value>> {
+    mobile.limits.admit(Action::Change, ctx.session_id)?;
+    let queued = mobile
+        .like_comment(
+            &queue,
+            &ctx.sc_user_id,
+            &comment_urn,
+            query.track_urn.as_deref(),
+        )
+        .await?;
+    Ok(Json(queued))
+}
+
+#[tracing::instrument(skip_all)]
+pub(super) async fn unlike_comment(
+    State(mobile): State<Arc<MobileService>>,
+    State(queue): State<Arc<SyncQueueService>>,
+    ctx: SessionCtx,
+    Path(comment_urn): Path<String>,
+    Query(query): Query<TrackQuery>,
+) -> AppResult<Json<Value>> {
+    mobile.limits.admit(Action::Change, ctx.session_id)?;
+    let queued = mobile
+        .unlike_comment(
+            &queue,
+            &ctx.sc_user_id,
+            &comment_urn,
+            query.track_urn.as_deref(),
+        )
         .await?;
     Ok(Json(queued))
 }

@@ -9,7 +9,7 @@ use super::super::client::SoundCloudError;
 use super::super::model::ClaimedMutation;
 use super::{Route, build, judge, route};
 
-fn claimed(action: &str, target: &str, payload: Option<Value>) -> ClaimedMutation {
+pub(super) fn claimed(action: &str, target: &str, payload: Option<Value>) -> ClaimedMutation {
     ClaimedMutation {
         id: Uuid::new_v4(),
         user_id: "17".to_owned(),
@@ -39,31 +39,35 @@ fn reply(status: u16, body: &'static str) -> MobileReply {
 }
 
 #[test]
-fn only_reactions_comment_delete_and_follows_leave_apiv1() {
+fn only_the_tested_actions_leave_apiv1() {
     for action in [
         "track_reaction_set",
         "track_reaction_remove",
         "comment_delete",
+        "comment_like",
+        "comment_unlike",
     ] {
         assert_eq!(route(action), Route::Mobile, "{action}");
     }
-    for action in ["follow_user", "unfollow_user"] {
+    for action in [
+        "follow_user",
+        "unfollow_user",
+        "like_track",
+        "unlike_track",
+        "playlist_create",
+        "playlist_delete",
+    ] {
         assert_eq!(route(action), Route::MobileThenApiv1, "{action}");
     }
     for action in [
-        "like_track",
-        "unlike_track",
         "like_playlist",
         "unlike_playlist",
         "comment",
-        "playlist_create",
-        "playlist_delete",
         "playlist_update",
         "playlist_membership",
         "track_update",
         "track_delete",
         "repost_track",
-        "comment_like",
     ] {
         assert_eq!(route(action), Route::Apiv1, "{action}");
     }
@@ -176,7 +180,7 @@ fn a_malformed_mutation_is_refused_before_any_request_is_built() {
         );
     }
     assert!(matches!(
-        build(&claimed("like_track", "soundcloud:tracks:42", None)),
+        build(&claimed("like_playlist", "soundcloud:playlists:42", None)),
         Err(ActionError::UnknownAction(_))
     ));
 }

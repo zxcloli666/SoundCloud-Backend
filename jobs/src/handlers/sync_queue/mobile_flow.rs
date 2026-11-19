@@ -1,6 +1,6 @@
 use backend_contracts::SYNC_QUEUE_MAX_RETRIES;
 
-use super::actions;
+use super::actions::{self, ActionError};
 use super::mobile::{self, Absence, Failure, Opened, Refusal, Route};
 use super::model::ClaimedMutation;
 use super::write_gate::WriteGate;
@@ -23,6 +23,7 @@ impl SyncQueueHandler {
         let action = metric_action(&mutation.action_type);
         let request = match mobile::build(mutation) {
             Ok(request) => request,
+            Err(_) if route == Route::MobileThenApiv1 => return Ok(Flow::Apiv1),
             Err(error) => {
                 self.record_action_failure(mutation, &error).await?;
                 return Ok(Flow::Done);
@@ -52,6 +53,12 @@ impl SyncQueueHandler {
                 return Ok(Flow::Done);
             }
         };
+        if mutation.action_type == "playlist_create"
+            && mutation.has_ambiguous_remote_attempt()
+            && !self.confirmed_not_created(mutation).await?
+        {
+            return Ok(Flow::Done);
+        }
         let oauth_app_id = Some(linked.oauth_app_id());
         let Some(probing) = self.admit(mutation, oauth_app_id).await? else {
             record_mobile_action(action, "held");
@@ -66,7 +73,9 @@ impl SyncQueueHandler {
         match self.mobile.send(&mut linked, action, &request, &gate).await {
             Ok(reply) => {
                 let written = mobile::judge(&request, &reply);
-                match actions::written_or_closed(mutation, written) {
+                let remote = actions::written_or_closed(mutation, written)
+                    .and_then(|remote| mobile::shape(mutation, remote));
+                match remote {
                     Ok(remote) => {
                         let outcome = match remote {
                             actions::Remote::Written(_) => "written",
@@ -74,6 +83,13 @@ impl SyncQueueHandler {
                         };
                         record_mobile_action(action, outcome);
                         self.finish(mutation, remote, oauth_app_id).await?;
+                    }
+                    Err(error @ ActionError::InvalidRemoteResult(_))
+                        if mutation.action_type == "playlist_create" =>
+                    {
+                        record_mobile_action(action, "failed");
+                        self.retry_unclear_create(mutation, &error.to_string())
+                            .await?;
                     }
                     Err(error) => {
                         record_mobile_action(action, "failed");
@@ -119,6 +135,27 @@ impl SyncQueueHandler {
                 Ok(Flow::Done)
             }
         }
+    }
+
+    async fn confirmed_not_created(
+        &self,
+        mutation: &ClaimedMutation,
+    ) -> Result<bool, anyhow::Error> {
+        let token = match self
+            .connections
+            .access_token(&self.token_client, &mutation.user_id)
+            .await
+        {
+            Ok(token) => token,
+            Err(error) => {
+                self.record_connection_failure(mutation, &error).await?;
+                return Ok(false);
+            }
+        };
+        Ok(self
+            .confirm_unclear_create(mutation, token)
+            .await?
+            .is_some())
     }
 
     async fn without_mobile(

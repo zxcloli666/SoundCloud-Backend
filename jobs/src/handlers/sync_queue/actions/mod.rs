@@ -270,7 +270,12 @@ pub async fn apply_local(
             .execute(connection)
             .await?;
         }
-        "comment" | "comment_delete" | "track_reaction_set" | "track_reaction_remove" => {}
+        "comment"
+        | "comment_delete"
+        | "comment_like"
+        | "comment_unlike"
+        | "track_reaction_set"
+        | "track_reaction_remove" => {}
         action => return Err(ActionError::UnknownAction(action.to_owned())),
     }
     Ok(())

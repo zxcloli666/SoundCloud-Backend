@@ -127,7 +127,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 102] = [
+const CLASSIFIED_ROUTES: [&str; 103] = [
     "/admin/activity",
     "/admin/albums",
     "/admin/artists",
@@ -198,6 +198,7 @@ const CLASSIFIED_ROUTES: [&str; 102] = [
     "/auth/soundcloud/refresh",
     "/auth/x",
     "/comments/{comment_urn}",
+    "/comments/{comment_urn}/like",
     "/me/mobile",
     "/me/mobile/uq",
     "/oauth-apps",
