@@ -86,7 +86,7 @@ impl VideoFindConfig {
                 env::positive_u64("VIDEO_NONE_RECHECK_DAYS", 30)? * 86_400,
             ),
             static_recheck: Duration::from_secs(
-                env::positive_u64("VIDEO_STATIC_RECHECK_DAYS", 90)? * 86_400,
+                env::positive_u64("VIDEO_STATIC_RECHECK_DAYS", 30)? * 86_400,
             ),
             max_candidates: env::non_zero_usize(
                 "VIDEO_MAX_CANDIDATES",
