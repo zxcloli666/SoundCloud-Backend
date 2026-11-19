@@ -99,7 +99,7 @@ const AUTH_GRANTS: [(&str, &str, &str); 21] = [
     (
         "public.oauth_apps",
         "SELECT",
-        "active,client_id,created_at,id,last_used_at,redirect_uri",
+        "active,client_id,client_kind,created_at,id,last_used_at,redirect_uri",
     ),
     ("public.oauth_apps", "UPDATE", "last_used_at,updated_at"),
     ("public.repl_tombstones", "INSERT", "at,pk,tbl,v"),

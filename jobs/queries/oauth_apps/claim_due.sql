@@ -4,6 +4,7 @@ WITH candidates AS (
     LEFT JOIN oauth_app_tokens AS token ON token.oauth_app_id = app.id
     LEFT JOIN oauth_app_token_refresh_state AS state ON state.oauth_app_id = app.id
     WHERE app.active
+      AND app.client_kind = 'default'
       AND (token.oauth_app_id IS NULL OR token.expires_at <= now() + interval '5 minutes')
       AND COALESCE(state.retry_at, '-infinity'::timestamptz) <= now()
       AND (state.lease_expires_at IS NULL OR state.lease_expires_at <= now())

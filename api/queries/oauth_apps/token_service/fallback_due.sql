@@ -4,6 +4,7 @@ SELECT app.id,
        app.redirect_uri
 FROM oauth_apps AS app
 WHERE app.active
+  AND app.client_kind = 'default'
   AND ($2::uuid IS NULL OR app.id = $2)
   AND NOT EXISTS (
       SELECT 1

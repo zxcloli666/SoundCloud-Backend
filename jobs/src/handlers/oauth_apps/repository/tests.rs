@@ -17,6 +17,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              client_secret text NOT NULL,
              redirect_uri text NOT NULL,
              active boolean NOT NULL DEFAULT true,
+             client_kind text NOT NULL DEFAULT 'default',
              updated_at timestamptz NOT NULL DEFAULT now()
          );
          CREATE TABLE oauth_app_tokens (
@@ -173,6 +174,24 @@ async fn only_one_replica_claims_an_expired_app(pool: PgPool) -> anyhow::Result<
     );
 
     assert_eq!(first?.len() + second?.len(), 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn mobile_apps_are_never_claimed_for_a_token(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let web = insert_app(&pool, "web-client").await?;
+    let mobile = insert_app(&pool, "mobile-client").await?;
+    sqlx::query("UPDATE oauth_apps SET client_kind = 'mobile' WHERE id = $1")
+        .bind(mobile.id)
+        .execute(&pool)
+        .await?;
+    let repository = OAuthRefreshRepository::new(pool);
+
+    let claimed = repository.claim_due(10, Duration::from_secs(60)).await?;
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed.first().map(|app| app.id), Some(web.id));
     Ok(())
 }
 

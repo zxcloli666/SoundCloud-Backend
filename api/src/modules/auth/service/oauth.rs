@@ -160,6 +160,7 @@ impl AuthService {
             .into_iter()
             .filter(|app| {
                 app.active
+                    && app.client_kind == "default"
                     && !exclude_client_id
                         .is_some_and(|excluded| same_client_id(excluded, &app.client_id))
             })

@@ -1,6 +1,7 @@
 CREATE TABLE oauth_apps (
     id uuid PRIMARY KEY,
-    active boolean NOT NULL DEFAULT true
+    active boolean NOT NULL DEFAULT true,
+    client_kind text NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE sessions (

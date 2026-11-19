@@ -27,16 +27,7 @@ async fn create(
     State(st): State<AppState>,
     Json(dto): Json<CreateOAuthAppDto>,
 ) -> AppResult<Json<OAuthAppResponse>> {
-    let app = st
-        .oauth_apps
-        .create(
-            &dto.name,
-            &dto.client_id,
-            &dto.client_secret,
-            &dto.redirect_uri,
-            dto.active,
-        )
-        .await?;
+    let app = st.oauth_apps.create(&dto).await?;
     Ok(Json(app.into()))
 }
 
@@ -46,17 +37,7 @@ async fn update(
     Path(id): Path<String>,
     Json(dto): Json<UpdateOAuthAppDto>,
 ) -> AppResult<Json<OAuthAppResponse>> {
-    let app = st
-        .oauth_apps
-        .update(
-            &id,
-            dto.name.as_deref(),
-            dto.client_id.as_deref(),
-            dto.client_secret.as_deref(),
-            dto.redirect_uri.as_deref(),
-            dto.active,
-        )
-        .await?;
+    let app = st.oauth_apps.update(&id, &dto).await?;
     Ok(Json(app.into()))
 }
 
