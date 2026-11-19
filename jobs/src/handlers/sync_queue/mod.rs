@@ -3,6 +3,8 @@ mod client;
 mod connection;
 mod create_check;
 #[cfg(test)]
+mod follow_refusal_tests;
+#[cfg(test)]
 mod gate_tests;
 #[cfg(test)]
 mod intent_tests;
@@ -227,6 +229,11 @@ impl SyncQueueHandler {
                     SYNC_QUEUE_MAX_RETRIES,
                     "Remote outcome is ambiguous; automatic retry is disabled",
                 )
+                .await?;
+            return Ok(());
+        }
+        if is_self_follow(&mutation) {
+            self.close_refused(&mutation, "a user cannot follow themselves")
                 .await?;
             return Ok(());
         }
@@ -717,6 +724,21 @@ impl SyncQueueHandler {
         }
     }
 
+    async fn close_refused(
+        &self,
+        mutation: &ClaimedMutation,
+        message: &str,
+    ) -> Result<(), sqlx::Error> {
+        warn!(
+            action = %mutation.action_type,
+            target = %mutation.target_urn,
+            error = message,
+            "sync action refused for good, closed without retry"
+        );
+        self.repository.close_refused(mutation).await?;
+        Ok(())
+    }
+
     async fn postpone_after_failure(
         &self,
         mutation: &ClaimedMutation,
@@ -805,6 +827,11 @@ impl SyncQueueHandler {
                             .unwrap_or(RATE_LIMIT_RETRY_SECONDS),
                     )
                     .await?;
+            }
+            ActionError::SoundCloud(error)
+                if error.is_terminal_follow_refusal(&mutation.action_type) =>
+            {
+                self.close_refused(mutation, &error.to_string()).await?;
             }
             ActionError::InvalidPayload(_)
             | ActionError::InvalidRemoteResult(_)
@@ -922,6 +949,13 @@ fn retry_delay_seconds(retry_count: i32) -> i64 {
 
 fn account_action(mutation: &ClaimedMutation) -> (String, String) {
     (mutation.user_id.clone(), mutation.action_type.clone())
+}
+
+fn is_self_follow(mutation: &ClaimedMutation) -> bool {
+    matches!(
+        mutation.action_type.as_str(),
+        "follow_user" | "unfollow_user"
+    ) && actions::extract_sc_id(&mutation.user_id) == actions::extract_sc_id(&mutation.target_urn)
 }
 
 fn is_non_idempotent(action_type: &str) -> bool {

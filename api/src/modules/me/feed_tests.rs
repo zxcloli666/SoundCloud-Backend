@@ -107,6 +107,24 @@ async fn feed_and_follow_changes_work_with_external_services_unavailable(
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_self_follow_is_refused_before_anything_is_written(pool: PgPool) -> anyhow::Result<()> {
+    let me = service(&pool).await?;
+    for target in ["42", "soundcloud:users:42"] {
+        let error = me.follow_user("42", target).await.unwrap_err();
+        assert_eq!(error.public_code(), "cannot_follow_self");
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_queue")
+        .fetch_one(&pool)
+        .await?;
+    let mirrored: i64 = sqlx::query_scalar("SELECT count(*) FROM user_followings")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!((queued, mirrored), (0, 0));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn follow_and_upload_refresh_enqueue_commit_together(pool: PgPool) -> anyhow::Result<()> {
     let me = service(&pool).await?;
     sqlx::raw_sql(

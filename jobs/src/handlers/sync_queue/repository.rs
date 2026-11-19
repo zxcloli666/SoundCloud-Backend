@@ -279,6 +279,77 @@ impl SyncQueueRepository {
         Ok(())
     }
 
+    pub async fn close_refused(&self, mutation: &ClaimedMutation) -> Result<bool, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/lock_mirror.sql",
+            mutation.action_type,
+            mutation.user_id,
+            mutation.target_urn
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        let locked = sqlx::query_file_as!(
+            LockedMutation,
+            "queries/sync_queue/lock_for_finalize.sql",
+            mutation.id
+        )
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(locked) = locked else {
+            transaction.commit().await?;
+            return Ok(false);
+        };
+        let current =
+            locked.is_owned_by(mutation) && locked.generation == mutation.lease_generation;
+        if !current {
+            if locked.is_owned_by(mutation) {
+                sqlx::query_file!(
+                    "queries/sync_queue/release_lease.sql",
+                    mutation.id,
+                    mutation.lease_id,
+                    mutation.lease_generation
+                )
+                .execute(&mut *transaction)
+                .await?;
+            }
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
+            .fetch_one(&mut *transaction)
+            .await?;
+        if mutation.action_type == "follow_user" {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/refuse_follow.sql",
+                actions::extract_sc_id(&mutation.user_id),
+                mutation.target_urn
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        actions::settle_mirror(
+            &mut transaction,
+            "unfollow_user",
+            &mutation.user_id,
+            &mutation.target_urn,
+        )
+        .await?;
+        sqlx::query_file!(
+            "queries/sync_queue/release_lease.sql",
+            mutation.id,
+            mutation.lease_id,
+            mutation.lease_generation
+        )
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query_file_scalar!("queries/sync_queue/purge.sql", mutation.id, locked.intent_v)
+            .fetch_one(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
     pub async fn adopt(&self) -> Result<u64, sqlx::Error> {
         let mut adopted = 0;
         for _ in 0..SETTLE_ROUNDS {

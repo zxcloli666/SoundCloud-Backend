@@ -359,7 +359,7 @@ fn unconfirmed(desired: Option<&Value>) -> Option<&Value> {
     desired.filter(|desired| desired.as_object().is_some_and(|fields| !fields.is_empty()))
 }
 
-fn extract_sc_id(value: &str) -> &str {
+pub fn extract_sc_id(value: &str) -> &str {
     value.rsplit(':').next().unwrap_or(value)
 }
 
