@@ -1,11 +1,47 @@
-WITH watch AS (
+WITH lapse AS MATERIALIZED (
+    SELECT NOT EXISTS (
+        SELECT 1
+        FROM star_due_watch AS watch
+        WHERE watch.watched_at > now() - interval '1 day'
+    ) AS lapsed
+), watch AS (
     INSERT INTO star_due_watch (singleton, watched_at)
     VALUES (true, now())
     ON CONFLICT (singleton) DO UPDATE
     SET watched_at = EXCLUDED.watched_at
 ), marked AS (
     DELETE FROM star_due_marks
+    WHERE ctid = ANY (ARRAY(
+        SELECT mark.ctid
+        FROM star_due_marks AS mark
+        LIMIT 1000
+    ))
     RETURNING sc_track_id
+), swept AS MATERIALIZED (
+    SELECT star.sc_track_id
+    FROM star_track_tiers AS star
+    WHERE star.sc_track_id > $4
+    ORDER BY star.sc_track_id
+    LIMIT $5
+), picked AS MATERIALIZED (
+    SELECT picked.sc_track_id, bool_or(picked.expected) AS expected
+    FROM (
+        SELECT star.sc_track_id, true AS expected
+        FROM (
+            SELECT recheck.sc_track_id
+            FROM star_track_tiers AS recheck
+            WHERE recheck.recheck_at <= now()
+            ORDER BY recheck.recheck_at
+            LIMIT 1000
+        ) AS star
+        UNION ALL
+        SELECT marked.sc_track_id, true
+        FROM marked
+        UNION ALL
+        SELECT swept.sc_track_id, false
+        FROM swept
+    ) AS picked
+    GROUP BY picked.sc_track_id
 ), targets AS MATERIALIZED (
     SELECT star.sc_track_id,
            star.audio_due,
@@ -15,12 +51,9 @@ WITH watch AS (
            star.enrich_due,
            star.upgrade_from,
            star.upgrade_tried_at,
-           coalesce(star.recheck_at <= now(), false)
-               OR star.sc_track_id IN (SELECT marked.sc_track_id FROM marked) AS expected
-    FROM star_track_tiers AS star
-    WHERE $4::boolean
-       OR star.recheck_at <= now()
-       OR star.sc_track_id IN (SELECT marked.sc_track_id FROM marked)
+           picked.expected
+    FROM picked
+    JOIN star_track_tiers AS star ON star.sc_track_id = picked.sc_track_id
 ), due AS MATERIALIZED (
     SELECT star.sc_track_id,
            CASE
@@ -237,19 +270,14 @@ WITH watch AS (
     JOIN targets ON targets.sc_track_id = due.sc_track_id
 )
 SELECT (SELECT count(*) FROM changed) AS "written!",
-       count(compared.sc_track_id) AS "rechecked!",
-       count(*) FILTER (WHERE compared.flags_changed) AS "changed!",
-       count(*) FILTER (WHERE compared.flags_changed AND NOT compared.expected) AS "missed!",
-       count(*) FILTER (WHERE coalesce(compared.audio_due, star.audio_due)) AS "audio_due!",
-       count(*) FILTER (WHERE coalesce(compared.lookup_due, star.lookup_due)) AS "lookup_due!",
-       count(*) FILTER (WHERE coalesce(compared.embed_due, star.embed_due)) AS "embed_due!",
-       count(*) FILTER (WHERE coalesce(compared.align_due, star.align_due)) AS "align_due!",
-       count(*) FILTER (WHERE coalesce(compared.enrich_due, star.enrich_due)) AS "enrich_due!",
-       count(*) FILTER (
-           WHERE CASE
-                     WHEN compared.sc_track_id IS NULL THEN star.upgrade_from IS NOT NULL
-                     ELSE compared.upgrade_from IS NOT NULL
-                 END
-       ) AS "upgrade_due!"
-FROM star_track_tiers AS star
-LEFT JOIN compared ON compared.sc_track_id = star.sc_track_id
+       count(*) FILTER (WHERE compared.expected) AS "rechecked!",
+       count(*) FILTER (WHERE compared.expected AND compared.flags_changed) AS "changed!",
+       count(*) FILTER (WHERE NOT compared.expected) AS "swept!",
+       count(*) FILTER (WHERE NOT compared.expected AND compared.flags_changed) AS "missed!",
+       (SELECT lapse.lapsed FROM lapse) AS "lapsed!",
+       (
+           SELECT max(swept.sc_track_id)
+           FROM swept
+           HAVING count(*) >= $5
+       ) AS swept_through
+FROM compared
