@@ -34,7 +34,7 @@ from worker.runtime.engine_client import (
     SlotUnavailable,
     next_message_id,
 )
-from worker.runtime.memory import NO_USAGE, rss_mib
+from worker.runtime.memory import NO_USAGE
 from worker.runtime.protocol import Call, ErrorKind, Reply, SlotSpec
 from worker.runtime.supervisor import (
     LANE_GROUPS,
@@ -467,30 +467,50 @@ async def test_engine_memory_is_reported_per_engine_and_zero_once_stopped() -> N
     assert supervisor.memory() == {"a": NO_USAGE, "b": NO_USAGE}
 
 
-async def test_memory_guard_kills_the_engine_that_grew_and_spares_the_others() -> None:
-    plans = [EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))]
-    probe = await started_supervisor(plans)
-    try:
-        idle_total = rss_mib() + sum(usage.resident_mib for usage in probe.memory().values())
-    finally:
-        await probe.stop()
+GUARD_POLICY = replace(
+    TEST_POLICY, memory_growth_cap_mib=150, memory_guard_kill=True, memory_check_s=0.1
+)
+
+
+async def test_memory_guard_kills_the_engine_whose_call_grew_past_the_cap() -> None:
     counters = Counters()
-    policy = replace(
-        TEST_POLICY,
-        memory_limit_mib=idle_total + 150,
-        memory_reserve_mib=0,
-        memory_check_s=0.1,
-    )
-    supervisor = await started_supervisor(plans, policy, counters)
+    plans = [EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))]
+    supervisor = await started_supervisor(plans, GUARD_POLICY, counters)
     try:
         spared = dict((name, pid) for name, pid, _ in supervisor.engines())["b"]
         with pytest.raises(EngineKilled) as raised:
             await call_once(supervisor, "a", "ballast", {"mib": 400, "hold_s": 20.0}, 30.0)
         assert raised.value.cause == CAUSE_MEMORY
-        assert counters.value("engine_memory_kills_total", engine="a") == 1
-        assert counters.value("engine_memory_kills_total", engine="b") == 0
+        assert counters.value("engine_memory_over_cap_total", engine="a", kill="true") == 1
         assert dict((name, pid) for name, pid, _ in supervisor.engines())["b"] == spared
         assert await wait_until(lambda: supervisor.slot_state("a") == STATE_READY, 10.0)
+    finally:
+        await supervisor.stop()
+
+
+async def test_memory_guard_only_reports_when_kill_is_off() -> None:
+    counters = Counters()
+    policy = replace(GUARD_POLICY, memory_guard_kill=False)
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))], policy, counters)
+    try:
+        reply = await call_once(supervisor, "a", "ballast", {"mib": 400, "hold_s": 1.0}, 30.0)
+        assert reply.ok
+        assert counters.value("engine_memory_over_cap_total", engine="a", kill="false") >= 1
+        assert counters.value("slot_crashes_total", slot="a") == 0
+    finally:
+        await supervisor.stop()
+
+
+async def test_memory_guard_leaves_loading_and_idle_engines_alone() -> None:
+    counters = Counters()
+    heavy = fake_spec("a", load_ballast_mib=400, load_delay_s=0.5)
+    supervisor = await started_supervisor([EnginePlan("a", (heavy,))], GUARD_POLICY, counters)
+    try:
+        [(_, pid, _)] = supervisor.engines()
+        await asyncio.sleep(1.0)
+        assert (await call_once(supervisor, "a")).ok
+        assert supervisor.engines()[0][1] == pid
+        assert counters.value("engine_memory_over_cap_total", engine="a", kill="true") == 0
     finally:
         await supervisor.stop()
 
