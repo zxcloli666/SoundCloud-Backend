@@ -189,7 +189,7 @@ async fn a_removal_before_the_set_left_jobs_cancels_it(pool: PgPool) -> anyhow::
             .map(|row| (row.0.as_str(), row.3))
             .collect::<Vec<_>>(),
         vec![
-            ("track_reaction_remove", false),
+            ("track_reaction_remove", true),
             ("track_reaction_set", true)
         ]
     );

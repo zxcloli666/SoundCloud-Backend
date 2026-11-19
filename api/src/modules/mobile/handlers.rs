@@ -11,7 +11,7 @@ use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::state::AppState;
 
-use super::action_handlers::{delete_comment, remove_reaction, set_reaction};
+use super::action_handlers;
 use super::dto::{LinkCallback, LinkStatusQuery, UqChoice};
 use super::limits::Action;
 use super::reactions;
@@ -28,9 +28,12 @@ pub fn router() -> Router<AppState> {
         .route("/tracks/{track_urn}/reactions", get(reactions::read))
         .route(
             "/tracks/{track_urn}/reactions/{second}",
-            put(set_reaction).delete(remove_reaction),
+            put(action_handlers::set_reaction).delete(action_handlers::remove_reaction),
         )
-        .route("/comments/{comment_urn}", delete(delete_comment))
+        .route(
+            "/comments/{comment_urn}",
+            delete(action_handlers::delete_comment),
+        )
 }
 
 #[tracing::instrument(skip_all)]
