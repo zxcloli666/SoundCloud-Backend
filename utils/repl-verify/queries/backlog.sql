@@ -3,3 +3,4 @@ FROM pg_replication_slots AS slot
 WHERE slot.slot_type = 'logical'
   AND slot.database = current_database()
   AND slot.slot_name !~ '_graph(_|$)'
+  AND slot.slot_name !~ '^pg_[0-9]+_sync_[0-9]+_'
