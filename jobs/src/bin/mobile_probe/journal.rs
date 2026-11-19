@@ -6,6 +6,7 @@ use sc_mobile::{MobileError, MobileReply, MobileRequest};
 use serde_json::{Value, json};
 use url::Url;
 
+use crate::apiv1::Apiv1Request;
 use crate::scrub::Scrubber;
 
 const TEXT_KEPT_CHARS: usize = 4000;
@@ -45,6 +46,14 @@ impl Sent {
             method: request.method().to_string(),
             url: request.url().map(String::from).unwrap_or_default(),
             body: request.body().map(body_value),
+        }
+    }
+
+    pub fn of_apiv1(request: &Apiv1Request) -> Self {
+        Self {
+            method: request.method.to_string(),
+            url: request.url().map(String::from).unwrap_or_default(),
+            body: request.body.clone(),
         }
     }
 
