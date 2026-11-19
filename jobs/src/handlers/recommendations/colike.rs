@@ -17,6 +17,12 @@ const BUILD_SESSION: [&str; 2] = [
     "SET LOCAL statement_timeout = '1800s'",
     "SET LOCAL work_mem = '512MB'",
 ];
+const PREPARE_FRESH: [&str; 4] = [
+    include_str!("../../../queries/recommendations/colike/likers_fresh.sql"),
+    include_str!("../../../queries/recommendations/colike/likers_key.sql"),
+    include_str!("../../../queries/recommendations/colike/fresh_table.sql"),
+    include_str!("../../../queries/recommendations/colike/analyze_users.sql"),
+];
 const PAIRS_BY_A: &str = include_str!("../../../queries/recommendations/colike/pairs_by_a.sql");
 const PAIRS_BY_B: &str = include_str!("../../../queries/recommendations/colike/pairs_by_b.sql");
 const PACING: Pacing = Pacing {
@@ -85,11 +91,9 @@ async fn build_fresh(
     )
     .execute(&mut *transaction)
     .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../queries/recommendations/colike/prepare_fresh.sql"
-    ))
-    .execute(&mut *transaction)
-    .await?;
+    for statement in PREPARE_FRESH {
+        sqlx::query(statement).execute(&mut *transaction).await?;
+    }
     transaction.commit().await?;
     let mut fresh = 0;
     for pairs in [PAIRS_BY_A, PAIRS_BY_B] {
