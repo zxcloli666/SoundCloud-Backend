@@ -102,15 +102,18 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_intent_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_intent_user_followings;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_intent_user_likes_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_intent_user_likes_tracks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_mobile_credentials;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_soundcloud_connections;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_user_followings;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_user_likes_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_user_likes_tracks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_mobile_credentials;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_oauth_app_request_cooldowns;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_sessions;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_soundcloud_connections;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_track_artist_blocks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_mobile_credentials;
 CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_soundcloud_connections;
 CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_user_followings;
@@ -118,6 +121,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_user_likes_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_user_likes_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_discover_promoted;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_disliked_tracks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_resend_mobile_credentials;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_sc_egress_health;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_soundcloud_connections;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_subscriptions;
@@ -2942,6 +2946,332 @@ ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_repair FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_repair', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, link_v, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, retry_at, status, updated_at, uq_busy_until, uq_cooldown_until, uq_failures ON public.mobile_credentials FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_mobile_credentials', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_merge_mobile_credentials()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    pv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF NOT core THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'mobile_credentials' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+    pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id));
+    IF pv IS NOT NULL AND greatest(NEW.consent_v, NEW.plan_v, NEW.token_v) <= pv THEN
+        PERFORM nextval('public.scd_purge_block_mobile_credentials'::regclass);
+        RETURN NULL;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.consent_v < OLD.consent_v OR (core AND NEW.consent_v = OLD.consent_v) THEN
+            NEW.uq_opt_in := OLD.uq_opt_in;
+            NEW.consent_v := OLD.consent_v;
+        END IF;
+        IF NEW.plan_v < OLD.plan_v OR (core AND NEW.plan_v = OLD.plan_v) THEN
+            NEW.plan := OLD.plan;
+            NEW.plan_seen_at := OLD.plan_seen_at;
+            NEW.plan_v := OLD.plan_v;
+        END IF;
+        IF NEW.token_v < OLD.token_v OR (core AND NEW.token_v = OLD.token_v) THEN
+            NEW.oauth_app_id := OLD.oauth_app_id;
+            NEW.device_id := OLD.device_id;
+            NEW.access_token := OLD.access_token;
+            NEW.refresh_token := OLD.refresh_token;
+            NEW.expires_at := OLD.expires_at;
+            NEW.scope := OLD.scope;
+            NEW.linked_at := OLD.linked_at;
+            NEW.token_v := OLD.token_v;
+        END IF;
+        IF core THEN
+            NEW.status := OLD.status;
+            NEW.link_v := OLD.link_v;
+            NEW.refresh_generation := OLD.refresh_generation;
+            NEW.refresh_failure_count := OLD.refresh_failure_count;
+            NEW.refresh_lease_id := OLD.refresh_lease_id;
+            NEW.refresh_lease_expires_at := OLD.refresh_lease_expires_at;
+            NEW.last_refresh_attempt_at := OLD.last_refresh_attempt_at;
+            NEW.last_refresh_success_at := OLD.last_refresh_success_at;
+            NEW.last_refresh_error_kind := OLD.last_refresh_error_kind;
+            NEW.last_refresh_error := OLD.last_refresh_error;
+            NEW.retry_at := OLD.retry_at;
+            NEW.updated_at := OLD.updated_at;
+            NEW.uq_busy_until := OLD.uq_busy_until;
+            NEW.uq_cooldown_until := OLD.uq_cooldown_until;
+            NEW.uq_failures := OLD.uq_failures;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.mobile_credentials t WHERE t.soundcloud_user_id = NEW.soundcloud_user_id;
+        IF FOUND THEN
+            IF NEW.consent_v > o.consent_v OR NEW.plan_v > o.plan_v OR (NOT core AND (NEW.status, NEW.link_v, NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.updated_at) IS DISTINCT FROM (o.status, o.link_v, o.refresh_generation, o.refresh_failure_count, o.refresh_lease_id, o.refresh_lease_expires_at, o.last_refresh_attempt_at, o.last_refresh_success_at, o.last_refresh_error_kind, o.last_refresh_error, o.retry_at, o.updated_at)) OR NEW.token_v > o.token_v OR (NOT core AND (NEW.uq_busy_until, NEW.uq_cooldown_until, NEW.uq_failures) IS DISTINCT FROM (o.uq_busy_until, o.uq_cooldown_until, o.uq_failures)) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.mobile_credentials t SET
+                    uq_opt_in = CASE WHEN NEW.consent_v > o.consent_v THEN NEW.uq_opt_in ELSE o.uq_opt_in END,
+                    consent_v = greatest(o.consent_v, NEW.consent_v),
+                    plan = CASE WHEN NEW.plan_v > o.plan_v THEN NEW.plan ELSE o.plan END,
+                    plan_seen_at = CASE WHEN NEW.plan_v > o.plan_v THEN NEW.plan_seen_at ELSE o.plan_seen_at END,
+                    plan_v = greatest(o.plan_v, NEW.plan_v),
+                    status = CASE WHEN core THEN o.status ELSE NEW.status END,
+                    link_v = CASE WHEN core THEN o.link_v ELSE NEW.link_v END,
+                    refresh_generation = CASE WHEN core THEN o.refresh_generation ELSE NEW.refresh_generation END,
+                    refresh_failure_count = CASE WHEN core THEN o.refresh_failure_count ELSE NEW.refresh_failure_count END,
+                    refresh_lease_id = CASE WHEN core THEN o.refresh_lease_id ELSE NEW.refresh_lease_id END,
+                    refresh_lease_expires_at = CASE WHEN core THEN o.refresh_lease_expires_at ELSE NEW.refresh_lease_expires_at END,
+                    last_refresh_attempt_at = CASE WHEN core THEN o.last_refresh_attempt_at ELSE NEW.last_refresh_attempt_at END,
+                    last_refresh_success_at = CASE WHEN core THEN o.last_refresh_success_at ELSE NEW.last_refresh_success_at END,
+                    last_refresh_error_kind = CASE WHEN core THEN o.last_refresh_error_kind ELSE NEW.last_refresh_error_kind END,
+                    last_refresh_error = CASE WHEN core THEN o.last_refresh_error ELSE NEW.last_refresh_error END,
+                    retry_at = CASE WHEN core THEN o.retry_at ELSE NEW.retry_at END,
+                    updated_at = CASE WHEN core THEN o.updated_at ELSE NEW.updated_at END,
+                    oauth_app_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.oauth_app_id ELSE o.oauth_app_id END,
+                    device_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.device_id ELSE o.device_id END,
+                    access_token = CASE WHEN NEW.token_v > o.token_v THEN NEW.access_token ELSE o.access_token END,
+                    refresh_token = CASE WHEN NEW.token_v > o.token_v THEN NEW.refresh_token ELSE o.refresh_token END,
+                    expires_at = CASE WHEN NEW.token_v > o.token_v THEN NEW.expires_at ELSE o.expires_at END,
+                    scope = CASE WHEN NEW.token_v > o.token_v THEN NEW.scope ELSE o.scope END,
+                    linked_at = CASE WHEN NEW.token_v > o.token_v THEN NEW.linked_at ELSE o.linked_at END,
+                    token_v = greatest(o.token_v, NEW.token_v),
+                    uq_busy_until = CASE WHEN core THEN o.uq_busy_until ELSE NEW.uq_busy_until END,
+                    uq_cooldown_until = CASE WHEN core THEN o.uq_cooldown_until ELSE NEW.uq_cooldown_until END,
+                    uq_failures = CASE WHEN core THEN o.uq_failures ELSE NEW.uq_failures END
+                WHERE t.soundcloud_user_id = o.soundcloud_user_id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.mobile_credentials (access_token, consent_v, device_id, expires_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, link_v, linked_at, oauth_app_id, plan, plan_seen_at, plan_v, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_token, retry_at, scope, soundcloud_user_id, status, token_v, updated_at, uq_busy_until, uq_cooldown_until, uq_failures, uq_opt_in)
+        VALUES (NEW.access_token, NEW.consent_v, NEW.device_id, NEW.expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_error, NEW.last_refresh_error_kind, NEW.last_refresh_success_at, NEW.link_v, NEW.linked_at, NEW.oauth_app_id, NEW.plan, NEW.plan_seen_at, NEW.plan_v, NEW.refresh_failure_count, NEW.refresh_generation, NEW.refresh_lease_expires_at, NEW.refresh_lease_id, NEW.refresh_token, NEW.retry_at, NEW.scope, NEW.soundcloud_user_id, NEW.status, NEW.token_v, NEW.updated_at, NEW.uq_busy_until, NEW.uq_cooldown_until, NEW.uq_failures, NEW.uq_opt_in)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.mobile_credentials still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.mobile_credentials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_mobile_credentials();
+ALTER TABLE public.mobile_credentials ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_orphan_mobile_credentials()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.oauth_app_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.oauth_apps p WHERE p.id = NEW.oauth_app_id) THEN
+        PERFORM nextval('public.scd_orphan_mobile_credentials'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.mobile_credentials FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_mobile_credentials();
+ALTER TABLE public.mobile_credentials ENABLE REPLICA TRIGGER zz_orphan;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_guard_mobile_credentials()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    pv bigint;
+BEGIN
+    SELECT max(x.purged_v) INTO pv FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id);
+    IF greatest(OLD.consent_v, OLD.plan_v, OLD.token_v) > coalesce(pv, 0) THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('mobile_credentials', jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id)) ON CONFLICT DO NOTHING;
+        PERFORM nextval('public.scd_resend_mobile_credentials'::regclass);
+        RETURN NULL;
+    END IF;
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.mobile_credentials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_mobile_credentials();
+ALTER TABLE public.mobile_credentials ENABLE REPLICA TRIGGER zz_purge_guard;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_mobile_credentials()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.consent_v := public.scd_hlc(greatest(NEW.consent_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id))));
+        NEW.plan_v := public.scd_hlc(greatest(NEW.plan_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id))));
+        NEW.token_v := public.scd_hlc(greatest(NEW.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id))));
+        RETURN NEW;
+    END IF;
+    IF NEW.uq_opt_in IS DISTINCT FROM OLD.uq_opt_in AND NOT (coalesce(current_setting('scd.cmd', true), '') <> '' AND NEW.consent_v > greatest(OLD.consent_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)))) THEN
+        NEW.consent_v := public.scd_hlc(greatest(OLD.consent_v, NEW.consent_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id))));
+    ELSE
+        NEW.consent_v := greatest(OLD.consent_v, NEW.consent_v);
+    END IF;
+    IF (NEW.plan, NEW.plan_seen_at) IS DISTINCT FROM (OLD.plan, OLD.plan_seen_at) AND NOT (coalesce(current_setting('scd.cmd', true), '') <> '' AND NEW.plan_v > greatest(OLD.plan_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)))) THEN
+        NEW.plan_v := public.scd_hlc(greatest(OLD.plan_v, NEW.plan_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id))));
+    ELSE
+        NEW.plan_v := greatest(OLD.plan_v, NEW.plan_v);
+    END IF;
+    IF (NEW.oauth_app_id, NEW.device_id, NEW.access_token, NEW.refresh_token, NEW.expires_at, NEW.scope, NEW.linked_at) IS DISTINCT FROM (OLD.oauth_app_id, OLD.device_id, OLD.access_token, OLD.refresh_token, OLD.expires_at, OLD.scope, OLD.linked_at) AND NOT (coalesce(current_setting('scd.cmd', true), '') <> '' AND NEW.token_v > greatest(OLD.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)))) THEN
+        NEW.token_v := public.scd_hlc(greatest(OLD.token_v, NEW.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'mobile_credentials' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id))));
+    ELSE
+        NEW.token_v := greatest(OLD.token_v, NEW.token_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.mobile_credentials FOR EACH ROW EXECUTE FUNCTION public.scd_ver_mobile_credentials();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.mobile_credentials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.mobile_credentials ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE FUNCTION public.scd_merge_mobile_link_requests()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.code_verifier := OLD.code_verifier;
+            NEW.created_at := OLD.created_at;
+            NEW.device_id := OLD.device_id;
+            NEW.error := OLD.error;
+            NEW.expected_soundcloud_user_id := OLD.expected_soundcloud_user_id;
+            NEW.expires_at := OLD.expires_at;
+            NEW.oauth_app_id := OLD.oauth_app_id;
+            NEW.session_id := OLD.session_id;
+            NEW.state := OLD.state;
+            NEW.status := OLD.status;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.mobile_link_requests t WHERE t.id = NEW.id;
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.mobile_link_requests t SET
+                    code_verifier = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_verifier ELSE o.code_verifier END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    device_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.device_id ELSE o.device_id END,
+                    error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
+                    expected_soundcloud_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.expected_soundcloud_user_id ELSE o.expected_soundcloud_user_id END,
+                    expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
+                    oauth_app_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.oauth_app_id ELSE o.oauth_app_id END,
+                    session_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.session_id ELSE o.session_id END,
+                    state = CASE WHEN NEW.row_v > o.row_v THEN NEW.state ELSE o.state END,
+                    status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE t.id = o.id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'mobile_link_requests' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.mobile_link_requests (code_verifier, created_at, device_id, error, expected_soundcloud_user_id, expires_at, id, oauth_app_id, row_v, session_id, state, status)
+        VALUES (NEW.code_verifier, NEW.created_at, NEW.device_id, NEW.error, NEW.expected_soundcloud_user_id, NEW.expires_at, NEW.id, NEW.oauth_app_id, NEW.row_v, NEW.session_id, NEW.state, NEW.status)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.mobile_link_requests still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.mobile_link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_mobile_link_requests();
+ALTER TABLE public.mobile_link_requests ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_mobile_link_requests()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('mobile_link_requests', jsonb_build_object('id', OLD.id), OLD.row_v, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.mobile_link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_mobile_link_requests();
+CREATE OR REPLACE FUNCTION public.scd_erase_mobile_link_requests(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.mobile_link_requests t WHERE t.id = (k ->> 'id')::uuid;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_mobile_link_requests()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'mobile_link_requests' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.mobile_link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_mobile_link_requests();
+ALTER TABLE public.mobile_link_requests ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_mobile_link_requests()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(NEW.row_v);
+        RETURN NEW;
+    END IF;
+    IF (NEW.code_verifier, NEW.created_at, NEW.device_id, NEW.error, NEW.expected_soundcloud_user_id, NEW.expires_at, NEW.oauth_app_id, NEW.session_id, NEW.state, NEW.status) IS DISTINCT FROM (OLD.code_verifier, OLD.created_at, OLD.device_id, OLD.error, OLD.expected_soundcloud_user_id, OLD.expires_at, OLD.oauth_app_id, OLD.session_id, OLD.state, OLD.status) THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.mobile_link_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_mobile_link_requests();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.mobile_link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.mobile_link_requests ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE FUNCTION public.scd_merge_oauth_app_request_cooldowns()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -3114,7 +3444,7 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $f$
 BEGIN
-    IF EXISTS (SELECT 1 FROM public.soundcloud_connections c WHERE c.oauth_app_id = OLD.id) THEN
+    IF EXISTS (SELECT 1 FROM public.mobile_credentials c WHERE c.oauth_app_id = OLD.id) OR EXISTS (SELECT 1 FROM public.soundcloud_connections c WHERE c.oauth_app_id = OLD.id) THEN
         INSERT INTO public.repl_resend (tbl, pk) VALUES ('oauth_apps', jsonb_build_object('id', OLD.id)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_restrict_oauth_apps'::regclass);
         RETURN NULL;
@@ -4034,6 +4364,8 @@ BEGIN
             PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'login_requests' THEN
             PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'mobile_link_requests' THEN
+            PERFORM 1 FROM public.mobile_link_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'sc_egress_health' THEN
             PERFORM 1 FROM public.sc_egress_health t WHERE t.channel = (k ->> 'channel')::text FOR UPDATE;
         WHEN 'sessions' THEN
@@ -4073,6 +4405,8 @@ BEGIN
             PERFORM public.scd_erase_listening_history(k, upto);
         WHEN 'login_requests' THEN
             PERFORM public.scd_erase_login_requests(k, upto);
+        WHEN 'mobile_link_requests' THEN
+            PERFORM public.scd_erase_mobile_link_requests(k, upto);
         WHEN 'sc_egress_health' THEN
             PERFORM public.scd_erase_sc_egress_health(k, upto);
         WHEN 'sessions' THEN
@@ -7979,15 +8313,18 @@ FROM (VALUES
     ('guard_intent', 'user_followings', 'scd_guard_intent_user_followings'),
     ('guard_intent', 'user_likes_playlists', 'scd_guard_intent_user_likes_playlists'),
     ('guard_intent', 'user_likes_tracks', 'scd_guard_intent_user_likes_tracks'),
+    ('guard_result', 'mobile_credentials', 'scd_guard_result_mobile_credentials'),
     ('guard_result', 'soundcloud_connections', 'scd_guard_result_soundcloud_connections'),
     ('guard_result', 'sync_queue', 'scd_guard_result_sync_queue'),
     ('guard_result', 'user_followings', 'scd_guard_result_user_followings'),
     ('guard_result', 'user_likes_playlists', 'scd_guard_result_user_likes_playlists'),
     ('guard_result', 'user_likes_tracks', 'scd_guard_result_user_likes_tracks'),
+    ('orphan', 'mobile_credentials', 'scd_orphan_mobile_credentials'),
     ('orphan', 'oauth_app_request_cooldowns', 'scd_orphan_oauth_app_request_cooldowns'),
     ('orphan', 'sessions', 'scd_orphan_sessions'),
     ('orphan', 'soundcloud_connections', 'scd_orphan_soundcloud_connections'),
     ('orphan', 'track_artist_blocks', 'scd_orphan_track_artist_blocks'),
+    ('purge_block', 'mobile_credentials', 'scd_purge_block_mobile_credentials'),
     ('purge_block', 'soundcloud_connections', 'scd_purge_block_soundcloud_connections'),
     ('purge_block', 'sync_queue', 'scd_purge_block_sync_queue'),
     ('purge_block', 'user_followings', 'scd_purge_block_user_followings'),
@@ -7995,6 +8332,7 @@ FROM (VALUES
     ('purge_block', 'user_likes_tracks', 'scd_purge_block_user_likes_tracks'),
     ('resend', 'discover_promoted', 'scd_resend_discover_promoted'),
     ('resend', 'disliked_tracks', 'scd_resend_disliked_tracks'),
+    ('resend', 'mobile_credentials', 'scd_resend_mobile_credentials'),
     ('resend', 'sc_egress_health', 'scd_resend_sc_egress_health'),
     ('resend', 'soundcloud_connections', 'scd_resend_soundcloud_connections'),
     ('resend', 'subscriptions', 'scd_resend_subscriptions'),
@@ -8145,6 +8483,17 @@ BEGIN
             ('lyrics_lookup_state', 'zz_owner'),
             ('lyrics_lookup_state', 'zzz_suppress'),
             ('lyrics_repair', 'zz_guard'),
+            ('mobile_credentials', 'zz_guard_result'),
+            ('mobile_credentials', 'zz_merge'),
+            ('mobile_credentials', 'zz_orphan'),
+            ('mobile_credentials', 'zz_purge_guard'),
+            ('mobile_credentials', 'zz_ver'),
+            ('mobile_credentials', 'zzz_suppress'),
+            ('mobile_link_requests', 'zz_merge'),
+            ('mobile_link_requests', 'zz_tomb'),
+            ('mobile_link_requests', 'zz_tomb_check'),
+            ('mobile_link_requests', 'zz_ver'),
+            ('mobile_link_requests', 'zzz_suppress'),
             ('oauth_app_request_cooldowns', 'zz_merge'),
             ('oauth_app_request_cooldowns', 'zz_orphan'),
             ('oauth_app_request_cooldowns', 'zz_ver'),

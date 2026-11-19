@@ -1290,6 +1290,71 @@
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_repair_pkey", "primary": true, "where": null}
    ]
   },
+  "mobile_credentials": {
+   "columns": [
+    {"default": null, "generated": false, "name": "access_token", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "consent_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "device_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_refresh_attempt_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_refresh_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_refresh_error_kind", "notnull": false, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "last_refresh_success_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "link_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "linked_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "plan", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "plan_seen_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "plan_v", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "refresh_failure_count", "notnull": true, "type": "integer"},
+    {"default": "1", "generated": false, "name": "refresh_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "refresh_lease_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "refresh_lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "refresh_token", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "retry_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "scope", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": "'active'::text", "generated": false, "name": "status", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "token_v", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "uq_busy_until", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "uq_cooldown_until", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "uq_failures", "notnull": true, "type": "integer"},
+    {"default": "false", "generated": false, "name": "uq_opt_in", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "mobile_credentials_oauth_app_id_fkey", "on_delete": "r", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["soundcloud_user_id"], "expr": false, "keys": ["soundcloud_user_id"], "name": "mobile_credentials_pkey", "primary": true, "where": null}
+   ]
+  },
+  "mobile_link_requests": {
+   "columns": [
+    {"default": null, "generated": false, "name": "code_verifier", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "device_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "error", "notnull": false, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "expected_soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "session_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "state", "notnull": true, "type": "text"},
+    {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "mobile_link_requests_pkey", "primary": true, "where": null},
+    {"cols": ["state"], "expr": false, "keys": ["state"], "name": "mobile_link_requests_state_uq", "primary": false, "where": null}
+   ]
+  },
   "oauth_app_request_cooldowns": {
    "columns": [
     {"default": "1", "generated": false, "name": "failure_count", "notnull": true, "type": "integer"},

@@ -1643,6 +1643,28 @@ BEGIN
 END
 $f$;
 
+DROP FUNCTION IF EXISTS public.scd_purge_intent_mobile_credentials(jsonb);
+CREATE OR REPLACE FUNCTION public.scd_purge_intent_mobile_credentials(k jsonb, seen bigint)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    v bigint;
+    key jsonb;
+BEGIN
+    IF public.scd_role() <> 'core' THEN
+        RAISE EXCEPTION 'scd_purge_intent: only core purges public.mobile_credentials' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT greatest(t.consent_v, t.plan_v, t.token_v), jsonb_build_object('soundcloud_user_id', t.soundcloud_user_id) INTO v, key FROM public.mobile_credentials t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text FOR UPDATE;
+    IF NOT FOUND OR v IS DISTINCT FROM seen THEN
+        RETURN false;
+    END IF;
+    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES ('mobile_credentials', key, v);
+    DELETE FROM public.mobile_credentials t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text;
+    RETURN true;
+END
+$f$;
+
 DROP FUNCTION IF EXISTS public.scd_purge_intent_soundcloud_connections(jsonb);
 CREATE OR REPLACE FUNCTION public.scd_purge_intent_soundcloud_connections(k jsonb, seen bigint)
 RETURNS boolean
@@ -1760,6 +1782,8 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     CASE tbl
+        WHEN 'mobile_credentials' THEN
+            RETURN public.scd_purge_intent_mobile_credentials(k, seen);
         WHEN 'soundcloud_connections' THEN
             RETURN public.scd_purge_intent_soundcloud_connections(k, seen);
         WHEN 'sync_queue' THEN

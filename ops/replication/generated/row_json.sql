@@ -598,6 +598,30 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.lyrics_repair t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_mobile_credentials(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.mobile_credentials t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_mobile_link_requests(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.mobile_link_requests t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_oauth_app_request_cooldowns(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1616,6 +1640,10 @@ BEGIN
             RETURN public.scd_row_json_lyrics_lookup_state(k);
         WHEN 'lyrics_repair' THEN
             RETURN public.scd_row_json_lyrics_repair(k);
+        WHEN 'mobile_credentials' THEN
+            RETURN public.scd_row_json_mobile_credentials(k);
+        WHEN 'mobile_link_requests' THEN
+            RETURN public.scd_row_json_mobile_link_requests(k);
         WHEN 'oauth_app_request_cooldowns' THEN
             RETURN public.scd_row_json_oauth_app_request_cooldowns(k);
         WHEN 'oauth_app_token_issuance_reservations' THEN
