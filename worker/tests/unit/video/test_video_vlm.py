@@ -215,8 +215,9 @@ async def test_a_cut_with_a_pad_starts_that_much_later(harness: Harness) -> None
     plain = await harness.run(label="clip", prompt=None)
     padded = await harness.run(label="clip", prompt=None, pad_ms=2000)
 
-    grown = int(padded.fields["duration_ms"]) - int(plain.fields["duration_ms"])  # type: ignore[call-overload]
-    assert 1800 <= grown <= 2200
+    padded_ms, plain_ms = padded.fields["duration_ms"], plain.fields["duration_ms"]
+    assert isinstance(padded_ms, int) and isinstance(plain_ms, int)
+    assert 1800 <= padded_ms - plain_ms <= 2200
 
 
 async def test_a_known_static_label_needs_neither_the_file_nor_the_model(

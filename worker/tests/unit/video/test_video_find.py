@@ -152,8 +152,12 @@ async def test_the_runners_up_ride_along_with_their_window_and_the_pad_a_late_st
     outcome = await harness.lane._deliver(best, [late], harness.folder, Deadline.after(120))
 
     assert outcome.fields["candidate"] == 1
-    [runner_up] = outcome.fields["next"]  # type: ignore[misc]
-    assert {key: runner_up[key] for key in ("candidate", "kind", "offset_ms", "pad_ms", "loop")} == {
+    nexts = outcome.fields["next"]
+    assert isinstance(nexts, list)
+    [runner_up] = nexts
+    assert {
+        key: runner_up[key] for key in ("candidate", "kind", "offset_ms", "pad_ms", "loop")
+    } == {
         "candidate": 2,
         "kind": "clip",
         "offset_ms": 0,
