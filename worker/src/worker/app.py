@@ -39,6 +39,7 @@ from worker.domain.outcome import Producer
 from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
 from worker.domain.video_find import VideoFindLane
+from worker.domain.video_vlm import VideoVlmLane
 from worker.domain.workspace import WorkRoot, Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
 from worker.fetch_models import FASTTEXT_HOME_ENV, TTS_HOME_ENV
@@ -88,6 +89,7 @@ SLOT_LOADERS: Mapping[str, str] = {
     "train-taste": "worker.models.taste_trainer:TasteTrainerSlot",
     settings_module.LOCAL_LLM_SLOT: "worker.models.local_llm.slot:LocalLlmSlot",
     settings_module.TTS_SLOT: "worker.models.tts.slot:TtsSlot",
+    settings_module.VLM_SLOT: "worker.models.vlm:VlmSlot",
 }
 LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "audio": ("muq", "mulan"),
@@ -100,6 +102,7 @@ LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "speak": (settings_module.TTS_SLOT,),
     "highlight": (),
     "video-find": ("clip",),
+    "video-vlm": (settings_module.VLM_SLOT,),
 }
 PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "audio": {"mert": "muq", "clap": "mulan"},
@@ -110,6 +113,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "taste": {},
     "highlight": {},
     "video-find": {"clip": "clip"},
+    "video-vlm": {"vlm": settings_module.VLM_SLOT},
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
@@ -120,7 +124,7 @@ ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
 MULAN_TOWERS = "towers"
-AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight", "video-find"})
+AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight", "video-find", "video-vlm"})
 POOL_SPARE = 8
 EXIT_CRASHED = 1
 GATE_INTERVAL_S = 5.0
@@ -204,7 +208,7 @@ class Blueprint:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
         plans = [
-            tts_plan(settings, local_llm_plan(settings, plan))
+            vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
             for plan in plan_engines(runtime.mode, specs, replicas, groups)
         ]
         if isolated:
@@ -456,6 +460,22 @@ class Node:
                 self.workspace,
                 settings.audio,
                 settings.video,
+                self.contract.video_limits.part_bytes,
+                self.counters,
+            ),
+            "video-vlm": lambda: VideoVlmLane(
+                engines,
+                AudioSource(
+                    audio_session,
+                    timeout_s=settings.video.download_timeout_s,
+                    idle_s=settings.audio.download_idle_s,
+                    max_bytes=settings.video.max_download_mib << 20,
+                    counters=self.counters,
+                ),
+                self.workspace,
+                settings.video,
+                settings.vlm,
+                settings_module.vlm_ref(settings),
                 self.contract.video_limits.part_bytes,
                 self.counters,
             ),
@@ -842,6 +862,19 @@ def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     )
 
 
+def vlm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    if settings_module.VLM_SLOT not in plan.slot_names:
+        return plan
+    vlm = settings.vlm
+    return replace(
+        plan,
+        threads=vlm.threads,
+        nice=vlm.nice,
+        idle_unload_s=float(vlm.idle_unload_s),
+        env=LOCAL_LLM_ENV,
+    )
+
+
 def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     if settings_module.TTS_SLOT not in plan.slot_names:
         return plan
@@ -874,6 +907,14 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
             context_tokens=local.context_tokens,
             chunk_tokens=local.eval_chunk_tokens,
             state_cache_mib=local.state_cache_mib,
+        )
+    if name == settings_module.VLM_SLOT:
+        vlm = settings.vlm
+        options.update(
+            file=vlm.file,
+            mmproj=vlm.mmproj,
+            context_tokens=vlm.context_tokens,
+            gpu_layers=vlm.gpu_layers,
         )
     if name == settings_module.TTS_SLOT:
         options.update(tts_options(settings.tts))
@@ -911,6 +952,8 @@ def tts_options(tts: TtsSection) -> dict[str, object]:
 def slot_device(settings: Settings, name: str) -> str:
     if name == settings_module.LOCAL_LLM_SLOT:
         return settings_module.LOCAL_LLM_DEVICE
+    if name == settings_module.VLM_SLOT:
+        return settings_module.VLM_DEVICE
     if name == settings_module.TTS_SLOT:
         return settings_module.TTS_DEVICES[settings.tts.device]
     return "cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device

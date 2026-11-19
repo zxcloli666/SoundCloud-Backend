@@ -107,6 +107,27 @@ impl VideoFindConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct VideoVlmConfig {
+    pub in_flight: i64,
+    pub tick: Duration,
+    pub timeout: Duration,
+}
+
+impl VideoVlmConfig {
+    pub(super) fn from_env() -> Result<Self, ConfigError> {
+        let in_flight: i64 = env::parse("VIDEO_VLM_IN_FLIGHT", "0")?;
+        if in_flight > 0 && ObjectsConfig::from_env()?.is_none() {
+            return Err(ConfigError::Missing("VIDEO_S3_ENDPOINT".to_owned()));
+        }
+        Ok(Self {
+            in_flight,
+            tick: Duration::from_secs(env::positive_u64("VIDEO_VLM_TICK_SECONDS", 30)?),
+            timeout: Duration::from_secs(env::positive_u64("VIDEO_VLM_TIMEOUT_SECONDS", 4_200)?),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct VideoAccountsConfig {
     pub check_every: Duration,
     pub spotify_totp_version: u32,

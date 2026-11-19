@@ -380,6 +380,20 @@ impl WorkerLane {
                 WorkerReason::StaticVideo,
                 WorkerReason::InputsGone,
             ],
+            Self::VideoVlm => &[
+                WorkerReason::InvalidRequest,
+                WorkerReason::UndecodableAudio,
+                WorkerReason::AudioTooLarge,
+                WorkerReason::ModelOutputInvalid,
+                WorkerReason::DeadlineExceeded,
+                WorkerReason::EngineCrashed,
+                WorkerReason::OutOfMemory,
+                WorkerReason::DownloadFailed,
+                WorkerReason::InternalError,
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::InputsGone,
+            ],
             Self::Ai | Self::Speak => &[],
         }
     }
@@ -404,9 +418,12 @@ impl WorkerLane {
                 WorkerReason::PublicNodeTimeout,
                 WorkerReason::SeparationSkipped,
             ],
-            Self::Lyrics | Self::Collab | Self::Taste | Self::Highlight | Self::VideoFind => {
-                &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost]
-            }
+            Self::Lyrics
+            | Self::Collab
+            | Self::Taste
+            | Self::Highlight
+            | Self::VideoFind
+            | Self::VideoVlm => &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost],
             Self::Encode | Self::Ai | Self::Speak => &[],
         }
     }

@@ -241,6 +241,12 @@ def artifacts_for(slot: str, settings: Settings, environ: Mapping[str, str]) -> 
     if slot == settings_module.LOCAL_LLM_SLOT:
         local = settings.llm.local
         return [HubFile(spec.model, spec.revision, local.file, local.sha256)]
+    if slot == settings_module.VLM_SLOT:
+        vlm = settings.vlm
+        return [
+            HubFile(spec.model, spec.revision, vlm.file, vlm.sha256),
+            HubFile(spec.model, spec.revision, vlm.mmproj, vlm.mmproj_sha256),
+        ]
     if slot == FASTTEXT_SLOT:
         target = home(environ, FASTTEXT_HOME_ENV) / spec.model.rsplit("/", 1)[-1]
         return [VerifiedDownload((spec.model,), spec.revision, target)]

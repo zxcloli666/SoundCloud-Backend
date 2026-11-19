@@ -16,7 +16,7 @@ WITH due AS (
       )
       AND (
           dispatch.sc_track_id IS NULL
-          OR (dispatch.stage NOT IN ('dispatched', 'pending_vlm', 'found')
+          OR (dispatch.stage NOT IN ('dispatched', 'pending_vlm', 'vlm_dispatched', 'found')
               AND dispatch.next_at <= now())
       )
     ORDER BY COALESCE(track.play_count_sc, 0) + 10 * COALESCE(track.likes_count_sc, 0) DESC,

@@ -162,7 +162,7 @@ fn candidate_of(staged: &Staged, index: u32) -> JobResult<&StagedCandidate> {
     })
 }
 
-pub(super) fn final_key(track: &str, attempt: i32) -> String {
+pub(crate) fn final_key(track: &str, attempt: i32) -> String {
     format!("video/{track}-{attempt}.mp4")
 }
 

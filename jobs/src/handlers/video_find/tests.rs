@@ -25,7 +25,7 @@ use crate::objects::{Blobs, Listed, ObjectsError};
 
 const PAUSE: Duration = Duration::from_secs(3_600);
 
-fn config() -> VideoFindConfig {
+pub(crate) fn config() -> VideoFindConfig {
     VideoFindConfig {
         in_flight: 2,
         tick: Duration::from_secs(30),
@@ -52,16 +52,16 @@ fn config() -> VideoFindConfig {
 type Files = BTreeMap<String, (Vec<u8>, SystemTime)>;
 
 #[derive(Clone, Default)]
-struct Memory {
+pub(crate) struct Memory {
     files: Arc<Mutex<Files>>,
 }
 
 impl Memory {
-    fn keys(&self) -> Vec<String> {
+    pub(crate) fn keys(&self) -> Vec<String> {
         self.files.lock().unwrap().keys().cloned().collect()
     }
 
-    fn get(&self, key: &str) -> Option<Vec<u8>> {
+    pub(crate) fn get(&self, key: &str) -> Option<Vec<u8>> {
         self.files
             .lock()
             .unwrap()
@@ -69,7 +69,7 @@ impl Memory {
             .map(|(bytes, _)| bytes.clone())
     }
 
-    fn put_at(&self, key: &str, bytes: &[u8], at: SystemTime) {
+    pub(crate) fn put_at(&self, key: &str, bytes: &[u8], at: SystemTime) {
         self.files
             .lock()
             .unwrap()
@@ -504,6 +504,27 @@ async fn a_clip_whose_checksum_fails_is_not_stored(pool: PgPool) -> anyhow::Resu
     assert!(finish(&video, &corrupted).await.is_err());
     assert_eq!(stored(&pool, "11").await?, None);
     assert!(blobs.get("video/11-1.mp4").is_none());
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_track_waiting_for_or_sent_to_the_vlm_is_not_claimed_again(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    star_track(&pool, "11", 1, 1).await?;
+    star_track(&pool, "12", 1, 1).await?;
+    for (id, stage) in [("11", "pending_vlm"), ("12", "vlm_dispatched")] {
+        sqlx::query(
+            "INSERT INTO track_video_dispatch (sc_track_id, stage, attempts, next_at)
+             VALUES ($1, $2, 1, now() - interval '1 hour')",
+        )
+        .bind(id)
+        .bind(stage)
+        .execute(&pool)
+        .await?;
+    }
+
+    assert!(claim(&pool, 10).await?.is_empty());
     Ok(())
 }
 

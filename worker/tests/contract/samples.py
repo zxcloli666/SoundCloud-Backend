@@ -93,6 +93,13 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
                 },
             ],
         },
+        "video-vlm": {
+            "sc_track_id": "98765",
+            "attempt": 2,
+            "video_url": "https://storage.example/video-tmp/98765-2-0.mp4",
+            "duration_ms": 96000,
+            "offset_ms": 1500,
+        },
     }
 )
 
@@ -257,6 +264,21 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.INPUTS_GONE,
             }
         ),
+        "video-vlm": frozenset(
+            {
+                Reason.INVALID_REQUEST,
+                Reason.UNDECODABLE_AUDIO,
+                Reason.AUDIO_TOO_LARGE,
+                Reason.MODEL_OUTPUT_INVALID,
+                Reason.DEADLINE_EXCEEDED,
+                Reason.ENGINE_CRASHED,
+                Reason.OUT_OF_MEMORY,
+                Reason.DOWNLOAD_FAILED,
+                Reason.INTERNAL_ERROR,
+                Reason.ENGINE_RESTARTED,
+                Reason.INPUTS_GONE,
+            }
+        ),
         "highlight": frozenset(
             {
                 Reason.AUDIO_NOT_FOUND,
@@ -348,6 +370,14 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
                     "duration_ms": 6000,
                     "loop": True,
                     "scores": {"ber": 0.0211, "peak": 428.0},
+                }
+            return {}
+        case "video-vlm":
+            if ok:
+                return {
+                    "label": "loop",
+                    "model": "Qwen/Qwen3-VL-2B-Instruct-GGUF/Qwen3VL-2B-Q4_K_M.gguf@52d6c8ff",
+                    "scores": {"clip": 0.1, "loop": 0.8, "static": 0.1},
                 }
             return {}
     raise AssertionError(f"no fields for lane {lane}")

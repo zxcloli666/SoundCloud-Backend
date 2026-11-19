@@ -19,7 +19,7 @@ use database::{maintenance_pool_from_env, queue_pool_from_env, read_database_fro
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
 pub use scd::ScdNode;
-pub use video::{ObjectsConfig, VideoAccountsConfig, VideoFindConfig};
+pub use video::{ObjectsConfig, VideoAccountsConfig, VideoFindConfig, VideoVlmConfig};
 
 const DURATION_MAX_BATCH_SIZE: i64 = 500;
 const DURATION_MAX_CONCURRENCY: usize = 32;
@@ -36,6 +36,7 @@ pub struct JobsConfig {
     pub highlights: HighlightConfig,
     pub video_accounts: VideoAccountsConfig,
     pub video_find: VideoFindConfig,
+    pub video_vlm: VideoVlmConfig,
     pub durations: DurationConfig,
     pub indexing: IndexingConfig,
     pub sync_queue: SyncQueueConfig,
@@ -524,6 +525,7 @@ impl JobsConfig {
             taste: TasteConfig::from_env()?,
             highlights: HighlightConfig::from_env()?,
             video_find: VideoFindConfig::from_env()?,
+            video_vlm: VideoVlmConfig::from_env()?,
             video_accounts: VideoAccountsConfig::from_env()?,
             durations: DurationConfig::from_env()?,
             indexing: IndexingConfig::from_env()?,
