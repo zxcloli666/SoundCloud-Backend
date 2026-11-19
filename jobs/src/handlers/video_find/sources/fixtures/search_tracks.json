@@ -1,0 +1,132 @@
+{
+ "data": {
+  "searchV2": {
+   "__typename": "SearchResponse",
+   "tracksV2": {
+    "totalCount": 300,
+    "items": [
+     {
+      "item": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "id": "5zSu3mGfeaY3q3xDXFVBa0",
+        "uri": "spotify:track:5zSu3mGfeaY3q3xDXFVBa0",
+        "name": "gothrussia",
+        "duration": {
+         "totalMilliseconds": 171756
+        },
+        "artists": {
+         "items": [
+          {
+           "uri": "spotify:artist:4LUxNjkvi6e31jIesmppD3",
+           "profile": {
+            "name": "Psychosis"
+           }
+          }
+         ]
+        }
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "id": "3pMrHceAjkX7gMkzuo5AFb",
+        "uri": "spotify:track:3pMrHceAjkX7gMkzuo5AFb",
+        "name": "suicide idol",
+        "duration": {
+         "totalMilliseconds": 128012
+        },
+        "artists": {
+         "items": [
+          {
+           "uri": "spotify:artist:4LUxNjkvi6e31jIesmppD3",
+           "profile": {
+            "name": "Psychosis"
+           }
+          }
+         ]
+        }
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "id": "20vk1RUnF59XzEDyNlT1M6",
+        "uri": "spotify:track:20vk1RUnF59XzEDyNlT1M6",
+        "name": "dead",
+        "duration": {
+         "totalMilliseconds": 120561
+        },
+        "artists": {
+         "items": [
+          {
+           "uri": "spotify:artist:4LUxNjkvi6e31jIesmppD3",
+           "profile": {
+            "name": "Psychosis"
+           }
+          }
+         ]
+        }
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "id": "0VHnM9ulKGdLC9z7NsHoPC",
+        "uri": "spotify:track:0VHnM9ulKGdLC9z7NsHoPC",
+        "name": "Join Me",
+        "duration": {
+         "totalMilliseconds": 213098
+        },
+        "artists": {
+         "items": [
+          {
+           "uri": "spotify:artist:74aLweE8FHHf4yN5TWv1GM",
+           "profile": {
+            "name": "HIM"
+           }
+          }
+         ]
+        }
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "id": "6pXKSo89ne9mbPInCWk8dw",
+        "uri": "spotify:track:6pXKSo89ne9mbPInCWk8dw",
+        "name": "G\u00f6tterd\u00e4mmerung",
+        "duration": {
+         "totalMilliseconds": 183106
+        },
+        "artists": {
+         "items": [
+          {
+           "uri": "spotify:artist:6yCjbLFZ9qAnWfsy9ujm5Y",
+           "profile": {
+            "name": "Zeal & Ardor"
+           }
+          }
+         ]
+        }
+       }
+      }
+     }
+    ]
+   }
+  }
+ }
+}
