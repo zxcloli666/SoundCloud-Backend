@@ -88,6 +88,7 @@ DESIGN = {
     ),
     "cpu-tts": Profile("lane", "trusted", {"speak": 1}, {}),
     "gpu-tts": Profile("lane", "public", {"speak": 1}, {}),
+    "gpu-video": Profile("lane", "public", {"video-keyframe": 1, "video-shot": 1}, {}),
 }
 SPEAK_ONLY = {"speak"}
 NOT_YET = {"video-vlm"}
@@ -132,7 +133,8 @@ def test_profile_passes_both_public_locks(contract: Contract, name: str) -> None
     settings = load(name)
     s.check_public_lanes(settings, contract.public_lanes)
     speaks_only = set(settings.lanes.enabled) == SPEAK_ONLY
-    assert settings.is_public == bool(settings.small_card) or speaks_only
+    generates_only = set(settings.lanes.enabled) <= GENERATION
+    assert settings.is_public == bool(settings.small_card) or speaks_only or generates_only
     if settings.is_public:
         assert set(settings.lanes.enabled) <= contract.public_lanes
 
@@ -337,6 +339,14 @@ def test_the_tts_profile_needs_its_models_folder(contract: Contract) -> None:
         Blueprint.of(load("cpu-tts"), contract, {}, cpus=4)
 
 
-def test_no_shipped_profile_turns_on_video_generation() -> None:
+def test_only_the_video_profile_turns_on_video_generation() -> None:
     for path in (CONFIG_DIR / "profiles").glob("*.toml"):
-        assert not GENERATION & set(load(path.stem).lanes.enabled), path.stem
+        generates = bool(GENERATION & set(load(path.stem).lanes.enabled))
+        assert generates is (path.stem == "gpu-video"), path.stem
+
+
+def test_the_video_profile_offloads_both_pipelines_on_a_public_cuda_node() -> None:
+    settings = load("gpu-video")
+    assert settings.is_public and settings.runtime.device == "cuda"
+    assert settings.video_gen.offload is True
+    assert settings.runtime.idle_unload_s > 0

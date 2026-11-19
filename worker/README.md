@@ -136,6 +136,7 @@ clip, loop или static; грамматика не даёт другого от
 | `cpu` | `lane` | audio 2, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16, highlight 2, video-find 1 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
 | `cpu-tts` | `lane` | speak 1 | - | доверенный хост под озвучку, без GPU |
 | `gpu-tts` | `lane` | speak 1 | - | публичная нода под озвучку, движок на CUDA, образ `:gpu` |
+| `gpu-video` | `lane` | video-keyframe 1, video-shot 1 | - | публичная нода под генерацию видео, bf16 с выгрузкой в RAM, образ `:gpu` |
 
 ### Память и выбор карты
 

@@ -1,0 +1,15 @@
+[worker]
+trust = "public"
+
+[runtime]
+mode = "lane"
+device = "cuda"
+idle_unload_s = 600
+
+[lanes]
+enabled = ["video-keyframe", "video-shot"]
+capacity = { video-keyframe = 1, video-shot = 1 }
+required = { video-keyframe = false, video-shot = false }
+
+[video_gen]
+offload = true
