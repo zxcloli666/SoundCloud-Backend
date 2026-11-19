@@ -28,6 +28,12 @@ impl SyncQueueHandler {
                 return Ok(Flow::Done);
             }
         };
+        if mutation.action_type == "playlist_create"
+            && mutation.has_ambiguous_remote_attempt()
+            && !self.confirmed_not_created(mutation).await?
+        {
+            return Ok(Flow::Done);
+        }
         if self
             .bot_checks
             .remaining_seconds(&account_action(mutation))
@@ -66,7 +72,9 @@ impl SyncQueueHandler {
         match self.mobile.send(&mut linked, action, &request, &gate).await {
             Ok(reply) => {
                 let written = mobile::judge(&request, &reply);
-                match actions::written_or_closed(mutation, written) {
+                let remote = actions::written_or_closed(mutation, written)
+                    .and_then(|remote| mobile::shape(mutation, remote));
+                match remote {
                     Ok(remote) => {
                         let outcome = match remote {
                             actions::Remote::Written(_) => "written",
@@ -119,6 +127,27 @@ impl SyncQueueHandler {
                 Ok(Flow::Done)
             }
         }
+    }
+
+    async fn confirmed_not_created(
+        &self,
+        mutation: &ClaimedMutation,
+    ) -> Result<bool, anyhow::Error> {
+        let token = match self
+            .connections
+            .access_token(&self.token_client, &mutation.user_id)
+            .await
+        {
+            Ok(token) => token,
+            Err(error) => {
+                self.record_connection_failure(mutation, &error).await?;
+                return Ok(false);
+            }
+        };
+        Ok(self
+            .confirm_unclear_create(mutation, token)
+            .await?
+            .is_some())
     }
 
     async fn without_mobile(

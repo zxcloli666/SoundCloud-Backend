@@ -13,7 +13,7 @@ pub async fn run(
     journal: &mut Journal,
     track: Option<&str>,
 ) {
-    let create = playlists::create(TITLE, &[]);
+    let create = playlists::create(TITLE, false, &[]);
     let created = step(
         client,
         caller,

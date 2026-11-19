@@ -34,6 +34,10 @@ pub fn router() -> Router<AppState> {
             "/comments/{comment_urn}",
             delete(action_handlers::delete_comment),
         )
+        .route(
+            "/comments/{comment_urn}/like",
+            put(action_handlers::like_comment).delete(action_handlers::unlike_comment),
+        )
 }
 
 #[tracing::instrument(skip_all)]

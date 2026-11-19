@@ -10,6 +10,8 @@ mod mobile;
 mod mobile_flow;
 #[cfg(test)]
 mod mobile_tests;
+#[cfg(test)]
+mod mobile_write_tests;
 mod model;
 mod pause_group;
 #[cfg(test)]
@@ -230,6 +232,7 @@ impl SyncQueueHandler {
         }
         let route = mobile::route(&mutation.action_type);
         if route != Route::Apiv1
+            && mobile::carries_only_sent_fields(&mutation)
             && let Flow::Done = self.send_mobile(&mutation, route).await?
         {
             return Ok(());

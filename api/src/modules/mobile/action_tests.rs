@@ -423,3 +423,128 @@ async fn credential_status(pool: &PgPool) -> anyhow::Result<(String, i32)> {
     .fetch_one(pool)
     .await?)
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn an_unlinked_or_relink_account_cannot_like_a_comment(pool: PgPool) -> anyhow::Result<()> {
+    let fixture = fixture_graph(&pool, Token::Pair, Me::Account(ACCOUNT), Graph::Reactions).await?;
+    let queue = queue(&pool)?;
+
+    let like = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "soundcloud:comments:9", Some(TRACK))
+        .await;
+    let unlike = fixture
+        .mobile
+        .unlike_comment(&queue, ACCOUNT, "soundcloud:comments:9", Some(TRACK))
+        .await;
+    for refused in [like, unlike] {
+        let (status, code) = code_of(refused.unwrap_err()).await;
+        assert_eq!(
+            (status, code.as_str()),
+            (StatusCode::NOT_FOUND, "mobile_not_linked")
+        );
+    }
+
+    old_link(&pool).await?;
+    sqlx::query("UPDATE mobile_credentials SET status = 'relink_required'")
+        .execute(&pool)
+        .await?;
+    let stale = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "soundcloud:comments:9", Some(TRACK))
+        .await;
+    let (status, code) = code_of(stale.unwrap_err()).await;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::CONFLICT, "mobile_relink_required")
+    );
+    assert!(queued(&pool).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_comment_like_is_queued_with_the_track_from_our_tables_or_the_query(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let fixture = linked(&pool, Graph::Reactions).await?;
+    let queue = queue(&pool)?;
+    sqlx::query(
+        "INSERT INTO track_comments (id, sc_track_id, sc_comment_id, user_urn, body)
+         VALUES ($1, '123', '70', 'soundcloud:users:9999', 'hi')",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await?;
+
+    let known = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "70", Some("soundcloud:tracks:555"))
+        .await?;
+    let asked = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "71", Some("777"))
+        .await?;
+    let missing = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "72", None)
+        .await;
+    let broken = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "soundcloud:tracks:7", Some(TRACK))
+        .await;
+    let bad_track = fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "73", Some("soundcloud:users:1"))
+        .await;
+
+    assert_eq!(known["actionType"], "comment_like");
+    assert_eq!(known["targetUrn"], "soundcloud:comments:70");
+    assert_eq!(asked["targetUrn"], "soundcloud:comments:71");
+    let (status, code) = code_of(missing.unwrap_err()).await;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::BAD_REQUEST, "track_urn_required")
+    );
+    assert_eq!(status_of(broken.unwrap_err()), StatusCode::BAD_REQUEST);
+    assert_eq!(status_of(bad_track.unwrap_err()), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        queued(&pool).await?,
+        vec![
+            (
+                "comment_like".to_owned(),
+                "soundcloud:comments:70".to_owned(),
+                Some(json!({"parent_urn": "soundcloud:tracks:123"})),
+                false
+            ),
+            (
+                "comment_like".to_owned(),
+                "soundcloud:comments:71".to_owned(),
+                Some(json!({"parent_urn": "soundcloud:tracks:777"})),
+                false
+            ),
+        ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn an_unlike_cancels_the_queued_like_of_the_same_comment(pool: PgPool) -> anyhow::Result<()> {
+    let fixture = linked(&pool, Graph::Reactions).await?;
+    let queue = queue(&pool)?;
+
+    fixture
+        .mobile
+        .like_comment(&queue, ACCOUNT, "80", Some(TRACK))
+        .await?;
+    let unlike = fixture
+        .mobile
+        .unlike_comment(&queue, ACCOUNT, "80", Some(TRACK))
+        .await?;
+
+    assert_eq!(unlike["actionType"], "comment_unlike");
+    let rows = queued(&pool).await?;
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row.0 == "comment_like" && row.3));
+    assert!(rows.iter().any(|row| row.0 == "comment_unlike" && !row.3));
+    Ok(())
+}

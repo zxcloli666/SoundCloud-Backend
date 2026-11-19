@@ -1,5 +1,9 @@
+mod created;
+mod playlist;
 mod request;
 mod session;
+#[cfg(test)]
+mod shape_tests;
 #[cfg(test)]
 mod tests;
 mod verdict;
@@ -21,6 +25,8 @@ use super::write_gate::{WriteGate, WriteHold};
 use crate::handlers::mobile_refresh::MobileRefresh;
 use session::{RELINK_REQUIRED, Session};
 
+pub(super) use created::shape;
+pub(super) use playlist::carries_only_sent_fields;
 pub(super) use request::build;
 pub(super) use verdict::judge;
 
@@ -37,8 +43,13 @@ pub(super) enum Route {
 
 pub(super) fn route(action_type: &str) -> Route {
     match action_type {
-        "track_reaction_set" | "track_reaction_remove" | "comment_delete" => Route::Mobile,
-        "follow_user" | "unfollow_user" => Route::MobileThenApiv1,
+        "track_reaction_set"
+        | "track_reaction_remove"
+        | "comment_delete"
+        | "comment_like"
+        | "comment_unlike" => Route::Mobile,
+        "follow_user" | "unfollow_user" | "like_track" | "unlike_track" | "playlist_create"
+        | "playlist_delete" => Route::MobileThenApiv1,
         _ => Route::Apiv1,
     }
 }

@@ -2,11 +2,11 @@ use serde_json::json;
 
 use crate::request::MobileRequest;
 
-pub fn create(title: &str, track_urns: &[&str]) -> MobileRequest {
+pub fn create(title: &str, public: bool, track_urns: &[&str]) -> MobileRequest {
     MobileRequest::post(
         &["playlists"],
         &json!({
-            "playlist": { "title": title, "public": false },
+            "playlist": { "title": title, "public": public },
             "track_urns": track_urns,
         }),
     )
@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn a_private_playlist_is_created_with_the_tracks_beside_it() {
         assert_eq!(
-            shape(&create("probe", &["soundcloud:tracks:1"])),
+            shape(&create("probe", false, &["soundcloud:tracks:1"])),
             (
                 Method::POST,
                 Some("/playlists".to_owned()),
@@ -60,6 +60,17 @@ mod tests {
                     "track_urns": ["soundcloud:tracks:1"],
                 }))
             )
+        );
+    }
+
+    #[test]
+    fn a_public_playlist_says_so_in_its_body() {
+        assert_eq!(
+            shape(&create("probe", true, &[])).2,
+            Some(json!({
+                "playlist": { "title": "probe", "public": true },
+                "track_urns": [],
+            }))
         );
     }
 

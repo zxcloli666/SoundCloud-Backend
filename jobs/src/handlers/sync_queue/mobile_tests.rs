@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use base64::Engine;
@@ -18,22 +18,22 @@ use super::SyncQueueHandler;
 use super::mobile::MobileSender;
 use super::unclear_create_tests::{handler, run};
 
-const USER: &str = "17";
-const TRACK: &str = "soundcloud:tracks:42";
+pub(super) const USER: &str = "17";
+pub(super) const TRACK: &str = "soundcloud:tracks:42";
 const MOMENT: &str = "soundcloud:tracks:42:moments:5";
 const PERSON: &str = "soundcloud:users:9";
 const COMMENT: &str = "soundcloud:comments:5";
 const CAPTCHA_PAGE: &str = r#"{"url":"https://geo.captcha-delivery.com/interstitial/?cid=1"}"#;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Profile {
+pub(super) enum Profile {
     Missing,
     Active,
     RelinkRequired,
 }
 
 #[derive(Clone)]
-enum Canned {
+pub(super) enum Canned {
     Status(u16),
     Json(u16, Value),
     Captcha,
@@ -48,21 +48,21 @@ struct Seen {
 }
 
 #[derive(Clone, Default)]
-struct FakeMobile {
+pub(super) struct FakeMobile {
     seen: Arc<Mutex<Vec<Seen>>>,
     replies: Arc<Mutex<VecDeque<Canned>>>,
-    tokens: Arc<AtomicUsize>,
+    pub(super) tokens: Arc<AtomicUsize>,
 }
 
 impl FakeMobile {
-    fn reply_with(&self, replies: impl IntoIterator<Item = Canned>) {
+    pub(super) fn reply_with(&self, replies: impl IntoIterator<Item = Canned>) {
         self.replies
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(replies);
     }
 
-    fn seen(&self) -> Vec<(String, String)> {
+    pub(super) fn seen(&self) -> Vec<(String, String)> {
         self.seen
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -71,13 +71,13 @@ impl FakeMobile {
             .collect()
     }
 
-    fn sent(&self, index: usize) -> Option<(String, Option<String>)> {
+    pub(super) fn sent(&self, index: usize) -> Option<(String, Option<String>)> {
         let seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
         seen.get(index)
             .map(|seen| (seen.body.clone(), seen.authorization.clone()))
     }
 
-    fn count(&self) -> usize {
+    pub(super) fn count(&self) -> usize {
         self.seen
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -145,28 +145,73 @@ async fn serve_mobile(fake: FakeMobile) -> anyhow::Result<SocketAddr> {
     Ok(address)
 }
 
-async fn serve_apiv1(hits: Arc<AtomicUsize>) -> anyhow::Result<SocketAddr> {
-    let app = Router::new().fallback(move || {
-        let hits = hits.clone();
-        async move {
-            hits.fetch_add(1, Ordering::SeqCst);
-            Json(json!({}))
+#[derive(Default)]
+pub(super) struct Apiv1 {
+    calls: Mutex<Vec<String>>,
+    listing: Mutex<Vec<Value>>,
+}
+
+impl Apiv1 {
+    pub(super) fn calls(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(super) fn list(&self, playlists: Vec<Value>) {
+        *self.listing.lock().unwrap_or_else(PoisonError::into_inner) = playlists;
+    }
+}
+
+async fn apiv1_answer(State(apiv1): State<Arc<Apiv1>>, method: Method, uri: Uri) -> Response {
+    apiv1
+        .calls
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(format!("{method} {}", uri.path()));
+    match (method, uri.path()) {
+        (Method::POST, "/playlists") => {
+            (StatusCode::CREATED, Json(created_playlist())).into_response()
         }
-    });
+        (Method::GET, "/me/playlists") => {
+            let listing = apiv1
+                .listing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            Json(json!({"collection": listing, "next_href": null})).into_response()
+        }
+        _ => Json(json!({})).into_response(),
+    }
+}
+
+pub(super) fn created_playlist() -> Value {
+    json!({
+        "urn": "soundcloud:playlists:900",
+        "title": "Mix",
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "user": {"id": 17, "urn": "soundcloud:users:17", "username": "me"},
+        "tracks": []
+    })
+}
+
+async fn serve_apiv1(apiv1: Arc<Apiv1>) -> anyhow::Result<SocketAddr> {
+    let app = Router::new().fallback(apiv1_answer).with_state(apiv1);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     tokio::spawn(async move { axum::serve(listener, app).await });
     Ok(address)
 }
 
-struct World {
-    pool: PgPool,
-    handler: SyncQueueHandler,
-    mobile: FakeMobile,
-    apiv1: Arc<AtomicUsize>,
+pub(super) struct World {
+    pub(super) pool: PgPool,
+    pub(super) handler: SyncQueueHandler,
+    pub(super) mobile: FakeMobile,
+    pub(super) apiv1: Arc<Apiv1>,
 }
 
-async fn world(pool: PgPool, profile: Profile) -> anyhow::Result<World> {
+pub(super) async fn world(pool: PgPool, profile: Profile) -> anyhow::Result<World> {
     crate::db::migrations::run_core(&pool, None).await?;
     super::track_tests::connect_owner(&pool).await?;
     if profile != Profile::Missing {
@@ -174,7 +219,7 @@ async fn world(pool: PgPool, profile: Profile) -> anyhow::Result<World> {
     }
     let mobile = FakeMobile::default();
     let proxy = serve_mobile(mobile.clone()).await?;
-    let apiv1 = Arc::new(AtomicUsize::new(0));
+    let apiv1 = Arc::new(Apiv1::default());
     let mut handler = handler(&pool, serve_apiv1(apiv1.clone()).await?)?;
     handler.mobile = MobileSender::new(pool.clone(), Some(format!("http://{proxy}/").parse()?));
     Ok(World {
@@ -220,7 +265,7 @@ async fn link(pool: &PgPool, profile: Profile) -> anyhow::Result<()> {
 }
 
 impl World {
-    async fn queue(
+    pub(super) async fn queue(
         &self,
         action: &str,
         target: &str,
@@ -239,18 +284,23 @@ impl World {
         Ok(())
     }
 
-    async fn send(&self, action: &str, target: &str, payload: Option<Value>) -> anyhow::Result<()> {
+    pub(super) async fn send(
+        &self,
+        action: &str,
+        target: &str,
+        payload: Option<Value>,
+    ) -> anyhow::Result<()> {
         self.queue(action, target, payload).await?;
         run(&self.pool, &self.handler).await
     }
 
-    async fn queued(&self) -> anyhow::Result<i64> {
+    pub(super) async fn queued(&self) -> anyhow::Result<i64> {
         Ok(sqlx::query_scalar("SELECT count(*) FROM sync_queue")
             .fetch_one(&self.pool)
             .await?)
     }
 
-    async fn row(&self) -> anyhow::Result<(i32, bool, Option<String>)> {
+    pub(super) async fn row(&self) -> anyhow::Result<(i32, bool, Option<String>)> {
         Ok(
             sqlx::query_as("SELECT retry_count, dead, last_error FROM sync_queue")
                 .fetch_one(&self.pool)
@@ -258,7 +308,7 @@ impl World {
         )
     }
 
-    async fn credential(&self) -> anyhow::Result<(String, String, Option<String>)> {
+    pub(super) async fn credential(&self) -> anyhow::Result<(String, String, Option<String>)> {
         Ok(sqlx::query_as(
             "SELECT status, access_token, plan FROM mobile_credentials WHERE soundcloud_user_id = $1",
         )
@@ -267,8 +317,8 @@ impl World {
         .await?)
     }
 
-    fn apiv1_hits(&self) -> usize {
-        self.apiv1.load(Ordering::SeqCst)
+    pub(super) fn apiv1_hits(&self) -> usize {
+        self.apiv1.calls().len()
     }
 }
 
@@ -328,10 +378,12 @@ async fn an_unlinked_follow_keeps_the_apiv1_path_and_never_touches_mobile(
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_like_stays_on_apiv1_for_a_linked_user(pool: PgPool) -> anyhow::Result<()> {
+async fn a_playlist_like_stays_on_apiv1_for_a_linked_user(pool: PgPool) -> anyhow::Result<()> {
     let world = world(pool, Profile::Active).await?;
 
-    world.send("like_track", TRACK, None).await?;
+    world
+        .send("like_playlist", "soundcloud:playlists:5", None)
+        .await?;
 
     assert_eq!(world.mobile.count(), 0);
     assert_eq!(world.apiv1_hits(), 1);
@@ -457,7 +509,7 @@ async fn a_reaction_without_a_linked_profile_fails_with_a_reason_and_sends_nothi
     Ok(())
 }
 
-const SYNC_MAX: i32 = backend_contracts::SYNC_QUEUE_MAX_RETRIES;
+pub(super) const SYNC_MAX: i32 = backend_contracts::SYNC_QUEUE_MAX_RETRIES;
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_reaction_on_a_profile_that_needs_relinking_fails_with_its_reason(
