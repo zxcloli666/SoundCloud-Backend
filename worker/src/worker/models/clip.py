@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import open_clip
 import torch
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download
 
 from worker.runtime.protocol import Arrays, BadInput, SlotSpec
 
@@ -24,10 +24,8 @@ class ClipSlot:
         self._model: Any = None
 
     def load(self, spec: SlotSpec) -> None:
-        folder = snapshot_download(spec.model, revision=spec.revision, local_files_only=True)
-        model, _, _ = open_clip.create_model_and_transforms(
-            ARCHITECTURE, pretrained=f"{folder}/{WEIGHTS}"
-        )
+        path = hf_hub_download(spec.model, WEIGHTS, revision=spec.revision, local_files_only=True)
+        model, _, _ = open_clip.create_model_and_transforms(ARCHITECTURE, pretrained=path)
         self._model = model.eval()
 
     def warmup(self) -> None:
