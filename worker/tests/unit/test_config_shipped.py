@@ -117,7 +117,8 @@ def test_shipped_profiles_enable_fallbacks(profile: Path, base_env: dict[str, st
     settings = s.load(CONFIG_DIR, {**base_env, s.PROFILE_ENV: profile.stem})
     assert s.fallback_gaps(settings) == []
     if settings.is_public:
-        assert set(settings.lanes.enabled) <= {"audio", "lyrics", "transcribe", "speak"}
+        public = {"audio", "lyrics", "transcribe", "speak", "video-keyframe", "video-shot"}
+        assert set(settings.lanes.enabled) <= public
 
 
 @pytest.mark.parametrize(
