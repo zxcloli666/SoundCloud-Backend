@@ -46,10 +46,10 @@ impl MobileService {
             token: Secret::new(row.access_token),
             expires_at: row.expires_at,
         };
-        if standing.expires_at <= Utc::now() + REFRESH_DUE_BUFFER {
-            if let Some(token) = self.renewed(connection_id, None).await? {
-                standing.token = token;
-            }
+        if standing.expires_at <= Utc::now() + REFRESH_DUE_BUFFER
+            && let Some(token) = self.renewed(connection_id, None).await?
+        {
+            standing.token = token;
         }
         let reply = send(&client, &standing, op, request).await?;
         if reply.status != UNAUTHORIZED {
