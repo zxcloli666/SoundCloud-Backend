@@ -153,6 +153,7 @@ SELECT v.cls FROM (VALUES
     ('track_sync_stamps', 'C'),
     ('track_video_dispatch', 'P'),
     ('track_video_gen', 'P'),
+    ('track_video_pool', 'P'),
     ('track_videos', 'C'),
     ('track_work_aliases', 'P'),
     ('track_work_keys', 'P'),

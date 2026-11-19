@@ -13,7 +13,7 @@ pub(crate) mod tests;
 pub(crate) mod ytdlp;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use backend_contracts::pipeline::{VIDEO_FIND, VideoFindRequest};
 use backend_contracts::reasons::WorkerReason;
@@ -40,6 +40,7 @@ use self::ytdlp::Tube;
 
 const RETRY_NO_ACCOUNT: Duration = Duration::from_secs(60);
 const RETRY_PUBLISH: Duration = Duration::from_secs(120);
+const POOL_EVERY: Duration = Duration::from_secs(600);
 
 pub(crate) struct Pacing {
     pub(crate) retry_base: Duration,
@@ -108,10 +109,20 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
         );
         let mut ticker = tokio::time::interval(self.config.tick);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut kept: Option<Instant> = None;
         loop {
             tokio::select! {
                 () = cancellation.cancelled() => return Ok(()),
                 _ = ticker.tick() => {}
+            }
+            if kept.is_none_or(|at| at.elapsed() >= POOL_EVERY) {
+                match queue::keep_pool(&self.pool).await {
+                    Ok(()) => kept = Some(Instant::now()),
+                    Err(error) => {
+                        warn!(%error, "video pool was not kept; it resumes on the next tick");
+                        continue;
+                    }
+                }
             }
             if let Err(error) = self.dispatch(&bus, &cancellation).await {
                 warn!(%error, "video dispatch failed; it resumes on the next tick");

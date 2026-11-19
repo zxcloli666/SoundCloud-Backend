@@ -78,6 +78,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_storage_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_sync_stamps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_dispatch;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_gen;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_video_pool;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_videos;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_aliases;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_track_work_keys;
@@ -6248,6 +6249,8 @@ CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_video_gen FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_video_gen', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_video_pool FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_video_pool', 'cmd', 'migration', 'repl');
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_videos FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_videos', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_track_videos()
@@ -8358,6 +8361,7 @@ FROM (VALUES
     ('guard', 'track_sync_stamps', 'scd_guard_track_sync_stamps'),
     ('guard', 'track_video_dispatch', 'scd_guard_track_video_dispatch'),
     ('guard', 'track_video_gen', 'scd_guard_track_video_gen'),
+    ('guard', 'track_video_pool', 'scd_guard_track_video_pool'),
     ('guard', 'track_videos', 'scd_guard_track_videos'),
     ('guard', 'track_work_aliases', 'scd_guard_track_work_aliases'),
     ('guard', 'track_work_keys', 'scd_guard_track_work_keys'),
@@ -8688,6 +8692,7 @@ BEGIN
             ('track_sync_stamps', 'zzz_suppress'),
             ('track_video_dispatch', 'zz_guard'),
             ('track_video_gen', 'zz_guard'),
+            ('track_video_pool', 'zz_guard'),
             ('track_videos', 'zz_guard'),
             ('track_videos', 'zz_owner'),
             ('track_videos', 'zzz_suppress'),
