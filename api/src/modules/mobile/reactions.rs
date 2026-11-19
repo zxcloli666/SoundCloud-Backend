@@ -46,32 +46,54 @@ pub(super) struct ValueCount {
 }
 
 #[derive(Deserialize)]
-struct Reply {
-    data: Option<Data>,
+pub(super) struct Reply {
+    pub(super) data: Option<Data>,
     #[serde(default)]
-    errors: Vec<serde_json::Value>,
+    pub(super) errors: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Data {
-    target_interactions: Option<Vec<Target>>,
+pub(super) struct Data {
+    pub(super) target_interactions: Option<Vec<Target>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Target {
-    target_urn: String,
-    user_interaction: Option<String>,
-    interaction_counts: Option<Vec<Count>>,
+pub(super) struct Target {
+    pub(super) target_urn: String,
+    pub(super) user_interaction: Option<String>,
+    pub(super) interaction_counts: Option<Vec<Count>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Count {
-    interaction_type_value_urn: String,
+pub(super) struct Count {
+    pub(super) interaction_type_value_urn: String,
     #[serde(default)]
-    count: u64,
+    pub(super) count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReactionValue {
+    value_urn: &'static str,
+    emoji: &'static str,
+}
+
+#[tracing::instrument(skip_all)]
+pub(super) async fn values(_ctx: SessionCtx) -> Response {
+    no_store(value_list())
+}
+
+fn value_list() -> Vec<ReactionValue> {
+    sc_mobile::reactions::VALUES
+        .iter()
+        .map(|value| ReactionValue {
+            value_urn: value.value_urn,
+            emoji: value.emoji,
+        })
+        .collect()
 }
 
 #[tracing::instrument(skip_all)]
@@ -165,6 +187,18 @@ mod tests {
 
     fn body(value: serde_json::Value) -> Vec<u8> {
         value.to_string().into_bytes()
+    }
+
+    #[test]
+    fn the_value_list_is_the_client_set_with_its_emoji() {
+        assert_eq!(
+            serde_json::to_value(value_list()).ok(),
+            Some(json!([
+                { "valueUrn": "sc:interactiontypevalue:1f525", "emoji": "\u{1F525}" },
+                { "valueUrn": "sc:interactiontypevalue:1f44f", "emoji": "\u{1F44F}" },
+                { "valueUrn": "sc:interactiontypevalue:1f979", "emoji": "\u{1F979}" },
+            ]))
+        );
     }
 
     #[test]

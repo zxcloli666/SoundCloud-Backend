@@ -14,8 +14,8 @@ use crate::state::AppState;
 use super::action_handlers;
 use super::dto::{LinkCallback, LinkStatusQuery, UqChoice};
 use super::limits::Action;
-use super::reactions;
 use super::service::MobileService;
+use super::{comment_likes, reactions};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -25,7 +25,12 @@ pub fn router() -> Router<AppState> {
         .route("/auth/mobile/link/status", get(status))
         .route("/me/mobile", get(overview))
         .route("/me/mobile/uq", put(choose_uq))
+        .route("/tracks/reactions/values", get(reactions::values))
         .route("/tracks/{track_urn}/reactions", get(reactions::read))
+        .route(
+            "/tracks/{track_urn}/comments/likes",
+            get(comment_likes::read),
+        )
         .route(
             "/tracks/{track_urn}/reactions/{second}",
             put(action_handlers::set_reaction).delete(action_handlers::remove_reaction),
@@ -117,4 +122,12 @@ pub(super) fn no_store<T: Serialize>(value: T) -> Response {
         HeaderValue::from_static("no-store, private"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_static_values_route_and_the_track_routes_do_not_conflict() {
+        let _ = super::router();
+    }
 }
