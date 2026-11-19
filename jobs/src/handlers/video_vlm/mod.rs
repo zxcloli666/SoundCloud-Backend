@@ -3,6 +3,7 @@ pub mod haiku;
 pub mod prompt;
 mod queue;
 mod result;
+mod stored;
 #[cfg(test)]
 mod tests;
 
@@ -18,7 +19,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use self::haiku::Vision;
-use self::queue::{Claimed, Held};
+use self::queue::{Claimed, Held, HeldFile, Known};
 use crate::config::{VideoFindConfig, VideoVlmConfig};
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::Pacing;
@@ -107,6 +108,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
 
     pub(crate) async fn dispatch(&self, cancellation: &CancellationToken) -> JobResult {
         queue::requeue_unanswered(&self.pool, self.config.timeout).await?;
+        self.verify_stored().await?;
         let free = self.config.in_flight - queue::busy(&self.pool).await?;
         if free <= 0 {
             return Ok(());
@@ -133,6 +135,10 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             return;
         };
         let step = match &held.haiku {
+            Some(known) if known.label != VideoLabel::Static && held.file != HeldFile::Raw => {
+                self.keep_known(claim, held, known).await;
+                return;
+            }
             Some(known) if known.label != VideoLabel::Static => Step::Cut(known.label),
             _ if open => Step::Frames,
             _ => Step::Classify,
@@ -140,6 +146,18 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         if let Err(error) = self.publish(claim, held, step).await {
             warn!(track = %claim.sc_track_id, %error, "video VLM request was not published");
             self.release(claim, RETRY_PUBLISH, "publish_failed").await;
+        }
+    }
+
+    async fn keep_known(&self, claim: &Claimed, held: &Held, known: &Known) {
+        let (track, attempt) = (claim.sc_track_id.as_str(), claim.attempt);
+        let kept = match held.file {
+            HeldFile::Stored => self.keep_stored(track, attempt, held, known).await,
+            _ => self.keep_cut(track, attempt, held, known).await,
+        };
+        if let Err(error) = kept {
+            warn!(track, %error, "VLM verdict was not stored");
+            self.release(claim, RETRY_PUBLISH, "store_failed").await;
         }
     }
 

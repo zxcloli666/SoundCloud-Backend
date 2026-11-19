@@ -9,6 +9,7 @@ use backend_contracts::pipeline::{
 };
 use backend_contracts::reasons::{WorkerReason, WorkerStatus};
 use base64::Engine as _;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
@@ -23,7 +24,7 @@ use crate::handlers::video_accounts::check::mock::{Answer, Mock};
 use crate::handlers::video_accounts::{Seal, SpotifyKey, store};
 use crate::objects::{Blobs, Listed, ObjectsError};
 
-mod research;
+pub(crate) mod research;
 
 const PAUSE: Duration = Duration::from_secs(3_600);
 
@@ -47,6 +48,7 @@ pub(crate) fn config() -> VideoFindConfig {
         stage_timeout: Duration::from_secs(1_800),
         max_file_mib: 96,
         temp_ttl: Duration::from_secs(3 * 86_400),
+        vlm_backlog: 24,
         sweep_every: Duration::from_secs(3_600),
         ytdlp: "yt-dlp".into(),
         proxy_list: None,
@@ -95,6 +97,13 @@ impl Blobs for Memory {
         Ok(())
     }
 
+    async fn copy(&self, from: &str, to: &str) -> Result<(), ObjectsError> {
+        let mut files = self.files.lock().unwrap();
+        let (bytes, _) = files.get(from).cloned().unwrap();
+        files.insert(to.to_owned(), (bytes, SystemTime::now()));
+        Ok(())
+    }
+
     async fn delete(&self, key: &str) -> Result<(), ObjectsError> {
         self.files.lock().unwrap().remove(key);
         Ok(())
@@ -116,7 +125,7 @@ impl Blobs for Memory {
 }
 
 #[derive(Clone, Default)]
-struct Script {
+pub(crate) struct Script {
     blocked: Arc<Mutex<bool>>,
 }
 
@@ -147,13 +156,13 @@ impl Tube for Script {
     }
 }
 
-type Rig = VideoFind<Arc<Mock>, Memory, Script>;
+pub(crate) type Rig = VideoFind<Arc<Mock>, Memory, Script>;
 
 fn seal() -> Seal {
     Seal::new(&[5; 32])
 }
 
-fn rig(pool: &PgPool) -> (Rig, Arc<Mock>, Memory, Script) {
+pub(crate) fn rig(pool: &PgPool) -> (Rig, Arc<Mock>, Memory, Script) {
     let mock = Mock::new();
     let blobs = Memory::default();
     let tube = Script::default();
@@ -170,7 +179,12 @@ fn rig(pool: &PgPool) -> (Rig, Arc<Mock>, Memory, Script) {
     (video, mock, blobs, tube)
 }
 
-async fn star_track(pool: &PgPool, id: &str, plays: i64, tier: i16) -> anyhow::Result<()> {
+pub(crate) async fn star_track(
+    pool: &PgPool,
+    id: &str,
+    plays: i64,
+    tier: i16,
+) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, sharing, duration_ms,
                              storage_state, play_count_sc, metadata_artist)
@@ -188,7 +202,7 @@ async fn star_track(pool: &PgPool, id: &str, plays: i64, tier: i16) -> anyhow::R
     Ok(())
 }
 
-async fn account(pool: &PgPool, name: &str, source: &str) -> anyhow::Result<()> {
+pub(crate) async fn account(pool: &PgPool, name: &str, source: &str) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO video_accounts (source, name, secret, status) VALUES ($1, $2, $3, 'ok')",
     )
@@ -219,7 +233,10 @@ async fn claim_ids(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<(String, i32
         .collect())
 }
 
-async fn stage(pool: &PgPool, id: &str) -> anyhow::Result<(String, i32, Option<String>)> {
+pub(crate) async fn stage(
+    pool: &PgPool,
+    id: &str,
+) -> anyhow::Result<(String, i32, Option<String>)> {
     Ok(sqlx::query_as(
         "SELECT stage, attempts, last_error FROM track_video_dispatch WHERE sc_track_id = $1",
     )
@@ -228,7 +245,7 @@ async fn stage(pool: &PgPool, id: &str) -> anyhow::Result<(String, i32, Option<S
     .await?)
 }
 
-async fn staged_claim(
+pub(crate) async fn staged_claim(
     pool: &PgPool,
     blobs: &Memory,
     id: &str,
@@ -264,7 +281,7 @@ fn producer() -> Producer {
     }
 }
 
-fn done(id: &str, attempt: i64, reason: Option<WorkerReason>) -> VideoFindResult {
+pub(crate) fn done(id: &str, attempt: i64, reason: Option<WorkerReason>) -> VideoFindResult {
     let found = reason.is_none();
     VideoFindResult {
         sc_track_id: id.to_owned(),
@@ -285,7 +302,7 @@ fn done(id: &str, attempt: i64, reason: Option<WorkerReason>) -> VideoFindResult
     }
 }
 
-fn part_message(
+pub(crate) fn part_message(
     id: &str,
     attempt: i64,
     file: &[u8],
@@ -298,7 +315,7 @@ fn part_message(
     result
 }
 
-fn loop_message(
+pub(crate) fn loop_message(
     id: &str,
     attempt: i64,
     file: &[u8],
@@ -319,11 +336,20 @@ fn loop_message(
     result
 }
 
-async fn finish(video: &Rig, result: &VideoFindResult) -> anyhow::Result<()> {
+pub(crate) async fn finish(video: &Rig, result: &VideoFindResult) -> anyhow::Result<()> {
     video
         .finish(result.clone())
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+pub(crate) async fn held(pool: &PgPool, id: &str) -> anyhow::Result<Value> {
+    let row: (Option<Value>,) =
+        sqlx::query_as("SELECT payload FROM track_video_dispatch WHERE sc_track_id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    Ok(row.0.unwrap_or(Value::Null))
 }
 
 async fn stored(
@@ -533,7 +559,7 @@ async fn candidates_are_fetched_into_temp_keys_and_a_paused_youtube_account_stop
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_loop_arrives_in_parts_and_is_stored_from_them_and_every_temp_file_goes(
+async fn a_confident_loop_arrives_in_parts_and_waits_for_the_vlm_as_a_cut_file_while_every_temp_goes(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     star_track(&pool, "11", 1, 1).await?;
@@ -543,27 +569,35 @@ async fn a_loop_arrives_in_parts_and_is_stored_from_them_and_every_temp_file_goe
     let parts: [&[u8]; 2] = [b"the encoded", b" loop"];
 
     finish(&video, &loop_message("11", 1, file, &parts, 0)).await?;
-    assert_eq!(stored(&pool, "11").await?, None);
+    assert_eq!(stage(&pool, "11").await?.0, "dispatched");
     finish(&video, &loop_message("11", 1, file, &parts, 1)).await?;
 
-    assert_eq!(blobs.keys(), ["video/11-1.mp4"]);
-    assert_eq!(blobs.get("video/11-1.mp4").as_deref(), Some(&file[..]));
+    assert_eq!(stored(&pool, "11").await?, None);
+    assert_eq!(blobs.keys(), ["video-tmp/11-1-cut.mp4"]);
     assert_eq!(
-        stored(&pool, "11").await?,
-        Some((
-            "loop".to_owned(),
-            "youtube".to_owned(),
-            Some("ref1".to_owned()),
-            "video/11-1.mp4".to_owned(),
-            true
-        ))
+        blobs.get("video-tmp/11-1-cut.mp4").as_deref(),
+        Some(&file[..])
     );
-    assert_eq!(stage(&pool, "11").await?.0, "found");
+    assert_eq!(stage(&pool, "11").await?.0, "pending_vlm");
+    assert_eq!(
+        held(&pool, "11").await?,
+        json!({
+            "kind": "loop",
+            "s3_key": "video-tmp/11-1-cut.mp4",
+            "file": "cut",
+            "offset_ms": 3_839,
+            "duration_ms": 96_000,
+            "loop": true,
+            "source": "youtube",
+            "source_ref": "ref1",
+            "scores": {"ber": 0.02},
+        })
+    );
     Ok(())
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn an_old_workers_loop_without_a_file_stores_nothing_and_is_retried(
+async fn a_confident_verdict_without_a_file_waits_for_the_vlm_with_its_candidate_temp(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     star_track(&pool, "11", 1, 1).await?;
@@ -573,13 +607,18 @@ async fn an_old_workers_loop_without_a_file_stores_nothing_and_is_retried(
     finish(&video, &done("11", 1, None)).await?;
 
     assert_eq!(stored(&pool, "11").await?, None);
-    assert!(blobs.get("video/11-1.mp4").is_none());
-    assert_ne!(stage(&pool, "11").await?.0, "found");
+    assert_eq!(stage(&pool, "11").await?.0, "pending_vlm");
+    let held = held(&pool, "11").await?;
+    assert_eq!(
+        (held["s3_key"].clone(), held["file"].clone()),
+        (json!("video-tmp/11-1-1.mp4"), json!("raw"))
+    );
+    assert_eq!(blobs.keys(), ["video-tmp/11-1-1.mp4"]);
     Ok(())
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_clip_arrives_in_parts_in_any_order_and_is_written_once_whole(
+async fn a_clip_arrives_in_parts_in_any_order_and_is_held_once_whole(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     star_track(&pool, "11", 1, 1).await?;
@@ -594,11 +633,14 @@ async fn a_clip_arrives_in_parts_in_any_order_and_is_written_once_whole(
     assert_eq!(stage(&pool, "11").await?.0, "dispatched");
     finish(&video, &part_message("11", 1, file, &parts, 1)).await?;
 
-    assert_eq!(blobs.keys(), ["video/11-1.mp4"]);
-    assert_eq!(blobs.get("video/11-1.mp4").as_deref(), Some(&file[..]));
-    let row = stored(&pool, "11").await?.unwrap();
-    assert_eq!((row.0.as_str(), row.4), ("clip", false));
-    assert_eq!(stage(&pool, "11").await?.0, "found");
+    assert_eq!(blobs.keys(), ["video-tmp/11-1-cut.mp4"]);
+    assert_eq!(
+        blobs.get("video-tmp/11-1-cut.mp4").as_deref(),
+        Some(&file[..])
+    );
+    assert_eq!(stored(&pool, "11").await?, None);
+    assert_eq!(held(&pool, "11").await?["kind"], "clip");
+    assert_eq!(stage(&pool, "11").await?.0, "pending_vlm");
     Ok(())
 }
 
@@ -614,7 +656,8 @@ async fn a_clip_whose_checksum_fails_is_not_stored(pool: PgPool) -> anyhow::Resu
 
     assert!(finish(&video, &corrupted).await.is_err());
     assert_eq!(stored(&pool, "11").await?, None);
-    assert!(blobs.get("video/11-1.mp4").is_none());
+    assert!(blobs.get("video-tmp/11-1-cut.mp4").is_none());
+    assert_eq!(stage(&pool, "11").await?.0, "dispatched");
     Ok(())
 }
 
@@ -783,6 +826,12 @@ fn a_result_naming_no_candidate_or_no_window_is_refused_and_one_without_a_file_i
     ));
     assert!(matches!(
         result::judge(&loop_message("11", 1, b"ab", &[b"ab"], 0)),
+        Ok(Verdict::Found(..))
+    ));
+    let mut uncertain_with_file = loop_message("11", 1, b"ab", &[b"ab"], 0);
+    uncertain_with_file.uncertain = Some(true);
+    assert!(matches!(
+        result::judge(&uncertain_with_file),
         Ok(Verdict::Found(..))
     ));
 }

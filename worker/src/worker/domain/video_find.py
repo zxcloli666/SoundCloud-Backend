@@ -229,7 +229,7 @@ class VideoFindLane:
     async def _deliver(self, best: Evaluated, folder: Path, deadline: Deadline) -> Outcome:
         kind = "loop" if best.verdict.kind == "loop" else "clip"
         scores = {**best.measured.scores(), **best.proof}
-        if best.verdict.uncertain or best.candidate.kept:
+        if best.candidate.kept:
             info = await features.probe(best.path, deadline)
             return Outcome.ok(
                 kind=kind,
@@ -266,7 +266,7 @@ class VideoFindLane:
         return Outcome.ok_in_parts(
             parts,
             kind=kind,
-            uncertain=False,
+            uncertain=best.verdict.uncertain,
             candidate=best.candidate.index,
             offset_ms=max(offset_ms, 0),
             duration_ms=max(1, round(encoded.duration_s * MS)),

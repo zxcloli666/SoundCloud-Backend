@@ -19,9 +19,20 @@ pub(super) struct Held {
     pub(super) source_ref: Option<String>,
     pub(super) scores: Value,
     #[serde(default)]
+    pub(super) file: HeldFile,
+    #[serde(default)]
     pub(super) vlm_sent: i64,
     #[serde(default)]
     pub(super) haiku: Option<Known>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum HeldFile {
+    #[default]
+    Raw,
+    Cut,
+    Stored,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -42,10 +53,11 @@ pub(super) struct Claimed {
 
 impl Claimed {
     pub(super) fn message_id(&self, held: &Held) -> String {
-        format!(
-            "video_vlm:{}:{}:{}",
-            self.sc_track_id, self.attempt, held.vlm_sent
-        )
+        let (track, attempt, sent) = (&self.sc_track_id, self.attempt, held.vlm_sent);
+        match held.file {
+            HeldFile::Stored => format!("video_vlm:{track}:{attempt}:stored:{sent}"),
+            _ => format!("video_vlm:{track}:{attempt}:{sent}"),
+        }
     }
 }
 
@@ -63,6 +75,14 @@ pub(super) async fn busy(pool: &PgPool) -> JobResult<i64> {
         .await
         .map_err(JobError::retryable)?;
     Ok(row.busy)
+}
+
+pub(super) async fn waiting(pool: &PgPool) -> JobResult<i64> {
+    let row = sqlx::query_file!("queries/video_vlm/waiting.sql")
+        .fetch_one(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(row.waiting)
 }
 
 pub(super) async fn claim(pool: &PgPool, limit: i64) -> JobResult<Vec<Claimed>> {

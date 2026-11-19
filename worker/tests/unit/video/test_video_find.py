@@ -122,14 +122,16 @@ async def test_a_confident_loop_is_encoded_and_returned_in_parts_like_a_clip(
     assert media.stream_types(out) == ["video"]
 
 
-async def test_an_uncertain_loop_still_goes_to_the_vlm_without_a_file(harness: Harness) -> None:
+async def test_an_uncertain_loop_is_encoded_like_a_confident_one_and_says_so(
+    harness: Harness,
+) -> None:
     source = harness.folder / "c1.mp4"
     media.make_mpegts(source, seconds=2)
     best = evaluated(source, Verdict("loop", True, "loop_score"))
 
     outcome = await harness.lane._deliver(best, harness.folder, Deadline.after(60))
 
-    assert outcome.parts == ()
+    assert b"".join(outcome.parts)[4:8] == b"ftyp"
     assert (outcome.fields["kind"], outcome.fields["uncertain"]) == ("loop", True)
 
 

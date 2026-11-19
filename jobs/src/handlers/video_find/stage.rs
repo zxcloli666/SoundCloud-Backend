@@ -64,6 +64,10 @@ pub(super) fn temp_key(track: &str, attempt: i32, index: u32) -> String {
     format!("{TEMP_PREFIX}{track}-{attempt}-{index}.mp4")
 }
 
+pub(super) fn cut_key(track: &str, attempt: i32) -> String {
+    format!("{TEMP_PREFIX}{track}-{attempt}-cut.mp4")
+}
+
 enum Bring {
     Source(Failure),
     Store(ObjectsError),

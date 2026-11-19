@@ -18,7 +18,7 @@ use crate::llm::ledger;
 
 const FRAMES: [&[u8]; 3] = [b"jpeg-zero", b"jpeg-one", b"jpeg-two"];
 
-fn frames_result(id: &str, attempt: i64) -> VideoVlmResult {
+pub(super) fn frames_result(id: &str, attempt: i64) -> VideoVlmResult {
     let blob: Vec<u8> = FRAMES.concat();
     let digest = Sha256::digest(&blob);
     let mut offset = 0;

@@ -145,7 +145,7 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
     async fn dispatch(&self, bus: &Bus, cancellation: &CancellationToken) -> JobResult {
         let unstaged = self.config.stage_timeout + UNSTAGED_SLACK;
         queue::requeue_unanswered(&self.pool, self.config.timeout, unstaged).await?;
-        let free = self.config.in_flight - queue::busy(&self.pool).await?;
+        let free = self.free().await?;
         if free <= 0 {
             return Ok(());
         }
@@ -183,6 +183,15 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
             }
         }
         Ok(())
+    }
+
+    pub(crate) async fn free(&self) -> JobResult<i64> {
+        let backlog = queue::vlm_backlog(&self.pool).await?;
+        if backlog >= self.config.vlm_backlog {
+            debug!(backlog, "video search waits for the VLM checks to drain");
+            return Ok(0);
+        }
+        Ok(self.config.in_flight - queue::busy(&self.pool).await?)
     }
 
     async fn send(&self, bus: &Bus, claim: &Claimed) -> JobResult<bool> {
