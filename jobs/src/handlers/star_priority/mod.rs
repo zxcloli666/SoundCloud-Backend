@@ -6,7 +6,6 @@ mod tier;
 mod turns;
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use sqlx::{PgConnection, PgPool};
 
@@ -24,13 +23,43 @@ pub(crate) use self::turns::{Turn, Turns};
 
 const HISTORY_DAYS: i32 = 30;
 const QUALITY_UPGRADE_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
-const DUE_SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
+const SWEEP_ROWS: i64 = 100;
+const CATCH_UP_ROWS: i64 = 1_000;
 pub(crate) const STAR_SCAN_WINDOW: i64 = 2_000;
 
 pub(crate) struct StarTiersHandler {
     pool: PgPool,
     enrich_max_attempts: i16,
-    due_swept_at: Mutex<Option<Instant>>,
+    sweep: Mutex<Sweep>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Sweep {
+    after: String,
+    catching_up: bool,
+}
+
+impl Sweep {
+    fn rows(&self) -> i64 {
+        if self.catching_up {
+            CATCH_UP_ROWS
+        } else {
+            SWEEP_ROWS
+        }
+    }
+
+    fn next(self, lapsed: bool, swept_through: Option<String>) -> Self {
+        if lapsed {
+            return Self {
+                after: String::new(),
+                catching_up: true,
+            };
+        }
+        match swept_through {
+            Some(after) => Self { after, ..self },
+            None => Self::default(),
+        }
+    }
 }
 
 impl StarTiersHandler {
@@ -38,7 +67,7 @@ impl StarTiersHandler {
         Self {
             pool,
             enrich_max_attempts,
-            due_swept_at: Mutex::new(None),
+            sweep: Mutex::new(Sweep::default()),
         }
     }
 
@@ -50,46 +79,43 @@ impl StarTiersHandler {
         .fetch_one(&self.pool)
         .await
         .map_err(JobError::retryable)?;
-        let started = Instant::now();
-        let sweep = self.due_swept_at.lock().map_or(true, |swept_at| {
-            swept_at.is_none_or(|at| at.elapsed() >= DUE_SWEEP_EVERY)
-        });
+        let sweep = self
+            .sweep
+            .lock()
+            .map(|sweep| sweep.clone())
+            .unwrap_or_default();
         let due = sqlx::query_file!(
             "queries/star_priority/refresh_due.sql",
             AUDIO_INDEX_QUARANTINE_SECONDS,
             QUALITY_UPGRADE_COOLDOWN_SECONDS,
             self.enrich_max_attempts,
-            sweep
+            sweep.after,
+            sweep.rows()
         )
         .fetch_one(&self.pool)
         .await
         .map_err(JobError::retryable)?;
-        if sweep && let Ok(mut swept_at) = self.due_swept_at.lock() {
-            *swept_at = Some(started);
+        let next = sweep.clone().next(due.lapsed, due.swept_through);
+        let catching_up = next.catching_up;
+        if let Ok(mut current) = self.sweep.lock() {
+            *current = next;
         }
-        let path = if sweep {
-            StarDuePath::Sweep
-        } else {
-            StarDuePath::Dirty
-        };
-        record_star_due(path, due.rechecked, due.changed, due.missed);
+        record_star_due(StarDuePath::Dirty, due.rechecked, due.changed, 0);
+        record_star_due(StarDuePath::Sweep, due.swept, due.missed, due.missed);
         tracing::info!(
             star_users = refreshed.star_users,
             star_liked = refreshed.star_liked,
             star_other = refreshed.star_other,
             written = refreshed.written,
             removed = refreshed.removed,
-            due_path = path.as_str(),
             due_rechecked = due.rechecked,
             due_written = due.written,
             due_changed = due.changed,
+            due_swept = due.swept,
             due_missed = due.missed,
-            audio_due = due.audio_due,
-            lookup_due = due.lookup_due,
-            embed_due = due.embed_due,
-            align_due = due.align_due,
-            enrich_due = due.enrich_due,
-            upgrade_due = due.upgrade_due,
+            due_lapsed = due.lapsed,
+            sweep_after = sweep.after.as_str(),
+            sweep_catching_up = catching_up,
             "star track tiers refreshed"
         );
         Ok(())

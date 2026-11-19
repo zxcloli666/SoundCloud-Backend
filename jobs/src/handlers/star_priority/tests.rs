@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use sqlx::PgPool;
 
 use super::{
-    AUDIO_INDEX_QUARANTINE_SECONDS, QUALITY_UPGRADE_COOLDOWN_SECONDS, StarTiersHandler, Tier,
-    mark_liked_tracks, of_tracks,
+    AUDIO_INDEX_QUARANTINE_SECONDS, CATCH_UP_ROWS, QUALITY_UPGRADE_COOLDOWN_SECONDS, SWEEP_ROWS,
+    StarTiersHandler, Sweep, Tier, mark_liked_tracks, of_tracks,
 };
 
 const ENRICH_MAX_ATTEMPTS: i16 = 5;
@@ -291,17 +291,39 @@ async fn flags(pool: &PgPool) -> anyhow::Result<Vec<Flags>> {
     .await?)
 }
 
-async fn sweep(pool: &PgPool) -> anyhow::Result<(i64, i64)> {
+struct DuePass {
+    rechecked: i64,
+    changed: i64,
+    swept: i64,
+    missed: i64,
+    lapsed: bool,
+    swept_through: Option<String>,
+}
+
+async fn due_pass(pool: &PgPool, after: &str, rows: i64) -> anyhow::Result<DuePass> {
     let due = sqlx::query_file!(
         "queries/star_priority/refresh_due.sql",
         AUDIO_INDEX_QUARANTINE_SECONDS,
         QUALITY_UPGRADE_COOLDOWN_SECONDS,
         ENRICH_MAX_ATTEMPTS,
-        true
+        after,
+        rows
     )
     .fetch_one(pool)
     .await?;
-    Ok((due.changed, due.missed))
+    Ok(DuePass {
+        rechecked: due.rechecked,
+        changed: due.changed,
+        swept: due.swept,
+        missed: due.missed,
+        lapsed: due.lapsed,
+        swept_through: due.swept_through,
+    })
+}
+
+async fn sweep(pool: &PgPool) -> anyhow::Result<(i64, i64)> {
+    let pass = due_pass(pool, "", 10_000).await?;
+    Ok((pass.changed + pass.missed, pass.missed))
 }
 
 async fn marks(pool: &PgPool) -> anyhow::Result<Vec<String>> {
@@ -364,8 +386,9 @@ async fn writes_after_a_sweep_reach_the_flags_through_their_marks(
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_sweep_fixes_and_counts_a_change_no_mark_reached(pool: PgPool) -> anyhow::Result<()> {
     seed_uploaded_star_tracks(&pool).await?;
-    let handler = StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS);
-    handler.refresh().await?;
+    StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS)
+        .refresh()
+        .await?;
     sqlx::raw_sql(
         "ALTER TABLE audio_index_wire_state DISABLE TRIGGER star_due_mark_update;
          UPDATE audio_index_wire_state SET upload_generation = 2 WHERE sc_track_id = '302';",
@@ -373,7 +396,7 @@ async fn the_sweep_fixes_and_counts_a_change_no_mark_reached(pool: PgPool) -> an
     .execute(&pool)
     .await?;
 
-    handler.refresh().await?;
+    due_pass(&pool, "", 0).await?;
     let stale: bool =
         sqlx::query_scalar("SELECT audio_due FROM star_track_tiers WHERE sc_track_id = '302'")
             .fetch_one(&pool)
@@ -702,4 +725,83 @@ async fn every_dirty_pass_leaves_the_flags_of_the_old_full_pass(
     assert_eq!(flags(&pool).await?, before);
     assert_eq!(before.len(), 7);
     Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_sweep_walks_a_slice_per_pass_and_wraps_at_the_end(pool: PgPool) -> anyhow::Result<()> {
+    seed_uploaded_star_tracks(&pool).await?;
+    assert!(due_pass(&pool, "", 0).await?.lapsed);
+    StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS)
+        .refresh()
+        .await?;
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT sc_track_id FROM star_track_tiers ORDER BY sc_track_id")
+            .fetch_all(&pool)
+            .await?;
+    assert!(ids.len() > 2);
+
+    let mut after = String::new();
+    let mut walked = Vec::new();
+    loop {
+        let pass = due_pass(&pool, &after, 2).await?;
+        assert!(!pass.lapsed);
+        assert_eq!(pass.rechecked, 0);
+        walked.push(pass.swept);
+        match pass.swept_through {
+            Some(through) => after = through,
+            None => break,
+        }
+    }
+
+    assert_eq!(walked.iter().sum::<i64>(), i64::try_from(ids.len())?);
+    assert!(walked.iter().all(|swept| *swept <= 2));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_pass_rechecks_only_the_marked_and_the_due_rows(pool: PgPool) -> anyhow::Result<()> {
+    seed_uploaded_star_tracks(&pool).await?;
+    StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS)
+        .refresh()
+        .await?;
+    sqlx::raw_sql(
+        "UPDATE lyrics_lookup_state SET next_run_at = now() + interval '30 days'
+         WHERE sc_track_id = '301';
+         UPDATE star_track_tiers SET recheck_at = now() - interval '1 minute'
+         WHERE sc_track_id = '303';",
+    )
+    .execute(&pool)
+    .await?;
+
+    let pass = due_pass(&pool, "", 0).await?;
+
+    assert_eq!((pass.rechecked, pass.swept), (2, 0));
+    assert!(marks(&pool).await?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn the_sweep_catches_up_from_the_start_after_a_lapse_and_slows_down_after_a_wrap() {
+    let walking = Sweep {
+        after: "500".to_owned(),
+        catching_up: false,
+    };
+    assert_eq!(walking.rows(), SWEEP_ROWS);
+
+    let lapsed = walking.clone().next(true, Some("600".to_owned()));
+    assert_eq!(
+        lapsed,
+        Sweep {
+            after: String::new(),
+            catching_up: true
+        }
+    );
+    assert_eq!(lapsed.rows(), CATCH_UP_ROWS);
+
+    let caught = lapsed.next(false, Some("900".to_owned()));
+    assert_eq!(caught.after, "900");
+    assert!(caught.catching_up);
+
+    assert_eq!(caught.next(false, None), Sweep::default());
+    assert_eq!(walking.next(false, Some("700".to_owned())).after, "700");
 }

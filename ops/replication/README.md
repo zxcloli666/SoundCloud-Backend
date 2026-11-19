@@ -220,6 +220,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 153. `0467_video_pool`: `track_video_pool` (class P): the ranked shelf of tier-1 tracks that have no dispatch row, with a popularity score; jobs fills and rescores it, the video claim reads it by score and drains it. Plus a partial index of `track_video_dispatch` on `next_at` for the open stages. Small tables, plain `CREATE INDEX IF NOT EXISTS`.
 154. `0468_scd_install`: the generated SQL again, on top of 0466: `track_video_pool` gets its registry, purge entry, row hash and guard; every other trigger is kept.
 155. `0469_scd_install`: the generated SQL again, on top of 0468: every C table gets `zz_owner_copy`, and its owner function gets the copy path below. A tablesync COPY into an api table that is empty when the copy starts skips the per-row lookups (about 10x faster: 1M rows of `catalog_audience_ids` take 5 s instead of 53 s locally), then one statement drops the copied rows still held in `cmd_pending`. Every other trigger is kept.
+156. `0470_star_track_tiers_recheck_index`: a partial index of `star_track_tiers` (class P) on `recheck_at`, so the due refresh picks the rows whose recheck time came without reading the table. `CREATE INDEX CONCURRENTLY`, no schema change.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -266,6 +267,8 @@ Order for 0465-0466: only after the `PASS=check` of 0453-0454 ended with 0 and 0
 Order for 0467-0468: core, main and star in any order (P), then jobs of this release on core. A jobs of the old release keeps working on core with 0467 (it ignores the table). The new jobs fills the shelf on its first tick, which takes about a minute.
 
 Order for 0469: core, main and star in any order. The new trigger takes a short lock on each C table, so no tablesync may be copying on the node at the time: the copy holds its table for the whole COPY and the install stops on `lock_timeout`. A copy that started before 0469 keeps the per-row path; restart it to get the copy path. No api or jobs change.
+
+Order for 0470: core, main and star in any order (P, an index only), then jobs of this release on core. A jobs of this release without the index still works, it only reads the whole table for the recheck rows.
 
 Order for 0446 and the 0442 rewrite: any node, any time. `jobs-migrate` of this release drops the two foreign keys of a host that applied the old 0442 (5 s lock timeout on `tracks`; on a timeout it fails and is run again).
 
