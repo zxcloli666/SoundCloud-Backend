@@ -1,24 +1,21 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::request::MobileRequest;
 
 pub fn create(track_urn: &str) -> MobileRequest {
-    MobileRequest::post(
-        &["likes", "tracks", "create"],
-        &json!({ "track_urn": track_urn }),
-    )
+    MobileRequest::post(&["likes", "tracks", "create"], &likes_body(track_urn))
 }
 
 pub fn delete(track_urn: &str) -> MobileRequest {
-    MobileRequest::post(
-        &["likes", "tracks", "delete"],
-        &json!({ "track_urn": track_urn }),
-    )
+    MobileRequest::post(&["likes", "tracks", "delete"], &likes_body(track_urn))
+}
+
+fn likes_body(track_urn: &str) -> Value {
+    json!({ "likes": [{ "target_urn": track_urn }] })
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
     use wreq::Method;
 
     use super::*;
@@ -37,7 +34,7 @@ mod tests {
 
     #[test]
     fn a_like_is_created_and_deleted_by_posting_the_track() {
-        let body = Some(json!({ "track_urn": "soundcloud:tracks:1" }));
+        let body = Some(json!({ "likes": [{ "target_urn": "soundcloud:tracks:1" }] }));
 
         assert_eq!(
             shape(&create("soundcloud:tracks:1")),
