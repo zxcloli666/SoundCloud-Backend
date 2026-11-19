@@ -47,7 +47,7 @@ async fn probe(
         (Some(urn), None) => format!("created {urn}"),
         (None, None) => "the answer names no comment".to_owned(),
     };
-    let refused = matches!(&outcome, Ok(reply) if (400..500).contains(&reply.status));
+    let failed = failure_note(&outcome).is_some();
     let blocked = datadome::is_datadome(&outcome);
     journal.reply(
         "comment.post",
@@ -56,6 +56,10 @@ async fn probe(
         datadome::with_datadome(note, blocked),
     );
     if blocked {
+        return;
+    }
+    if failed {
+        journal.skip("comment.delete", "the post failed, nothing to delete");
         return;
     }
 
@@ -85,10 +89,6 @@ async fn probe(
     journal.reply("comment.list", Sent::of(&list), &outcome, notes);
 
     let Some(urn) = found else {
-        if refused {
-            journal.skip("comment.delete", "the post was refused, nothing to delete");
-            return;
-        }
         journal.event(
             "comment.delete",
             false,
