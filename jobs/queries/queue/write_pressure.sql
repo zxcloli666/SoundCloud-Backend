@@ -3,6 +3,7 @@ SELECT COALESCE((
            FROM pg_replication_slots AS slot
            WHERE slot.slot_type = 'logical'
              AND slot.slot_name !~ '_graph(_|$)'
+             AND slot.slot_name !~ '^pg_[0-9]+_sync_[0-9]+_'
        ), 0)::bigint AS replication_backlog_bytes,
        (
            SELECT count(*)

@@ -4,19 +4,21 @@ wp_lag() { val postgres "SELECT pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current
 wp_slot() { val postgres "SELECT pg_catalog.pg_create_logical_replication_slot('$1', 'pgoutput')" > /dev/null; }
 wp_wal() { val postgres "SELECT pg_catalog.pg_logical_emit_message(true, 'scd_b1_pressure', repeat('x', $1))" > /dev/null; }
 
-say "write pressure: the bulk governor counts the scd slots and skips the graph slots"
+say "write pressure: the bulk governor counts the scd slots and skips the graph and tablesync slots"
 wp_slot scd_b1_pressure_graph_from_core
 wp_slot scd_b1_from_pressure_graph
+wp_slot pg_16384_sync_16385_7311111111111111111
 wp_wal 4194304
-want "graph slots of both name styles are no replication backlog" "$(wp_backlog)" 0
+want "graph slots of both name styles and a tablesync slot are no replication backlog" "$(wp_backlog)" 0
 wp_slot scd_b1_pressure_from_core
 wp_wal 65536
 wp_counted="$(wp_backlog)"
 wp_scd="$(wp_lag scd_b1_pressure_from_core)"
 wp_graph="$(wp_lag scd_b1_pressure_graph_from_core)"
-[ "$wp_counted" -gt 0 ] && [ "$wp_counted" -le "$wp_scd" ] && [ "$wp_counted" -lt "$wp_graph" ] \
-  || { echo "FAIL write pressure counted $wp_counted bytes, the scd slot lags $wp_scd, the graph slots $wp_graph"; exit 1; }
-echo "ok the scd slot is the backlog ($wp_counted bytes), the graph slots behind it are not ($wp_graph bytes)"
-for s in scd_b1_pressure_graph_from_core scd_b1_from_pressure_graph scd_b1_pressure_from_core; do
+wp_sync="$(wp_lag pg_16384_sync_16385_7311111111111111111)"
+[ "$wp_counted" -gt 0 ] && [ "$wp_counted" -le "$wp_scd" ] && [ "$wp_counted" -lt "$wp_graph" ] && [ "$wp_counted" -lt "$wp_sync" ] \
+  || { echo "FAIL write pressure counted $wp_counted bytes, the scd slot lags $wp_scd, the graph slots $wp_graph, the tablesync slot $wp_sync"; exit 1; }
+echo "ok the scd slot is the backlog ($wp_counted bytes), the graph and tablesync slots behind it are not ($wp_graph, $wp_sync bytes)"
+for s in scd_b1_pressure_graph_from_core scd_b1_from_pressure_graph pg_16384_sync_16385_7311111111111111111 scd_b1_pressure_from_core; do
   val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
 done
