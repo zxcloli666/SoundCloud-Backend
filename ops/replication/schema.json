@@ -1326,6 +1326,12 @@
     {"cols": ["oauth_app_id"], "name": "mobile_credentials_oauth_app_id_fkey", "on_delete": "r", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_result", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_mobile_credentials", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_orphan_mobile_credentials", "gated": false, "name": "zz_orphan", "pinned": false},
+    {"enabled": "R", "function": "scd_purge_guard_mobile_credentials", "gated": false, "name": "zz_purge_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_mobile_credentials", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["soundcloud_user_id"], "expr": false, "keys": ["soundcloud_user_id"], "name": "mobile_credentials_pkey", "primary": true, "where": null}
@@ -1349,6 +1355,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_mobile_link_requests", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_mobile_link_requests", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_mobile_link_requests", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_mobile_link_requests", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "mobile_link_requests_pkey", "primary": true, "where": null},
