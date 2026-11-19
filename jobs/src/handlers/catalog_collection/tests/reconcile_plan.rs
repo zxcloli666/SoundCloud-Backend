@@ -23,9 +23,9 @@ fn reconciles() -> [Reconcile; 2] {
         },
         Reconcile {
             target: "user_followers",
-            types: "text, timestamptz, uuid",
+            types: "text, timestamptz, uuid, bigint",
             sql: include_str!("../../../../queries/catalog_collection/reconcile_followers.sql"),
-            args: format!("'big', now(), '{SNAPSHOT}'"),
+            args: format!("'big', now(), '{SNAPSHOT}', 5000"),
         },
     ]
 }

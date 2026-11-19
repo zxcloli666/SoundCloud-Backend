@@ -51,6 +51,7 @@ impl CatalogCollectionHandler {
                 pool.clone(),
                 config.durations.max_track_duration_ms,
                 config.audience_max_items,
+                config.followers_reconcile_max_rows,
             ),
             pool,
             public,

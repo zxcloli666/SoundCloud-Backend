@@ -32,7 +32,7 @@ async fn setup(
     Ok((
         job,
         payload,
-        CollectionWriter::new(pool.clone(), 420000, 2_000),
+        CollectionWriter::new(pool.clone(), 420000, 2_000, 5_000),
     ))
 }
 
@@ -1750,7 +1750,7 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let (job, mut payload, _) = setup(&pool).await?;
-    let writer = CollectionWriter::new(pool.clone(), 420000, 3);
+    let writer = CollectionWriter::new(pool.clone(), 420000, 3, 5_000);
     payload.collection = CatalogCollection::TrackFavoriters;
     payload.owner = false;
     sqlx::raw_sql(
@@ -1809,30 +1809,93 @@ async fn an_audience_walk_ends_at_its_item_cap_and_keeps_only_that_snapshot(
     .fetch_all(&pool)
     .await?;
     assert_eq!(kept, [17, 18, 19, 20]);
+    Ok(())
+}
 
-    payload.collection = CatalogCollection::Followers;
-    let followers = state::begin(&pool, &job, &payload)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("missing followers snapshot"))?;
-    assert!(
-        writer
-            .persist(
-                &job,
-                &payload,
-                &followers,
-                fans(
-                    vec![
-                        fan(21, "E", 1),
-                        fan(22, "F", 1),
-                        fan(23, "G", 1),
-                        fan(24, "H", 1)
-                    ],
-                    Some("v2:/users/42/followers?offset=4"),
-                ),
-                catalog_ingest::Observation::begin(&pool).await?,
-            )
+async fn walk_followers(
+    pool: &PgPool,
+    job: &LeasedJob,
+    payload: &CatalogCollectionPayload,
+    writer: &CollectionWriter,
+    pages: [Vec<Value>; 2],
+) -> anyhow::Result<bool> {
+    let mut more = false;
+    for (index, fans_on_page) in pages.into_iter().enumerate() {
+        let snapshot = state::begin(pool, job, payload)
             .await?
-    );
+            .ok_or_else(|| anyhow::anyhow!("missing followers snapshot"))?;
+        let next = format!("v2:/users/42/followers?offset={}", (index + 1) * 2);
+        more = writer
+            .persist(
+                job,
+                payload,
+                &snapshot,
+                fans(fans_on_page, Some(&next)),
+                catalog_ingest::Observation::begin(pool).await?,
+            )
+            .await?;
+    }
+    Ok(more)
+}
+
+async fn old_followers(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM user_followers
+         WHERE user_id = '42' AND target_user_urn LIKE 'soundcloud:users:9_'",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_public_followers_walk_ends_at_the_cap_and_drops_old_rows_a_batch_per_walk(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, mut payload, _) = setup(&pool).await?;
+    let writer = CollectionWriter::new(pool.clone(), 420000, 3, 2);
+    payload.collection = CatalogCollection::Followers;
+    payload.owner = false;
+    sqlx::raw_sql(
+        "INSERT INTO user_followers (user_id, target_user_urn, synced_at, created_at)
+         SELECT '42', 'soundcloud:users:' || n, now() - interval '1 day', now() - interval '1 day'
+         FROM generate_series(90, 94) AS n",
+    )
+    .execute(&pool)
+    .await?;
+    let followers = || {
+        [
+            vec![fan(17, "A", 1), fan(18, "B", 1)],
+            vec![fan(19, "C", 1), fan(20, "D", 1)],
+        ]
+    };
+    assert!(!walk_followers(&pool, &job, &payload, &writer, followers()).await?);
+    let sync: (bool, i64, Option<String>) = sqlx::query_as(
+        "SELECT complete, item_count, next_cursor FROM catalog_collection_sync
+         WHERE subject_id = '42' AND collection = 'followers'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(sync, (true, 4, None));
+    assert_eq!(old_followers(&pool).await?, 3);
+    job.generation += 1;
+    sqlx::query("UPDATE background_jobs SET generation = $2, lease_generation = $2 WHERE id = $1")
+        .bind(job.id)
+        .bind(job.generation)
+        .execute(&pool)
+        .await?;
+    assert!(!walk_followers(&pool, &job, &payload, &writer, followers()).await?);
+    assert_eq!(old_followers(&pool).await?, 1);
+    let walked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM user_followers WHERE user_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(walked, 5);
+    let seen: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM catalog_collection_seen WHERE subject_id = '42' AND collection = 'followers'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(seen, 0);
     Ok(())
 }
 
