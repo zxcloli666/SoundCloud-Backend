@@ -124,7 +124,7 @@ impl<F: Fetch + 'static, N: Notify + 'static> VideoAccounts<F, N> {
             Verdict::Rejected(error) => {
                 store::record(&self.pool, name, Some("dead"), Some(error)).await?
             }
-            Verdict::Unavailable(error) => {
+            Verdict::Limited(error, _) | Verdict::Unavailable(error) => {
                 store::record(&self.pool, name, None, Some(error)).await?
             }
         }

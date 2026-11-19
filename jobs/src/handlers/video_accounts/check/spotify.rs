@@ -36,6 +36,13 @@ struct Token {
     access_token: String,
     #[serde(rename = "isAnonymous", default)]
     anonymous: bool,
+    #[serde(rename = "accessTokenExpirationTimestampMs", default)]
+    expires_ms: u64,
+}
+
+pub(crate) struct Issued {
+    pub(crate) token: String,
+    pub(crate) expires_ms: u64,
 }
 
 pub(super) async fn check<F: Fetch>(fetch: &F, key: &SpotifyKey, sp_dc: &str) -> Verdict {
@@ -49,11 +56,11 @@ pub(crate) async fn access_token<F: Fetch>(
     fetch: &F,
     key: &SpotifyKey,
     sp_dc: &str,
-) -> Result<String, Verdict> {
+) -> Result<Issued, Verdict> {
     if sp_dc.is_empty() {
         return Err(Verdict::Rejected("sp_dc is empty".to_owned()));
     }
-    let clock = fetch_json::<ServerTime>(fetch, SERVER_TIME, "").await?;
+    let clock = fetch_json::<ServerTime>(fetch, "Spotify server-time", SERVER_TIME, "").await?;
     let Some(code) = totp::code(&key.secret, clock.seconds) else {
         return Err(Verdict::Unavailable(
             "the Spotify TOTP key is unusable".to_owned(),
@@ -64,7 +71,7 @@ pub(crate) async fn access_token<F: Fetch>(
         key.version
     );
     let cookie = format!("sp_dc={sp_dc}");
-    let token = fetch_json::<Token>(fetch, &url, &cookie).await?;
+    let token = fetch_json::<Token>(fetch, "Spotify token", &url, &cookie).await?;
     if token.access_token.is_empty() {
         return Err(Verdict::Unavailable(
             "Spotify returned no access token".to_owned(),
@@ -75,11 +82,15 @@ pub(crate) async fn access_token<F: Fetch>(
             "Spotify treats sp_dc as signed out".to_owned(),
         ));
     }
-    Ok(token.access_token)
+    Ok(Issued {
+        token: token.access_token,
+        expires_ms: token.expires_ms,
+    })
 }
 
 async fn fetch_json<T: serde::de::DeserializeOwned>(
     fetch: &impl Fetch,
+    step: &str,
     url: &str,
     cookie: &str,
 ) -> Result<T, Verdict> {
@@ -95,9 +106,9 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
     let body = fetch
         .get(url, request)
         .await
-        .map_err(|error| unavailable("Spotify", &error))?;
+        .map_err(|error| unavailable(step, &error))?;
     serde_json::from_slice(&body)
-        .map_err(|_| Verdict::Unavailable("Spotify answered with an unexpected body".to_owned()))
+        .map_err(|_| Verdict::Unavailable(format!("{step} answered with an unexpected body")))
 }
 
 #[cfg(test)]

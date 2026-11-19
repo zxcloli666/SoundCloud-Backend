@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use super::VideoFind;
-use super::leads::Leased;
+use super::leads::{Leased, pause_for};
 use super::queue::Claimed;
 use super::sources::{Failure, Lead};
 use super::ytdlp::{Exit, Tube};
@@ -110,9 +110,9 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
 
     async fn youtube_failed(&self, account: &str, failure: Failure) -> bool {
         match failure {
-            Failure::Paused(error) => {
-                self.account_out(account, &error, Some(self.config.account_pause))
-                    .await;
+            Failure::Paused(error, retry_after) => {
+                let pause = pause_for(self.config.account_pause, retry_after);
+                self.account_out(account, &error, Some(pause)).await;
                 false
             }
             Failure::Rejected(error) => {

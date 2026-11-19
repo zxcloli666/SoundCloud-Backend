@@ -35,13 +35,21 @@ impl ProxyPool {
         }
     }
 
-    pub(crate) async fn routed<T, E, F, Fut>(&self, exit: Exit, attempt: F) -> Result<T, E>
+    pub(crate) async fn routed<T, E, F, Fut>(
+        &self,
+        exit: Exit,
+        elsewhere: impl Fn(&E) -> bool,
+        attempt: F,
+    ) -> Result<T, E>
     where
         F: Fn(Option<String>) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
         let mut last = attempt(None).await;
-        if last.is_ok() {
+        if last
+            .as_ref()
+            .map_or_else(|error| !elsewhere(error), |_| true)
+        {
             return last;
         }
         for proxy in self.pick(exit, FALLBACK_TRIES) {
@@ -260,18 +268,22 @@ not a url tags=dc
     ) -> (Result<usize, String>, Vec<Option<String>>) {
         let calls = Mutex::new(Vec::new());
         let result = pool
-            .routed(exit, |proxy| {
-                let mut calls = calls.lock().unwrap();
-                calls.push(proxy);
-                let call = calls.len();
-                async move {
-                    if call == works_on {
-                        Ok(call)
-                    } else {
-                        Err(format!("call {call} failed"))
+            .routed(
+                exit,
+                |_| true,
+                |proxy| {
+                    let mut calls = calls.lock().unwrap();
+                    calls.push(proxy);
+                    let call = calls.len();
+                    async move {
+                        if call == works_on {
+                            Ok(call)
+                        } else {
+                            Err(format!("call {call} failed"))
+                        }
                     }
-                }
-            })
+                },
+            )
             .await;
         (result, calls.into_inner().unwrap())
     }
@@ -325,6 +337,26 @@ not a url tags=dc
 
         assert_eq!(result, Err("call 2 failed".to_owned()));
         assert_eq!(calls, [None, Some("socks5://a:b@10.0.0.3:1080".to_owned())]);
+    }
+
+    #[tokio::test]
+    async fn an_error_that_a_new_address_cannot_fix_skips_the_proxies() {
+        let (_dir, pool) = three();
+        let calls = Mutex::new(0);
+
+        let result: Result<(), u16> = pool
+            .routed(
+                Exit::Anywhere,
+                |status| *status != 429,
+                |_| {
+                    *calls.lock().unwrap() += 1;
+                    async { Err(429) }
+                },
+            )
+            .await;
+
+        assert_eq!(result, Err(429));
+        assert_eq!(*calls.lock().unwrap(), 1);
     }
 
     #[tokio::test]

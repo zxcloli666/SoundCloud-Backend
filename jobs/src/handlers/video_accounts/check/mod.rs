@@ -25,6 +25,7 @@ pub(crate) const BROWSER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64
 pub enum Verdict {
     Valid,
     Rejected(String),
+    Limited(String, Option<u64>),
     Unavailable(String),
 }
 
@@ -100,6 +101,10 @@ pub(crate) fn headers(pairs: &[(&'static str, &str)]) -> Result<HeaderMap, Verdi
 
 fn unavailable(source: &str, error: &SourceError) -> Verdict {
     match error {
+        SourceError::Status { status: 429, .. } => Verdict::Limited(
+            format!("{source} answered 429"),
+            error.retry_after_seconds(),
+        ),
         SourceError::Status { status, .. } => {
             Verdict::Unavailable(format!("{source} answered {status}"))
         }

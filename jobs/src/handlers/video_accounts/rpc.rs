@@ -59,7 +59,7 @@ async fn save<F: Fetch + 'static, N: Notify + 'static>(
     match accounts.checker.check(source, secret).await {
         Verdict::Valid => {}
         Verdict::Rejected(error) => return refusal(422, &error),
-        Verdict::Unavailable(error) => return refusal(503, &error),
+        Verdict::Limited(error, _) | Verdict::Unavailable(error) => return refusal(503, &error),
     }
     if !store::upsert(
         &accounts.pool,

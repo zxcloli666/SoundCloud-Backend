@@ -22,15 +22,21 @@ pub(super) async fn clips<F: Fetch>(
         "{API}/search?type=track&page=0&text={}",
         urlencoding::encode(&query)
     );
-    let found = get(fetch, token, &url).await?;
+    let found = get(fetch, token, "Yandex Music search", &url).await?;
     let Some(track) = pick(&found, wanted) else {
         return Ok(Vec::new());
     };
-    let supplement = get(fetch, token, &format!("{API}/tracks/{track}/supplement")).await?;
+    let supplement = get(
+        fetch,
+        token,
+        "Yandex Music supplement",
+        &format!("{API}/tracks/{track}/supplement"),
+    )
+    .await?;
     Ok(videos(&supplement, &track))
 }
 
-async fn get<F: Fetch>(fetch: &F, token: &str, url: &str) -> Result<Value, Failure> {
+async fn get<F: Fetch>(fetch: &F, token: &str, step: &str, url: &str) -> Result<Value, Failure> {
     let authorization = format!("OAuth {token}");
     let request = headers(&[
         ("authorization", &authorization),
@@ -41,9 +47,9 @@ async fn get<F: Fetch>(fetch: &F, token: &str, url: &str) -> Result<Value, Failu
     let body = fetch
         .get(url, request)
         .await
-        .map_err(|error| failure_of("Yandex Music", &error))?;
+        .map_err(|error| failure_of(step, &error))?;
     serde_json::from_slice(&body)
-        .map_err(|_| Failure::Unavailable("Yandex answered with an unexpected body".to_owned()))
+        .map_err(|_| Failure::Unavailable(format!("{step} answered with an unexpected body")))
 }
 
 fn pick(reply: &Value, wanted: &Wanted) -> Option<String> {
