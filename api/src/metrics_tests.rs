@@ -130,6 +130,7 @@ fn mobile_counters_are_scraped_before_the_first_link() {
     assert!(rendered.contains("sc_mobile_requests_total{"));
     assert!(rendered.contains("op=\"token\""));
     assert!(rendered.contains("op=\"me\""));
+    assert!(rendered.contains("op=\"reactions_read\""));
 }
 
 #[test]

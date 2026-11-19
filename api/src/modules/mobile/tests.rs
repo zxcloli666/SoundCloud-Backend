@@ -22,18 +22,25 @@ use crate::modules::auth::{AuthService, CoreRpc};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
 
-const ACCOUNT: &str = "4242";
+pub(super) const ACCOUNT: &str = "4242";
 const OTHER_ACCOUNT: &str = "5151";
 const PLAN_HEADER: &str = "sc-mob-userplan";
 
 #[derive(Clone, Copy)]
-enum Token {
+pub(super) enum Token {
     Pair,
     Captcha,
 }
 
 #[derive(Clone, Copy)]
-enum Me {
+pub(super) enum Graph {
+    Reactions,
+    Captcha,
+    Unauthorized,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Me {
     Account(&'static str),
     Rejected,
 }
@@ -42,13 +49,14 @@ enum Me {
 struct FakeSoundCloud {
     token: Token,
     me: Me,
+    graph: Graph,
     exchanges: Arc<AtomicUsize>,
 }
 
-struct Fixture {
-    mobile: Arc<MobileService>,
+pub(super) struct Fixture {
+    pub(super) mobile: Arc<MobileService>,
     auth: Arc<AuthService>,
-    session_id: Uuid,
+    pub(super) session_id: Uuid,
     exchanges: Arc<AtomicUsize>,
 }
 
@@ -61,6 +69,7 @@ async fn answer(State(fake): State<FakeSoundCloud>, headers: HeaderMap) -> Respo
     match target.as_ref().map(Url::path) {
         Some("/oauth/token") => token(&fake),
         Some("/me") => me(fake.me),
+        Some("/graphql") => graphql(fake.graph),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -82,6 +91,29 @@ fn token(fake: &FakeSoundCloud) -> Response {
             })),
         )
             .into_response(),
+    }
+}
+
+fn graphql(graph: Graph) -> Response {
+    match graph {
+        Graph::Reactions => axum::Json(json!({
+            "data": { "targetInteractions": [{
+                "targetUrn": "ts:5",
+                "userInteraction": "sc:interactiontypevalue:1f525",
+                "interactionCounts": [
+                    { "interactionTypeValueUrn": "sc:interactiontypevalue:1f525", "count": 3 }
+                ]
+            }] }
+        }))
+        .into_response(),
+        Graph::Captcha => (
+            StatusCode::FORBIDDEN,
+            axum::Json(json!({
+                "url": "https://geo.captcha-delivery.com/interstitial/?initialCid=fake"
+            })),
+        )
+            .into_response(),
+        Graph::Unauthorized => (StatusCode::UNAUTHORIZED, axum::Json(json!({}))).into_response(),
     }
 }
 
@@ -120,10 +152,20 @@ fn profile(account: &str) -> Value {
 }
 
 async fn fixture(pool: &PgPool, token: Token, me: Me) -> anyhow::Result<Fixture> {
+    fixture_graph(pool, token, me, Graph::Reactions).await
+}
+
+pub(super) async fn fixture_graph(
+    pool: &PgPool,
+    token: Token,
+    me: Me,
+    graph: Graph,
+) -> anyhow::Result<Fixture> {
     let exchanges = Arc::new(AtomicUsize::new(0));
     let fake = Router::new().fallback(answer).with_state(FakeSoundCloud {
         token,
         me,
+        graph,
         exchanges: exchanges.clone(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -260,7 +302,7 @@ fn completed() -> LinkStatus {
     }
 }
 
-fn status_of(error: AppError) -> StatusCode {
+pub(super) fn status_of(error: AppError) -> StatusCode {
     error.into_response().status()
 }
 
@@ -314,7 +356,7 @@ async fn another_account_writes_nothing_and_an_old_link_survives(
     Ok(())
 }
 
-async fn old_link(pool: &PgPool) -> anyhow::Result<()> {
+pub(super) async fn old_link(pool: &PgPool) -> anyhow::Result<()> {
     let app: Uuid = sqlx::query_scalar("SELECT id FROM oauth_apps WHERE client_kind = 'mobile'")
         .fetch_one(pool)
         .await?;

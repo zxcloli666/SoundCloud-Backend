@@ -11,7 +11,7 @@ const LINK_OUTCOMES: &[&str] = &[
     "failed",
     "unlinked",
 ];
-const REQUEST_OPS: &[&str] = &["token", "me"];
+const REQUEST_OPS: &[&str] = &["token", "me", "reactions_read"];
 const STATUS_CLASSES: &[&str] = &["2xx", "4xx", "5xx", "captcha", "transport"];
 
 pub(super) fn register() {

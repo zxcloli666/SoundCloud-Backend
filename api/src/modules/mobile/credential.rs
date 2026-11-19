@@ -1,4 +1,3 @@
-use axum::http::StatusCode;
 use backend_contracts::auth::{RefreshOutcome, RefreshRequest, RefreshTarget};
 use chrono::{TimeDelta, Utc};
 use tracing::warn;
@@ -8,10 +7,11 @@ use crate::error::{AppError, AppResult};
 
 use super::dto::MobileOverview;
 use super::exchange::Linked;
+use super::refusal::not_linked;
 use super::service::MobileService;
 
 const ACTIVE: &str = "active";
-const RELINK_REQUIRED: &str = "relink_required";
+pub(super) const RELINK_REQUIRED: &str = "relink_required";
 const REFRESH_DUE_BUFFER: TimeDelta = TimeDelta::minutes(5);
 
 impl MobileService {
@@ -147,11 +147,7 @@ impl MobileService {
             .fetch_optional(&self.pool)
             .await?;
         if chosen.is_none() {
-            return Err(AppError::coded(
-                StatusCode::NOT_FOUND,
-                "mobile_not_linked",
-                "No mobile profile is linked to this account",
-            ));
+            return Err(not_linked());
         }
         self.overview(session_id, account).await
     }

@@ -11,8 +11,10 @@ use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::state::AppState;
 
+use super::action_handlers;
 use super::dto::{LinkCallback, LinkStatusQuery, UqChoice};
 use super::limits::Action;
+use super::reactions;
 use super::service::MobileService;
 
 pub fn router() -> Router<AppState> {
@@ -23,6 +25,15 @@ pub fn router() -> Router<AppState> {
         .route("/auth/mobile/link/status", get(status))
         .route("/me/mobile", get(overview))
         .route("/me/mobile/uq", put(choose_uq))
+        .route("/tracks/{track_urn}/reactions", get(reactions::read))
+        .route(
+            "/tracks/{track_urn}/reactions/{second}",
+            put(action_handlers::set_reaction).delete(action_handlers::remove_reaction),
+        )
+        .route(
+            "/comments/{comment_urn}",
+            delete(action_handlers::delete_comment),
+        )
 }
 
 #[tracing::instrument(skip_all)]
@@ -95,7 +106,7 @@ async fn choose_uq(
     Ok(no_store(overview))
 }
 
-fn no_store<T: Serialize>(value: T) -> Response {
+pub(super) fn no_store<T: Serialize>(value: T) -> Response {
     let mut response = Json(value).into_response();
     response.headers_mut().insert(
         header::CACHE_CONTROL,
