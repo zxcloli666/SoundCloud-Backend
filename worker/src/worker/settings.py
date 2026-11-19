@@ -153,6 +153,8 @@ class RuntimeSection:
     threads: int
     isolate_encode: bool
     memory_reserve_mib: int
+    exclusive_slots: tuple[str, ...]
+    exclusive_turn_s: int
 
 
 @dataclass(frozen=True)
@@ -721,6 +723,11 @@ def validate_runtime(settings: Settings) -> list[str]:
         problems.append("runtime.threads must be >= 0")
     if runtime.memory_reserve_mib < 0:
         problems.append("runtime.memory_reserve_mib must be >= 0")
+    stray = sorted(set(runtime.exclusive_slots) - set(settings.slots))
+    if stray:
+        problems.append(f"runtime.exclusive_slots has unknown slots {stray}")
+    if runtime.exclusive_turn_s <= 0:
+        problems.append("runtime.exclusive_turn_s must be > 0")
     return problems
 
 

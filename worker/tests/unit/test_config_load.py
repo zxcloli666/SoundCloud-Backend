@@ -271,6 +271,8 @@ def test_env_overrides_are_coerced_by_field_type(base_env: dict[str, str]) -> No
         ("WORKER__LANES__ENABLED", "audio, lyrics", "expected a TOML value"),
         ("WORKER__RUNTIME__THREADS", "many", "expected a number"),
         ("WORKER__RUNTIME__THREADS", "-1", "runtime.threads must be >= 0"),
+        ("WORKER__RUNTIME__EXCLUSIVE_SLOTS", '["paint"]', "exclusive_slots has unknown slots"),
+        ("WORKER__RUNTIME__EXCLUSIVE_TURN_S", "0", "exclusive_turn_s must be > 0"),
     ],
 )
 def test_bad_env_values_are_start_errors(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import gc
 import importlib
 import math
 import os
@@ -243,9 +244,11 @@ class Engine:
         return replace(spec, device=devices.resolve(spec.device))
 
     def _release(self, *, collect: bool = False) -> None:
+        if collect:
+            gc.collect()
         if self._torch_configured:
             allocator.release()
-        if not memory.trim(collect=collect):
+        if not memory.trim(collect=False):
             self._log.warning("engine_malloc_trim_unavailable")
 
     def _usage(self) -> memory.Usage:

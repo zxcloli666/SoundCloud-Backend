@@ -350,3 +350,19 @@ def test_the_video_profile_offloads_both_pipelines_on_a_public_cuda_node() -> No
     assert settings.is_public and settings.runtime.device == "cuda"
     assert settings.video_gen.offload is True
     assert settings.runtime.idle_unload_s > 0
+
+
+def test_the_video_profile_loads_one_generation_engine_at_a_time(contract: Contract) -> None:
+    settings = load("gpu-video")
+    plans = Blueprint.of(settings, contract, {}, cpus=8).plans
+    assert {plan.name: plan.exclusive for plan in plans} == {
+        "image-edit": True,
+        "image-to-video": True,
+    }
+    assert settings.runtime.exclusive_turn_s > 0
+
+
+def test_no_other_profile_shares_an_engine_turn() -> None:
+    for path in (CONFIG_DIR / "profiles").glob("*.toml"):
+        exclusive = load(path.stem).runtime.exclusive_slots
+        assert bool(exclusive) is (path.stem == "gpu-video"), path.stem

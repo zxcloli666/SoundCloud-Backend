@@ -24,6 +24,7 @@ from worker.bus.outbox import (
     encode,
 )
 from worker.bus.pull import PullUnanswered, pulled
+from worker.bus.turn import EngineTurn
 from worker.contract import Contract, ContractError, LaneSpec
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.outcome import (
@@ -80,6 +81,7 @@ class LaneRunner:
         capacity: int,
         counters: Counters,
         clock: Clock,
+        turn: EngineTurn | None = None,
     ) -> None:
         self.lane = lane
         self.watch = watch
@@ -91,6 +93,7 @@ class LaneRunner:
         self._outbox = outbox
         self._counters = counters
         self._clock = clock
+        self._turn = turn
         self._subscription: JetStreamContext.PullSubscription | None = None
         self._stop = asyncio.Event()
         self._abort = asyncio.Event()
@@ -110,9 +113,16 @@ class LaneRunner:
         return state
 
     async def run(self) -> None:
+        try:
+            await self._serve()
+        finally:
+            self._yield_turn()
+
+    async def _serve(self) -> None:
         while not self._stop.is_set():
             self._take_lingering()
             if self.state is not LaneState.SERVING:
+                self._yield_turn()
                 await sleep_unless(self._clock, IDLE_POLL_S, self._stop)
                 continue
             if not self._connection.is_connected:
@@ -122,7 +132,11 @@ class LaneRunner:
             if free <= 0:
                 await self._wait_for_room()
                 continue
-            await self._pull(free)
+            if self._turn is not None and not self._turn.claim(self.lane.name):
+                await self._wait_turn(self._turn)
+                continue
+            if not await self._pull(free):
+                self._yield_turn()
 
     def stop_fetching(self) -> None:
         self._stop.set()
@@ -179,10 +193,10 @@ class LaneRunner:
             "task_p95_ms": task_ms["p95"],
         }
 
-    async def _pull(self, batch: int) -> None:
+    async def _pull(self, batch: int) -> int:
         subscription = await self._bound()
         if subscription is None:
-            return
+            return 0
         started = self._clock.now()
         taken = 0
         try:
@@ -200,10 +214,11 @@ class LaneRunner:
             self._counters.inc("fetch_failures_total", lane=self.lane.name)
             log.warning("fetch_failed", extra={"lane": self.lane.name, "error": str(error)})
             await sleep_unless(self._clock, FETCH_ERROR_PAUSE_S, self._stop)
-            return
+            return taken
         idle_left_s = started + IDLE_POLL_S - self._clock.now()
         if not taken and idle_left_s > 0:
             await sleep_unless(self._clock, idle_left_s, self._stop)
+        return taken
 
     async def _retire(self) -> None:
         self._take_lingering()
@@ -227,6 +242,20 @@ class LaneRunner:
     async def _wait_for_room(self) -> None:
         self._freed.clear()
         await race(self._clock.sleep(self.lane.heartbeat_s), self._freed.wait(), self._stop.wait())
+
+    async def _wait_turn(self, turn: EngineTurn) -> None:
+        self._yield_turn()
+        self._freed.clear()
+        await race(
+            self._clock.sleep(self.lane.heartbeat_s),
+            turn.changed(),
+            self._freed.wait(),
+            self._stop.wait(),
+        )
+
+    def _yield_turn(self) -> None:
+        if self._turn is not None and not self.tasks:
+            self._turn.release(self.lane.name)
 
     def _take_lingering(self) -> None:
         if self._subscription is None:
