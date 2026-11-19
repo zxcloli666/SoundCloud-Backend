@@ -5,9 +5,11 @@ use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
 mod llm;
+mod mobile;
 mod speak;
 
 pub use llm::{record_llm_budgets, record_llm_step, record_voice_chat};
+pub use mobile::{record_mobile_link, record_mobile_request};
 pub use speak::{
     record_speak_line, record_speak_poll, record_speak_reply, record_speak_store_error,
 };

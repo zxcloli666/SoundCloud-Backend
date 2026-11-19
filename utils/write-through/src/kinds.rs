@@ -1,5 +1,6 @@
 mod jobs;
 mod matching;
+mod mobile;
 mod mutations;
 mod observe;
 mod storage;
@@ -15,6 +16,7 @@ pub use jobs::{
     LyricsWakeState, ObserveClaim,
 };
 pub use matching::{AlbumSlot, MatchAlbumTrack, MatchGeniusSong, MatchScAccount, MatchWantedLink};
+pub use mobile::{MobileCredentialDrop, MobileCredentialLink};
 pub use mutations::{
     CommentPost, MembershipOp, MembershipOperation, MembershipOutcome, OwnedDelete, OwnedInsert,
     PlaylistDelete, PlaylistEdit, TrackDelete, TrackEdit,

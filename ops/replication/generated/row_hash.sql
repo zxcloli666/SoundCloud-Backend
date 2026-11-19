@@ -598,6 +598,30 @@ AS $f$
 SELECT md5(ROW(t.attempts, t.cache_created_at, t.claim_expires_at, t.claim_job_generation, t.claim_job_id, t.claim_job_lease_id, t.created_at, t.kind, t.next_run_at, t.old_plain_text, t.outcome, t.priority, t.sc_track_id, t.settled_at, t.status, t.updated_at)::text) FROM public.lyrics_repair t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_mobile_credentials(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.access_token, t.consent_v, t.device_id, t.expires_at, t.last_refresh_attempt_at, t.last_refresh_error, t.last_refresh_error_kind, t.last_refresh_success_at, t.link_v, t.linked_at, t.oauth_app_id, t.plan, t.plan_seen_at, t.plan_v, t.refresh_failure_count, t.refresh_generation, t.refresh_lease_expires_at, t.refresh_lease_id, t.refresh_token, t.retry_at, t.scope, t.soundcloud_user_id, t.status, t.token_v, t.updated_at, t.uq_busy_until, t.uq_cooldown_until, t.uq_failures, t.uq_opt_in)::text) FROM public.mobile_credentials t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_mobile_link_requests(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.code_verifier, t.created_at, t.device_id, t.error, t.expected_soundcloud_user_id, t.expires_at, t.id, t.oauth_app_id, t.row_v, t.session_id, t.state, t.status)::text) FROM public.mobile_link_requests t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_oauth_app_request_cooldowns(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1616,6 +1640,10 @@ BEGIN
             RETURN public.scd_row_hash_lyrics_lookup_state(k);
         WHEN 'lyrics_repair' THEN
             RETURN public.scd_row_hash_lyrics_repair(k);
+        WHEN 'mobile_credentials' THEN
+            RETURN public.scd_row_hash_mobile_credentials(k);
+        WHEN 'mobile_link_requests' THEN
+            RETURN public.scd_row_hash_mobile_link_requests(k);
         WHEN 'oauth_app_request_cooldowns' THEN
             RETURN public.scd_row_hash_oauth_app_request_cooldowns(k);
         WHEN 'oauth_app_token_issuance_reservations' THEN

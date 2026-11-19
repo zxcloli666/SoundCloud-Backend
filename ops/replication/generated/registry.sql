@@ -14,6 +14,8 @@ VALUES
     ('match.genius_song', true),
     ('match.sc_account', true),
     ('match.wanted_link', true),
+    ('mobile_credential.drop', false),
+    ('mobile_credential.link', true),
     ('oauth_app.delete', false),
     ('observe.playlists', true),
     ('observe.profile', true),
@@ -95,6 +97,8 @@ SELECT v.cls FROM (VALUES
     ('lyrics_lookup_queue', 'P'),
     ('lyrics_lookup_state', 'C'),
     ('lyrics_repair', 'P'),
+    ('mobile_credentials', 'M'),
+    ('mobile_link_requests', 'A'),
     ('oauth_app_request_cooldowns', 'A'),
     ('oauth_app_token_issuance_reservations', 'P'),
     ('oauth_app_token_refresh_state', 'P'),
@@ -266,6 +270,10 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'lyrics_cache', jsonb_build_object('sc_track_id', t.sc_track_id) FROM public.lyrics_cache t ON CONFLICT DO NOTHING;
         WHEN 'lyrics_lookup_state' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'lyrics_lookup_state', jsonb_build_object('track_id', t.track_id) FROM public.lyrics_lookup_state t ON CONFLICT DO NOTHING;
+        WHEN 'mobile_credentials' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'mobile_credentials', jsonb_build_object('soundcloud_user_id', t.soundcloud_user_id) FROM public.mobile_credentials t ON CONFLICT DO NOTHING;
+        WHEN 'mobile_link_requests' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'mobile_link_requests', jsonb_build_object('id', t.id) FROM public.mobile_link_requests t ON CONFLICT DO NOTHING;
         WHEN 'oauth_app_request_cooldowns' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'oauth_app_request_cooldowns', jsonb_build_object('oauth_app_id', t.oauth_app_id) FROM public.oauth_app_request_cooldowns t ON CONFLICT DO NOTHING;
         WHEN 'oauth_app_tokens' THEN
@@ -409,6 +417,8 @@ BEGIN
         ('login_requests', 'A'),
         ('lyrics_cache', 'C'),
         ('lyrics_lookup_state', 'C'),
+        ('mobile_credentials', 'M'),
+        ('mobile_link_requests', 'A'),
         ('oauth_app_request_cooldowns', 'A'),
         ('oauth_app_tokens', 'C'),
         ('oauth_apps', 'A'),

@@ -42,6 +42,7 @@ pub(super) fn config(redis: &str) -> AppConfig {
         soundcloud: SoundcloudCfg {
             proxy_url: String::new(),
             proxy_fallback: false,
+            mobile_link: crate::config::MobileLinkAllow::Nobody,
         },
         database: DatabaseCfg {
             url: String::new(),
@@ -251,6 +252,12 @@ pub(super) async fn state_with(
         cold_refresh.clone(),
         public_users.clone(),
     );
+    let mobile = crate::modules::mobile::MobileService::new(
+        pg.clone(),
+        auth.clone(),
+        CoreRpc::unreachable(),
+        &config.soundcloud,
+    );
     let tracks = crate::modules::tracks::TracksService::new(
         crate::modules::tracks::TracksServiceDependencies {
             sc: sc.clone(),
@@ -314,6 +321,7 @@ pub(super) async fn state_with(
         subscriptions,
         auras,
         me,
+        mobile,
         tracks,
         playlists,
         users,

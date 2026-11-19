@@ -315,7 +315,8 @@ class Generated(unittest.TestCase):
     def test_fk_guard_refuses_restrict_and_applies_actions(self):
         text = self.files["triggers.sql"]
         body = text[text.index("FUNCTION public.scd_fk_oauth_apps()"):text.index("TRIGGER zz_fk BEFORE DELETE ON public.oauth_apps")]
-        self.assertIn("IF EXISTS (SELECT 1 FROM public.soundcloud_connections c WHERE c.oauth_app_id = OLD.id) THEN", body)
+        self.assertIn("IF EXISTS (SELECT 1 FROM public.mobile_credentials c WHERE c.oauth_app_id = OLD.id) "
+                      "OR EXISTS (SELECT 1 FROM public.soundcloud_connections c WHERE c.oauth_app_id = OLD.id) THEN", body)
         self.assertIn("INSERT INTO public.repl_resend", body)
         self.assertIn("DELETE FROM public.oauth_app_tokens c WHERE c.oauth_app_id = OLD.id;", body)
         self.assertIn("UPDATE public.oauth_app_token_issuance_reservations c SET oauth_app_id = NULL", body)

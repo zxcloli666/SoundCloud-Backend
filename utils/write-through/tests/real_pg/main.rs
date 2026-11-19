@@ -5,6 +5,7 @@ mod dispatch;
 mod harness;
 mod jobs;
 mod matching;
+mod mobile;
 mod mutations;
 mod observe;
 mod race;

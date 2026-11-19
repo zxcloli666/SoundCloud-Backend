@@ -19,6 +19,7 @@ pub mod legacy_clients;
 pub mod likes;
 pub mod lyrics;
 pub mod me;
+pub mod mobile;
 pub mod oauth_apps;
 pub mod playlists;
 pub mod recommendations;

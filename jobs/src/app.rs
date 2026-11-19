@@ -220,8 +220,12 @@ pub async fn run() -> anyhow::Result<()> {
     );
     supervisor.spawn(
         "auth RPC",
-        Arc::new(AuthRpc::new(databases.main.fast.clone(), &config.oauth)?)
-            .serve(bus.clone(), cancellation.clone()),
+        Arc::new(AuthRpc::new(
+            databases.main.fast.clone(),
+            &config.oauth,
+            config.sync_queue.proxy_url.clone(),
+        )?)
+        .serve(bus.clone(), cancellation.clone()),
     );
     supervisor.spawn(
         "admin catalog RPC",

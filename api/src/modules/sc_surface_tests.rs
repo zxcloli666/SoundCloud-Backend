@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const REACHES_SOUNDCLOUD: [&str; 13] = [
+const REACHES_SOUNDCLOUD: [&str; 14] = [
     "ScReadService",
     "ScClient",
     "api_get_value",
@@ -15,9 +15,10 @@ const REACHES_SOUNDCLOUD: [&str; 13] = [
     "st.soundcloud_search",
     "CatalogMiss",
     "self.miss.",
+    "MobileClient",
 ];
 
-const ALLOWED: [(&str, &str); 8] = [
+const ALLOWED: [(&str, &str); 9] = [
     (
         "auth",
         "AUTH_CONTROL: login, token exchange, explicit refresh",
@@ -46,6 +47,10 @@ const ALLOWED: [(&str, &str); 8] = [
     (
         "admin",
         "RESOLVE_MISS: an operator resolves a link by hand behind AdminAuth",
+    ),
+    (
+        "mobile",
+        "MOBILE_LINK: the code exchange and GET /me of the mobile profile while an account links it",
     ),
 ];
 
@@ -122,7 +127,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 93] = [
+const CLASSIFIED_ROUTES: [&str; 99] = [
     "/admin/activity",
     "/admin/albums",
     "/admin/artists",
@@ -184,10 +189,16 @@ const CLASSIFIED_ROUTES: [&str; 93] = [
     "/auth/login",
     "/auth/login/status",
     "/auth/logout",
+    "/auth/mobile",
+    "/auth/mobile/link",
+    "/auth/mobile/link/callback",
+    "/auth/mobile/link/status",
     "/auth/session",
     "/auth/soundcloud",
     "/auth/soundcloud/refresh",
     "/auth/x",
+    "/me/mobile",
+    "/me/mobile/uq",
     "/oauth-apps",
     "/oauth-apps/{id}",
     "/playlists",

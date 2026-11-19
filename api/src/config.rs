@@ -4,8 +4,10 @@ use stream_ticket::StreamTicketKey;
 use url::Url;
 
 mod llm;
+mod mobile;
 
 pub use llm::{LlmCfg, PhrasesCfg, VoiceChatCfg, VoiceSpeakCfg};
+pub use mobile::MobileLinkAllow;
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -55,6 +57,7 @@ pub struct ColdCfg {
 pub struct SoundcloudCfg {
     pub proxy_url: String,
     pub proxy_fallback: bool,
+    pub mobile_link: MobileLinkAllow,
 }
 
 impl SoundcloudCfg {
@@ -62,6 +65,7 @@ impl SoundcloudCfg {
         Self {
             proxy_url: env_str("SC_PROXY_URL", ""),
             proxy_fallback: env_str("SC_PROXY_FALLBACK", "") == "true",
+            mobile_link: MobileLinkAllow::parse(&env_str("MOBILE_LINK_ALLOW", "")),
         }
     }
 }

@@ -94,7 +94,7 @@ pub async fn probe(
         .min_by_key(|transcoding| transcoding.preference());
     let stream_url = match chosen {
         Some(transcoding) => resolve(client, caller, journal, label, transcoding).await,
-        None => https_outcome.as_ref().ok().and_then(stream_url_of),
+        None => https_outcome.as_ref().ok().and_then(streams::stream_url),
     };
     let Some(stream_url) = stream_url else {
         journal.skip(
@@ -147,7 +147,7 @@ async fn resolve(
     notes.extend(stream_notes(&outcome));
     let sent = Sent::get(&url);
     journal.reply(&step, sent, &outcome, notes);
-    outcome.as_ref().ok().and_then(stream_url_of)
+    outcome.as_ref().ok().and_then(streams::stream_url)
 }
 
 fn stream_notes(outcome: &Result<MobileReply, MobileError>) -> Vec<String> {
@@ -155,16 +155,19 @@ fn stream_notes(outcome: &Result<MobileReply, MobileError>) -> Vec<String> {
         return failure_note(outcome).into_iter().collect();
     };
     let mut notes = Vec::new();
-    if let Some(location) = &reply.location {
+    if reply.is_captcha() {
+        notes.push("captcha challenge, refused".to_owned());
+        return notes;
+    }
+    if let Some(url) = streams::stream_url(reply) {
+        notes.push(format!("stream on CDN host {}", host_of(&url)));
+    } else if let Some(location) = &reply.location {
         notes.push(format!("redirect to {}", host_of(location)));
     }
     match serde_json::from_slice::<Value>(&reply.body) {
         Ok(Value::Object(fields)) => {
             let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
             notes.push(format!("json keys {}", keys.join(",")));
-            if let Some(url) = stream_url_of(reply) {
-                notes.push(format!("url to {}", host_of(&url)));
-            }
         }
         Ok(_) => notes.push("json, not an object".to_owned()),
         Err(_) if !reply.body.is_empty() => notes.push(sniff(&reply.body)),
@@ -172,16 +175,6 @@ fn stream_notes(outcome: &Result<MobileReply, MobileError>) -> Vec<String> {
     }
     notes.extend(failure_note(outcome));
     notes
-}
-
-fn stream_url_of(reply: &MobileReply) -> Option<Url> {
-    if let Some(location) = &reply.location {
-        return Some(location.clone());
-    }
-    let body: Value = serde_json::from_slice(&reply.body).ok()?;
-    body.get("url")
-        .and_then(Value::as_str)
-        .and_then(|url| Url::parse(url).ok())
 }
 
 fn transcodings_of(body: &Value) -> Vec<Transcoding> {
@@ -285,6 +278,24 @@ mod tests {
                 .min_by_key(|t| t.preference())
                 .map(|t| t.preset.as_str()),
             Some("mp3_1_0")
+        );
+    }
+
+    #[test]
+    fn a_cdn_redirect_is_an_answer_that_names_its_host() {
+        let redirect = MobileReply {
+            status: 302,
+            plan: None,
+            location: Url::parse(
+                "https://cf-hls-media.sndcdn.com/playlist/a.128.mp3/playlist.m3u8",
+            )
+            .ok(),
+            body: Default::default(),
+        };
+
+        assert_eq!(
+            stream_notes(&Ok(redirect)),
+            vec!["stream on CDN host cf-hls-media.sndcdn.com".to_owned()]
         );
     }
 

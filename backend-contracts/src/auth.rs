@@ -14,6 +14,16 @@ pub struct RefreshRequest {
     pub rejected_token_fingerprint: Option<String>,
     #[serde(default)]
     pub hold: bool,
+    #[serde(default)]
+    pub target: RefreshTarget,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefreshTarget {
+    #[default]
+    Connection,
+    Mobile,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -36,6 +46,18 @@ pub struct RefreshReply {
     pub connection: Option<ConnectionState>,
     #[serde(default)]
     pub retry_after_sec: Option<i64>,
+    #[serde(default)]
+    pub mobile: Option<MobileState>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileState {
+    pub status: String,
+    pub expires_at_unix_ms: i64,
+    pub refresh_lease_expires_at_unix_ms: Option<i64>,
+    pub retry_at_unix_ms: Option<i64>,
+    pub last_refresh_error_kind: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -93,6 +115,24 @@ mod tests {
 
         assert!(request.rejected_token_fingerprint.is_none());
         assert!(!request.hold);
+        assert_eq!(request.target, RefreshTarget::Connection);
+    }
+
+    #[test]
+    fn a_mobile_refresh_names_its_target_and_its_reply_may_carry_mobile_state() {
+        let request: RefreshRequest = serde_json::from_value(serde_json::json!({
+            "connectionId": Uuid::nil(),
+            "target": "mobile",
+        }))
+        .expect("request decodes");
+        let reply: RefreshReply = serde_json::from_value(serde_json::json!({
+            "outcome": "refreshed",
+            "connection": null,
+        }))
+        .expect("an old reply decodes");
+
+        assert_eq!(request.target, RefreshTarget::Mobile);
+        assert!(reply.mobile.is_none());
     }
 
     #[test]

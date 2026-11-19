@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use backend_contracts::auth::{ConnectionState, RefreshReply, RefreshRequest, token_fingerprint};
+use backend_contracts::auth::{
+    ConnectionState, RefreshReply, RefreshRequest, RefreshTarget, token_fingerprint,
+};
 use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -222,6 +224,7 @@ impl AuthService {
                 connection_id: connection.id,
                 rejected_token_fingerprint: Some(token_fingerprint(rejected_access_token)),
                 hold: true,
+                target: RefreshTarget::Connection,
             })
             .await;
         let Ok(RefreshReply {
@@ -273,6 +276,7 @@ impl AuthService {
                 connection_id: connection.id,
                 rejected_token_fingerprint: rejected_access_token.map(token_fingerprint),
                 hold: false,
+                target: RefreshTarget::Connection,
             })
             .await
         {

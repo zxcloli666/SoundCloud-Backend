@@ -53,6 +53,7 @@ pub struct AppState {
     pub subscriptions: Arc<SubscriptionsService>,
     pub auras: Arc<AurasService>,
     pub me: Arc<MeService>,
+    pub mobile: Arc<crate::modules::mobile::MobileService>,
     pub tracks: Arc<TracksService>,
     pub playlists: Arc<PlaylistsService>,
     pub users: Arc<UsersService>,
