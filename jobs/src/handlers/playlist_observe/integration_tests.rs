@@ -333,7 +333,8 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              id uuid PRIMARY KEY,
              client_id text NOT NULL,
              client_secret text NOT NULL,
-             active boolean NOT NULL DEFAULT true
+             active boolean NOT NULL DEFAULT true,
+             client_kind text NOT NULL DEFAULT 'default'
          );
          CREATE TABLE oauth_app_tokens (
              oauth_app_id uuid PRIMARY KEY REFERENCES oauth_apps(id) ON DELETE CASCADE,

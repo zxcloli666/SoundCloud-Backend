@@ -11,6 +11,8 @@ ALTER TABLE public.oauth_apps
         CHECK (client_kind = 'default'
                OR (app_id IS NOT NULL AND app_version IS NOT NULL AND user_agent IS NOT NULL));
 
+GRANT SELECT (client_kind) ON public.oauth_apps TO chat_auth;
+
 CREATE OR REPLACE FUNCTION public.auth_login_apps()
 RETURNS TABLE (oauth_app_id uuid, client_id text)
 LANGUAGE sql
