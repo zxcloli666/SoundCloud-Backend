@@ -198,10 +198,6 @@ async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
          VALUES ('42', 'soundcloud:tracks:42', 'Hidden', 'hidden', 1000, 'private');
          INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, sharing)
          VALUES ('42', 'soundcloud:playlists:42', 'Set', 'set', 'public');
-         INSERT INTO catalog_audience (subject_urn, relation, user_urn) VALUES
-         ('soundcloud:tracks:42', 'track-favoriters', 'soundcloud:users:1'),
-         ('soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:2'),
-         ('soundcloud:playlists:42', 'playlist-reposters', 'soundcloud:users:3');
          INSERT INTO catalog_audience_ids (subject_id, relation, user_id) VALUES
          (42, 1, 1), (42, 2, 2), (42, 3, 3);
          INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id, synced_at, complete) VALUES
@@ -218,10 +214,6 @@ async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
     assert_eq!(page.sync.retry_after_seconds, 0);
     assert!(queued(&pool, "catalog.collection").await?.is_empty());
     assert!(queued(&pool, "catalog.refresh").await?.is_empty());
-    let left: Vec<String> = sqlx::query_scalar("SELECT subject_urn FROM catalog_audience")
-        .fetch_all(&pool)
-        .await?;
-    assert_eq!(left, ["soundcloud:playlists:42"]);
     let left_ids: Vec<i16> = sqlx::query_scalar("SELECT relation FROM catalog_audience_ids")
         .fetch_all(&pool)
         .await?;

@@ -318,21 +318,6 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE FUNCTION public.scd_purge_catalog_audience(k jsonb)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    p record;
-BEGIN
-    SELECT t.relation, t.subject_urn, t.user_urn INTO p FROM public.catalog_audience t WHERE t.subject_urn = (k ->> 'subject_urn')::text AND t.relation = (k ->> 'relation')::text AND t.user_urn = (k ->> 'user_urn')::text;
-    IF NOT FOUND THEN
-        RETURN;
-    END IF;
-    DELETE FROM public.catalog_audience t WHERE t.subject_urn = (k ->> 'subject_urn')::text AND t.relation = (k ->> 'relation')::text AND t.user_urn = (k ->> 'user_urn')::text;
-END
-$f$;
-
 CREATE OR REPLACE FUNCTION public.scd_purge_catalog_audience_ids(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1507,8 +1492,6 @@ BEGIN
             PERFORM public.scd_purge_background_jobs(k);
         WHEN 'background_schedules' THEN
             PERFORM public.scd_purge_background_schedules(k);
-        WHEN 'catalog_audience' THEN
-            PERFORM public.scd_purge_catalog_audience(k);
         WHEN 'catalog_audience_ids' THEN
             PERFORM public.scd_purge_catalog_audience_ids(k);
         WHEN 'catalog_collection_cursors' THEN

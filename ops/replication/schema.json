@@ -491,26 +491,6 @@
     {"cols": ["kind"], "expr": false, "keys": ["kind"], "name": "background_schedules_pkey", "primary": true, "where": null}
    ]
   },
-  "catalog_audience": {
-   "columns": [
-    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
-    {"default": null, "generated": false, "name": "relation", "notnull": true, "type": "text"},
-    {"default": null, "generated": false, "name": "subject_urn", "notnull": true, "type": "text"},
-    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
-    {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
-   ],
-   "fks": [
-   ],
-   "triggers": [
-    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
-    {"enabled": "R", "function": "scd_owner_catalog_audience", "gated": false, "name": "zz_owner", "pinned": false},
-    {"enabled": "R", "function": "scd_owner_copy_catalog_audience", "gated": false, "name": "zz_owner_copy", "pinned": false},
-    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
-   ],
-   "unique": [
-    {"cols": ["subject_urn", "relation", "user_urn"], "expr": false, "keys": ["subject_urn", "relation", "user_urn"], "name": "catalog_audience_pkey", "primary": true, "where": null}
-   ]
-  },
   "catalog_audience_ids": {
    "columns": [
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},

@@ -238,18 +238,6 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.background_schedules t WHERE t.kind = (k ->> 'kind')::character varying(96)
 $f$;
 
-CREATE OR REPLACE FUNCTION public.scd_row_json_catalog_audience(k jsonb)
-RETURNS jsonb
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT pg_catalog.to_jsonb(t) FROM public.catalog_audience t WHERE t.subject_urn = (k ->> 'subject_urn')::text AND t.relation = (k ->> 'relation')::text AND t.user_urn = (k ->> 'user_urn')::text
-$f$;
-
 CREATE OR REPLACE FUNCTION public.scd_row_json_catalog_audience_ids(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1592,8 +1580,6 @@ BEGIN
             RETURN public.scd_row_json_background_jobs(k);
         WHEN 'background_schedules' THEN
             RETURN public.scd_row_json_background_schedules(k);
-        WHEN 'catalog_audience' THEN
-            RETURN public.scd_row_json_catalog_audience(k);
         WHEN 'catalog_audience_ids' THEN
             RETURN public.scd_row_json_catalog_audience_ids(k);
         WHEN 'catalog_collection_cursors' THEN

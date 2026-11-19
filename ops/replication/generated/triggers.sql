@@ -26,7 +26,6 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_job_enqueues;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_job_failures;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_jobs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_schedules;
-CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_audience;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_audience_ids;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_collection_cursors;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_collection_seen;
@@ -1645,114 +1644,6 @@ ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zzz_suppress;
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_jobs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_jobs', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_schedules FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_schedules', 'cmd', 'migration', 'repl');
-
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_audience FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_audience', 'cmd', 'migration', 'repl');
-
-CREATE OR REPLACE FUNCTION public.scd_owner_catalog_audience()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    r record;
-    n bigint;
-    held boolean;
-    fast text;
-BEGIN
-    IF current_setting('scd.merging', true) = 'on' THEN
-        IF TG_OP = 'DELETE' THEN
-            RETURN OLD;
-        END IF;
-        RETURN NEW;
-    END IF;
-    IF TG_OP = 'INSERT' THEN
-        fast := current_setting('scd.copy', true);
-        IF fast IS NULL OR fast = '' THEN
-            fast := '-';
-            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
-                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.catalog_audience'::regclass AND s.srsubstate = 'd')
-                AND NOT EXISTS (SELECT 1 FROM public.catalog_audience) THEN
-                fast := 'catalog_audience';
-            END IF;
-            PERFORM pg_catalog.set_config('scd.copy', fast, true);
-        END IF;
-        IF fast = 'catalog_audience' THEN
-            RETURN NEW;
-        END IF;
-    END IF;
-    IF TG_OP = 'DELETE' THEN
-        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', OLD.subject_urn, 'relation', OLD.relation, 'user_urn', OLD.user_urn)) THEN
-            RETURN NULL;
-        END IF;
-        RETURN OLD;
-    END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF (NEW.subject_urn, NEW.relation, NEW.user_urn) IS DISTINCT FROM (OLD.subject_urn, OLD.relation, OLD.user_urn) THEN
-            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', OLD.subject_urn, 'relation', OLD.relation, 'user_urn', OLD.user_urn)) THEN
-                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
-                    INSERT INTO public.catalog_audience (created_at, relation, subject_urn, synced_at, user_urn) VALUES (NEW.created_at, NEW.relation, NEW.subject_urn, NEW.synced_at, NEW.user_urn);
-                END IF;
-                RETURN NULL;
-            END IF;
-            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
-                DELETE FROM public.catalog_audience t WHERE (t.subject_urn, t.relation, t.user_urn) = (OLD.subject_urn, OLD.relation, OLD.user_urn);
-                RETURN NULL;
-            END IF;
-        ELSE
-            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
-                RETURN NULL;
-            END IF;
-        END IF;
-        RETURN NEW;
-    END IF;
-    FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.catalog_audience t WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn) FOR UPDATE;
-        held := FOUND;
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
-            RETURN NULL;
-        END IF;
-        IF held THEN
-            UPDATE public.catalog_audience t SET created_at = NEW.created_at, synced_at = NEW.synced_at WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn);
-            RETURN NULL;
-        END IF;
-        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.catalog_audience (created_at, relation, subject_urn, synced_at, user_urn)
-        VALUES (NEW.created_at, NEW.relation, NEW.subject_urn, NEW.synced_at, NEW.user_urn)
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS n = ROW_COUNT;
-        PERFORM pg_catalog.set_config('scd.merging', '', true);
-        IF n > 0 THEN
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE EXCEPTION 'scd: insert into public.catalog_audience still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();
-ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner;
-
-CREATE OR REPLACE FUNCTION public.scd_owner_copy_catalog_audience()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    p record;
-BEGIN
-    IF current_setting('scd.copy', true) IS DISTINCT FROM 'catalog_audience' THEN
-        RETURN NULL;
-    END IF;
-    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'catalog_audience' LOOP
-        DELETE FROM public.catalog_audience t WHERE t.subject_urn = (p.pk ->> 'subject_urn')::text AND t.relation = (p.pk ->> 'relation')::text AND t.user_urn = (p.pk ->> 'user_urn')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
-    END LOOP;
-    PERFORM pg_catalog.set_config('scd.merging', '', true);
-    RETURN NULL;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.catalog_audience FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_catalog_audience();
-ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner_copy;
-
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_audience_ids FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_audience_ids', 'cmd', 'migration', 'repl');
 
@@ -10048,7 +9939,6 @@ FROM (VALUES
     ('guard', 'background_job_failures', 'scd_guard_background_job_failures'),
     ('guard', 'background_jobs', 'scd_guard_background_jobs'),
     ('guard', 'background_schedules', 'scd_guard_background_schedules'),
-    ('guard', 'catalog_audience', 'scd_guard_catalog_audience'),
     ('guard', 'catalog_audience_ids', 'scd_guard_catalog_audience_ids'),
     ('guard', 'catalog_collection_cursors', 'scd_guard_catalog_collection_cursors'),
     ('guard', 'catalog_collection_seen', 'scd_guard_catalog_collection_seen'),
@@ -10229,10 +10119,6 @@ BEGIN
             ('background_job_failures', 'zzz_suppress'),
             ('background_jobs', 'zz_guard'),
             ('background_schedules', 'zz_guard'),
-            ('catalog_audience', 'zz_guard'),
-            ('catalog_audience', 'zz_owner'),
-            ('catalog_audience', 'zz_owner_copy'),
-            ('catalog_audience', 'zzz_suppress'),
             ('catalog_audience_ids', 'zz_guard'),
             ('catalog_audience_ids', 'zz_owner'),
             ('catalog_audience_ids', 'zz_owner_copy'),

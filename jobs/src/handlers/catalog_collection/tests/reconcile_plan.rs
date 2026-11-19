@@ -13,16 +13,8 @@ struct Reconcile {
     args: String,
 }
 
-fn reconciles() -> [Reconcile; 3] {
+fn reconciles() -> [Reconcile; 2] {
     [
-        Reconcile {
-            target: "catalog_audience",
-            types: "text, text, timestamptz, text, uuid",
-            sql: include_str!("../../../../queries/catalog_collection/audience_reconcile.sql"),
-            args: format!(
-                "'soundcloud:tracks:big', 'track-favoriters', now(), 'big', '{SNAPSHOT}'"
-            ),
-        },
         Reconcile {
             target: "catalog_audience_ids",
             types: "bigint, smallint, timestamptz, text, text, uuid",
@@ -50,9 +42,6 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          INSERT INTO catalog_collection_seen (subject_id, collection, scope, entity_key, snapshot_id)
          SELECT list.subject, collection, 'public', 'soundcloud:users:' || k, list.snapshot_id
          FROM list, unnest(ARRAY['track-favoriters', 'followers']) AS collection, generate_series(1, list.seen) AS k;
-         INSERT INTO catalog_audience (subject_urn, relation, user_urn, created_at)
-         SELECT 'soundcloud:tracks:' || list.subject, 'track-favoriters', 'soundcloud:users:' || k, now() - interval '1 day'
-         FROM list, generate_series(1, list.size) AS k;
          INSERT INTO catalog_audience_ids (subject_id, relation, user_id, created_at)
          SELECT list.id, 1, k, now() - interval '1 day'
          FROM list, generate_series(1, list.size) AS k;
@@ -60,7 +49,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          SELECT list.subject, 'soundcloud:users:' || k, now() - interval '1 day'
          FROM list, generate_series(1, list.size) AS k;
          DROP TABLE list;
-         ANALYZE catalog_collection_sync, catalog_collection_seen, catalog_audience, catalog_audience_ids, user_followers"
+         ANALYZE catalog_collection_sync, catalog_collection_seen, catalog_audience_ids, user_followers"
     ))
     .execute(pool)
     .await?;

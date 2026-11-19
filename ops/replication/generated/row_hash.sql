@@ -238,18 +238,6 @@ AS $f$
 SELECT md5(ROW(t.enabled, t.interval_seconds, t.kind, t.lane, t.max_attempts, t.next_run_at, t.priority, t.updated_at)::text) FROM public.background_schedules t WHERE t.kind = (k ->> 'kind')::character varying(96)
 $f$;
 
-CREATE OR REPLACE FUNCTION public.scd_row_hash_catalog_audience(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.created_at, t.relation, t.subject_urn, t.synced_at, t.user_urn)::text) FROM public.catalog_audience t WHERE t.subject_urn = (k ->> 'subject_urn')::text AND t.relation = (k ->> 'relation')::text AND t.user_urn = (k ->> 'user_urn')::text
-$f$;
-
 CREATE OR REPLACE FUNCTION public.scd_row_hash_catalog_audience_ids(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1592,8 +1580,6 @@ BEGIN
             RETURN public.scd_row_hash_background_jobs(k);
         WHEN 'background_schedules' THEN
             RETURN public.scd_row_hash_background_schedules(k);
-        WHEN 'catalog_audience' THEN
-            RETURN public.scd_row_hash_catalog_audience(k);
         WHEN 'catalog_audience_ids' THEN
             RETURN public.scd_row_hash_catalog_audience_ids(k);
         WHEN 'catalog_collection_cursors' THEN
