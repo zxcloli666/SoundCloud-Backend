@@ -105,7 +105,9 @@ mod tests {
         assert!(seconds("").is_err());
         assert!(seconds("5,x").is_err());
         assert!(seconds("86401").is_err());
-        let many = (0..=MAX_MOMENTS).map(|second| second.to_string()).collect::<Vec<_>>();
+        let many = (0..=MAX_MOMENTS)
+            .map(|second| second.to_string())
+            .collect::<Vec<_>>();
         assert!(seconds(&many.join(",")).is_err());
     }
 
