@@ -49,7 +49,7 @@ pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
     version: 466,
-    description: "catalog audience ids published",
+    description: "scd install",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,
