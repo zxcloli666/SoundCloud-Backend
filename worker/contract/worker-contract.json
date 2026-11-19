@@ -542,6 +542,68 @@
         "separation_skipped"
       ]
     },
+    "video-assemble": {
+      "ack_wait_s": 60,
+      "attempt_window_s": 3900,
+      "bridge_ttl_s": null,
+      "correlation": [
+        "sc_track_id",
+        "attempt",
+        "step"
+      ],
+      "correlation_prefix": "video_assemble",
+      "correlation_separator": ":",
+      "deadline_s": 600,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.video_assemble",
+      "durable": "video-assemble-workers",
+      "echo": {
+        "attempt": "attempt",
+        "sc_track_id": "sc_track_id",
+        "step": "step"
+      },
+      "filter_subject": "video.assemble.new",
+      "heartbeat_s": 12,
+      "max_ack_pending": 8,
+      "max_deliver": 5,
+      "nak_base_s": 60,
+      "nak_cap_s": 1800,
+      "public": false,
+      "quarantine_after_s": 90300,
+      "reasons": [
+        "invalid_request",
+        "undecodable_audio",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost",
+        "inputs_gone"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "result_max_bytes": 800000,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "VIDEO_ASSEMBLE",
+      "worker_reasons": [
+        "invalid_request",
+        "undecodable_audio",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "inputs_gone"
+      ]
+    },
     "video-find": {
       "ack_wait_s": 60,
       "attempt_window_s": 3900,
@@ -611,6 +673,130 @@
         "engine_restarted",
         "no_video_found",
         "static_video",
+        "inputs_gone"
+      ]
+    },
+    "video-keyframe": {
+      "ack_wait_s": 60,
+      "attempt_window_s": 5700,
+      "bridge_ttl_s": 960,
+      "correlation": [
+        "sc_track_id",
+        "attempt",
+        "step"
+      ],
+      "correlation_prefix": "video_keyframe",
+      "correlation_separator": ":",
+      "deadline_s": 900,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.video_keyframe",
+      "durable": "video-keyframe-workers",
+      "echo": {
+        "attempt": "attempt",
+        "sc_track_id": "sc_track_id",
+        "step": "step"
+      },
+      "filter_subject": "video.keyframe.new",
+      "heartbeat_s": 12,
+      "max_ack_pending": 4,
+      "max_deliver": 5,
+      "nak_base_s": 60,
+      "nak_cap_s": 1800,
+      "public": true,
+      "quarantine_after_s": 92100,
+      "reasons": [
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout",
+        "inputs_gone"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout"
+      ],
+      "result_max_bytes": 800000,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "VIDEO_KEYFRAME",
+      "worker_reasons": [
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "inputs_gone"
+      ]
+    },
+    "video-shot": {
+      "ack_wait_s": 60,
+      "attempt_window_s": 10200,
+      "bridge_ttl_s": 1860,
+      "correlation": [
+        "sc_track_id",
+        "attempt",
+        "step"
+      ],
+      "correlation_prefix": "video_shot",
+      "correlation_separator": ":",
+      "deadline_s": 1800,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.video_shot",
+      "durable": "video-shot-workers",
+      "echo": {
+        "attempt": "attempt",
+        "sc_track_id": "sc_track_id",
+        "step": "step"
+      },
+      "filter_subject": "video.shot.new",
+      "heartbeat_s": 12,
+      "max_ack_pending": 4,
+      "max_deliver": 5,
+      "nak_base_s": 60,
+      "nak_cap_s": 1800,
+      "public": true,
+      "quarantine_after_s": 96600,
+      "reasons": [
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout",
+        "inputs_gone"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout"
+      ],
+      "result_max_bytes": 800000,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "VIDEO_SHOT",
+      "worker_reasons": [
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
         "inputs_gone"
       ]
     },
@@ -2945,6 +3131,309 @@
       "title": "done.transcribe",
       "type": "object"
     },
+    "done.video_assemble": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "VideoClip": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "parts": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bytes",
+            "sha256",
+            "parts"
+          ],
+          "type": "object"
+        },
+        "VideoFileSlice": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "offset",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "VideoPart": {
+          "properties": {
+            "data": {
+              "maxLength": 699052,
+              "minLength": 1,
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "index",
+            "data"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout",
+            "separation_skipped",
+            "no_video_found",
+            "static_video",
+            "inputs_gone"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "clip",
+              "files",
+              "part"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "inputs_gone"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "undecodable_audio",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "download_failed",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "clip": {
+          "$ref": "#/$defs/VideoClip"
+        },
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/VideoFileSlice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "part": {
+          "$ref": "#/$defs/VideoPart"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "step": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "step",
+        "status",
+        "producer"
+      ],
+      "title": "done.video_assemble",
+      "type": "object"
+    },
     "done.video_find": {
       "$defs": {
         "Producer": {
@@ -3265,6 +3754,612 @@
         "producer"
       ],
       "title": "done.video_find",
+      "type": "object"
+    },
+    "done.video_keyframe": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "VideoClip": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "parts": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bytes",
+            "sha256",
+            "parts"
+          ],
+          "type": "object"
+        },
+        "VideoFileSlice": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "offset",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "VideoPart": {
+          "properties": {
+            "data": {
+              "maxLength": 699052,
+              "minLength": 1,
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "index",
+            "data"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout",
+            "separation_skipped",
+            "no_video_found",
+            "static_video",
+            "inputs_gone"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "clip",
+              "files",
+              "part"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "inputs_gone"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "download_failed",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost",
+                  "public_node_timeout"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "clip": {
+          "$ref": "#/$defs/VideoClip"
+        },
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/VideoFileSlice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "part": {
+          "$ref": "#/$defs/VideoPart"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "step": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "step",
+        "status",
+        "producer"
+      ],
+      "title": "done.video_keyframe",
+      "type": "object"
+    },
+    "done.video_shot": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "VideoClip": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "parts": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bytes",
+            "sha256",
+            "parts"
+          ],
+          "type": "object"
+        },
+        "VideoFileSlice": {
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "offset",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "VideoPart": {
+          "properties": {
+            "data": {
+              "maxLength": 699052,
+              "minLength": 1,
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "index",
+            "data"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout",
+            "separation_skipped",
+            "no_video_found",
+            "static_video",
+            "inputs_gone"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "clip",
+              "files",
+              "part"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "inputs_gone"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "download_failed",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost",
+                  "public_node_timeout"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "clip": {
+          "$ref": "#/$defs/VideoClip"
+        },
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/VideoFileSlice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "part": {
+          "$ref": "#/$defs/VideoPart"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "step": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "step",
+        "status",
+        "producer"
+      ],
+      "title": "done.video_shot",
       "type": "object"
     },
     "done.video_vlm": {
@@ -4032,6 +5127,102 @@
       "title": "transcribe.audio.new",
       "type": "object"
     },
+    "video.assemble.new": {
+      "$defs": {
+        "VideoAssembleShot": {
+          "properties": {
+            "duration_ms": {
+              "format": "int32",
+              "maximum": 120000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "trim_start_ms": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "url": {
+              "maxLength": 4096,
+              "pattern": "^https?://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "trim_start_ms",
+            "duration_ms"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "audio_offset_ms": {
+          "format": "int32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "audio_url": {
+          "maxLength": 4096,
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "fps": {
+          "format": "uint32",
+          "maximum": 60,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "height": {
+          "format": "uint32",
+          "maximum": 1280,
+          "minimum": 64,
+          "type": "integer"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "shots": {
+          "items": {
+            "$ref": "#/$defs/VideoAssembleShot"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "type": "array"
+        },
+        "step": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "maximum": 1280,
+          "minimum": 64,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "step",
+        "audio_url",
+        "audio_offset_ms",
+        "shots",
+        "width",
+        "height",
+        "fps"
+      ],
+      "title": "video.assemble.new",
+      "type": "object"
+    },
     "video.find.new": {
       "$defs": {
         "VideoCandidate": {
@@ -4128,6 +5319,153 @@
         "candidates"
       ],
       "title": "video.find.new",
+      "type": "object"
+    },
+    "video.keyframe.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "cover_url": {
+          "maxLength": 4096,
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "height": {
+          "format": "uint32",
+          "maximum": 1280,
+          "minimum": 64,
+          "type": "integer"
+        },
+        "negative_prompt": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "prompt": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "step": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "maximum": 1280,
+          "minimum": 64,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "step",
+        "cover_url",
+        "prompt",
+        "negative_prompt",
+        "width",
+        "height",
+        "seed"
+      ],
+      "title": "video.keyframe.new",
+      "type": "object"
+    },
+    "video.shot.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "fps": {
+          "format": "uint32",
+          "maximum": 60,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "frame_url": {
+          "maxLength": 4096,
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "frames": {
+          "format": "uint32",
+          "maximum": 161,
+          "minimum": 5,
+          "type": "integer"
+        },
+        "height": {
+          "format": "uint32",
+          "maximum": 1280,
+          "minimum": 64,
+          "type": "integer"
+        },
+        "negative_prompt": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "prompt": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "step": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "stills": {
+          "format": "uint32",
+          "maximum": 8,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "maximum": 1280,
+          "minimum": 64,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "attempt",
+        "step",
+        "frame_url",
+        "prompt",
+        "negative_prompt",
+        "width",
+        "height",
+        "frames",
+        "fps",
+        "stills",
+        "seed"
+      ],
+      "title": "video.shot.new",
       "type": "object"
     },
     "video.vlm.new": {
@@ -4301,6 +5639,18 @@
         "transcribe.>"
       ]
     },
+    "VIDEO_ASSEMBLE": {
+      "allow_direct": false,
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "storage": "file",
+      "subjects": [
+        "video.assemble.>"
+      ]
+    },
     "VIDEO_FIND": {
       "allow_direct": false,
       "discard": "new",
@@ -4311,6 +5661,30 @@
       "storage": "file",
       "subjects": [
         "video.find.>"
+      ]
+    },
+    "VIDEO_KEYFRAME": {
+      "allow_direct": false,
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "storage": "file",
+      "subjects": [
+        "video.keyframe.>"
+      ]
+    },
+    "VIDEO_SHOT": {
+      "allow_direct": false,
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "storage": "file",
+      "subjects": [
+        "video.shot.>"
       ]
     },
     "VIDEO_VLM": {

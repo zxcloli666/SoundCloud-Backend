@@ -884,6 +884,9 @@ pub const TRAIN_TASTE: &str = "train.taste.new";
 pub const HIGHLIGHT_TRACK: &str = "highlight.track.new";
 pub const VIDEO_FIND: &str = "video.find.new";
 pub const VIDEO_VLM: &str = "video.vlm.new";
+pub const VIDEO_KEYFRAME: &str = "video.keyframe.new";
+pub const VIDEO_SHOT: &str = "video.shot.new";
+pub const VIDEO_ASSEMBLE: &str = "video.assemble.new";
 
 pub const DONE_INDEX_AUDIO: &str = "done.index_audio";
 pub const DONE_EMBED_LYRICS: &str = "done.embed_lyrics";
@@ -894,6 +897,9 @@ pub const DONE_ENCODE: &str = "done.encode";
 pub const DONE_HIGHLIGHT: &str = "done.highlight";
 pub const DONE_VIDEO_FIND: &str = "done.video_find";
 pub const DONE_VIDEO_VLM: &str = "done.video_vlm";
+pub const DONE_VIDEO_KEYFRAME: &str = "done.video_keyframe";
+pub const DONE_VIDEO_SHOT: &str = "done.video_shot";
+pub const DONE_VIDEO_ASSEMBLE: &str = "done.video_assemble";
 pub const HIGHLIGHT_VERSION: i16 = 2;
 
 pub const WORKER_INVALID_SUBJECT: &str = "worker.invalid.<lane>";
@@ -964,6 +970,12 @@ pub const VIDEO_FIND_STREAM: PipelineStreamSpec =
     work_stream("VIDEO_FIND", &["video.find.>"], DAY, DAY);
 pub const VIDEO_VLM_STREAM: PipelineStreamSpec =
     work_stream("VIDEO_VLM", &["video.vlm.>"], DAY, DAY);
+pub const VIDEO_KEYFRAME_STREAM: PipelineStreamSpec =
+    work_stream("VIDEO_KEYFRAME", &["video.keyframe.>"], DAY, DAY);
+pub const VIDEO_SHOT_STREAM: PipelineStreamSpec =
+    work_stream("VIDEO_SHOT", &["video.shot.>"], DAY, DAY);
+pub const VIDEO_ASSEMBLE_STREAM: PipelineStreamSpec =
+    work_stream("VIDEO_ASSEMBLE", &["video.assemble.>"], DAY, DAY);
 pub const WORKER_INVALID_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     name: "WORKER_INVALID",
     subjects: &["worker.invalid.>"],
@@ -999,7 +1011,7 @@ pub const STORAGE_EVENTS_STREAM: PipelineStreamSpec = PipelineStreamSpec {
     allow_direct: false,
 };
 
-pub const WORKER_STREAMS: [PipelineStreamSpec; 14] = [
+pub const WORKER_STREAMS: [PipelineStreamSpec; 17] = [
     INDEX_AUDIO_STREAM,
     EMBED_LYRICS_STREAM,
     TRANSCRIBE_STREAM,
@@ -1009,6 +1021,9 @@ pub const WORKER_STREAMS: [PipelineStreamSpec; 14] = [
     HIGHLIGHT_STREAM,
     VIDEO_FIND_STREAM,
     VIDEO_VLM_STREAM,
+    VIDEO_KEYFRAME_STREAM,
+    VIDEO_SHOT_STREAM,
+    VIDEO_ASSEMBLE_STREAM,
     AI_RPC_STREAM,
     SPEAK_RPC_STREAM,
     SPEAK_REPLY_STREAM,
@@ -1029,6 +1044,9 @@ pub const PIPELINE_STREAMS: &[PipelineStreamSpec] = &[
     HIGHLIGHT_STREAM,
     VIDEO_FIND_STREAM,
     VIDEO_VLM_STREAM,
+    VIDEO_KEYFRAME_STREAM,
+    VIDEO_SHOT_STREAM,
+    VIDEO_ASSEMBLE_STREAM,
     WORKER_INVALID_STREAM,
     DONE_STREAM,
     STORAGE_EVENTS_STREAM,

@@ -91,7 +91,10 @@ fn receiver_of(lane: WorkerLane) -> Option<WorkerLostLane> {
         | WorkerLane::Speak
         | WorkerLane::Highlight
         | WorkerLane::VideoFind
-        | WorkerLane::VideoVlm => None,
+        | WorkerLane::VideoVlm
+        | WorkerLane::VideoKeyframe
+        | WorkerLane::VideoShot
+        | WorkerLane::VideoAssemble => None,
     }
 }
 

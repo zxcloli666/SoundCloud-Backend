@@ -60,7 +60,7 @@ fn caps() -> Caps {
 }
 
 fn budget(store: &Arc<MemorySpend>, caps: Caps) -> Arc<Budget> {
-    Arc::new(Budget::new(store.clone(), "chat", caps))
+    Arc::new(Budget::new(store.clone(), "chat", caps, 1))
 }
 
 #[tokio::test]
@@ -200,4 +200,24 @@ fn caps_come_from_dollars() {
     assert_eq!(caps.month, Some(1_500_000));
     assert_eq!(caps.user_day, Some(20_000));
     assert!(caps.is_set() && !Caps::default().is_set());
+}
+
+#[tokio::test]
+async fn a_month_from_the_reset_day_is_named_after_the_month_it_starts_in() {
+    let store = Arc::new(MemorySpend::default());
+    let budget = Arc::new(Budget::new(store.clone(), "chat", caps(), 17));
+    store.set("chat.month.2026-02", 1_000_000);
+    assert!(budget.is_spent(None, moment()).await);
+    let reset = Utc.with_ymd_and_hms(2026, 3, 17, 0, 0, 0).unwrap();
+    assert!(!budget.is_spent(None, reset).await);
+}
+
+#[test]
+fn the_month_starts_on_the_reset_day_and_wraps_the_year() {
+    let at = |y, m, d| Utc.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap();
+    let start = |y, m, d| Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap();
+    assert_eq!(month_start(at(2026, 3, 9), 1), start(2026, 3, 1));
+    assert_eq!(month_start(at(2026, 3, 16), 17), start(2026, 2, 17));
+    assert_eq!(month_start(at(2026, 3, 17), 17), start(2026, 3, 17));
+    assert_eq!(month_start(at(2026, 1, 5), 17), start(2025, 12, 17));
 }

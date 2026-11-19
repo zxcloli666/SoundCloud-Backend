@@ -49,6 +49,8 @@ from worker.runtime.engine_client import (
 from worker.runtime.protocol import Arrays, Call, ErrorKind
 from worker.runtime.supervisor import Supervisor
 from worker.settings import (
+    IMAGE_EDIT_SLOT,
+    IMAGE_TO_VIDEO_SLOT,
     LOCAL_LLM_METHOD,
     LOCAL_LLM_SLOT,
     TTS_METHOD,
@@ -374,6 +376,22 @@ class RuntimeEngines:
             scores={str(name): as_number(value, VLM_SLOT) for name, value in scores.items()},
         )
 
+    async def edit_image(
+        self, image: Uint8Array, args: Mapping[str, object], deadline: Deadline
+    ) -> Uint8Array:
+        arrays, _ = await self._slots.direct(
+            IMAGE_EDIT_SLOT, "edit", {"image": image}, args, deadline
+        )
+        return uint8(arrays, "image", IMAGE_EDIT_SLOT)
+
+    async def animate_image(
+        self, image: Uint8Array, args: Mapping[str, object], deadline: Deadline
+    ) -> Uint8Array:
+        arrays, _ = await self._slots.direct(
+            IMAGE_TO_VIDEO_SLOT, "animate", {"image": image}, args, deadline
+        )
+        return uint8(arrays, "frames", IMAGE_TO_VIDEO_SLOT)
+
     async def train_collab(
         self,
         sessions_path: Path,
@@ -574,6 +592,13 @@ def translated(slot: str, bad_input: Reason) -> Iterator[None]:
 
 def token_estimate(text: str) -> int:
     return max(1, len(text.encode("utf-8")) // TEXT_BYTES_PER_TOKEN)
+
+
+def uint8(arrays: Mapping[str, np.ndarray], key: str, slot: str) -> Uint8Array:
+    array = arrays.get(key)
+    if array is None or array.dtype != np.uint8:
+        raise invalid(slot, f"reply has no uint8 array {key!r}")
+    return np.ascontiguousarray(array)
 
 
 def float32(arrays: Mapping[str, np.ndarray], key: str, slot: str) -> Float32Array:

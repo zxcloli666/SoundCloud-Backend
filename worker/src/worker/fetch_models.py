@@ -252,6 +252,13 @@ def artifacts_for(slot: str, settings: Settings, environ: Mapping[str, str]) -> 
         return [VerifiedDownload((spec.model,), spec.revision, target)]
     if slot == ROFORMER_SLOT:
         return roformer_artifacts(spec, home(environ, ROFORMER_HOME_ENV))
+    if slot == settings_module.IMAGE_TO_VIDEO_SLOT:
+        shot = settings.video_gen.shot
+        loras = [
+            HubFile(shot.lora_repo, shot.lora_revision, weights.file, weights.sha256)
+            for weights in (shot.lora_high, shot.lora_low)
+        ]
+        return [HubSnapshot(spec.model, spec.revision), *loras]
     return [HubSnapshot(spec.model, spec.revision), *COMPANIONS.get(spec.model, ())]
 
 

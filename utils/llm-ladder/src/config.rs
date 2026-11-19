@@ -103,6 +103,12 @@ pub struct CapSettings {
 #[serde(deny_unknown_fields)]
 pub struct BudgetSettings {
     pub bucket: String,
+    #[serde(default = "first_day")]
+    pub reset_day: u32,
+}
+
+fn first_day() -> u32 {
+    1
 }
 
 impl Settings {

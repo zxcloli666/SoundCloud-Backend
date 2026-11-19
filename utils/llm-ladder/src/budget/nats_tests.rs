@@ -202,7 +202,7 @@ async fn an_unreachable_server_spends_the_budget_within_the_read_budget() {
         month_usd: Some(1.0),
         ..CapSettings::default()
     });
-    let budget = Budget::new(spend, "chat", caps);
+    let budget = Budget::new(spend, "chat", caps, 1);
     let started = Instant::now();
 
     assert!(budget.is_spent(None, Utc::now()).await);

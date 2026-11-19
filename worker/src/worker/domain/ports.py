@@ -196,6 +196,14 @@ class Engines(Protocol):
         self, frames: Uint8Array, prompt: str, labels: Sequence[str], deadline: Deadline
     ) -> FrameVerdict: ...
 
+    async def edit_image(
+        self, image: Uint8Array, args: Mapping[str, object], deadline: Deadline
+    ) -> Uint8Array: ...
+
+    async def animate_image(
+        self, image: Uint8Array, args: Mapping[str, object], deadline: Deadline
+    ) -> Uint8Array: ...
+
     async def train_collab(
         self,
         sessions_path: Path,

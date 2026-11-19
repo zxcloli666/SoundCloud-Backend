@@ -34,6 +34,9 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 | `highlight` | `HIGHLIGHT` | `highlight.track.new` | `done.highlight` | нет |
 | `video-find` | `VIDEO_FIND` | `video.find.new` | `done.video_find` | нет |
 | `video-vlm` | `VIDEO_VLM` | `video.vlm.new` | `done.video_vlm` | нет |
+| `video-keyframe` | `VIDEO_KEYFRAME` | `video.keyframe.new` | `done.video_keyframe` | да |
+| `video-shot` | `VIDEO_SHOT` | `video.shot.new` | `done.video_shot` | да |
+| `video-assemble` | `VIDEO_ASSEMBLE` | `video.assemble.new` | `done.video_assemble` | нет |
 
 Лейн держит на сервере один pull-запрос на свои свободные места со сроком 5 с, без `no_wait` и
 heartbeat, и отдаёт задачу обработчику сразу, как она пришла. Пустой запрос, закрытый раньше срока,
@@ -60,6 +63,15 @@ CLIP из слота `clip`. В задаче только `s3_url` трека, �
 clip, loop или static; грамматика не даёт другого ответа. Ответ: `label`, `scores` по классам, `model`.
 Для `clip` кусок режется и приходит частями, как у `video-find`. Если файла уже нет, причина
 `inputs_gone`. Лейн выключен в профиле `cpu`, пока бенчмарк не выберет модель; веса тянет `fetch_models`.
+
+Генерация ролика по обложке: три лейна, ни один не включён в шаблонных профилях, включает хост.
+`video-keyframe` (GPU, слот `image-edit`, Qwen-Image-Edit-2511) по ссылке на обложку и промпту рисует
+кадр и отдаёт `frame.png`. `video-shot` (GPU, слот `image-to-video`, Wan 2.2 I2V A14B с LoRA Lightning
+на 4 шага) оживляет кадр по ссылке и отдаёт `shot.mp4` и кадры `still{n}.jpg` из него. `video-assemble`
+(CPU, ffmpeg) режет шоты по `trim_start_ms`/`duration_ms`, приводит к квадрату без полос, склеивает со
+звуком трека с `audio_offset_ms` и отдаёт `video.mp4`. Все файлы ответа идут одним блобом кусками по
+512 КиБ: `clip {bytes, sha256, parts}`, `files [{name, offset, bytes}]` и `part {index, data}`.
+Пропавший файл по ссылке (404/410/403) даёт `inputs_gone`.
 
 `highlight` ищет момент трека: самое цепляющее окно 30 с (`start_ms`, `length_ms`, `score` от 0 до 1).
 Только numpy на CPU, моделей нет; включён в профиле `cpu` (worker1). Кадры по 0,5 с: громкость и

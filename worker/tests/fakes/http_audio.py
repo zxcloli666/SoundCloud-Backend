@@ -12,6 +12,7 @@ class FakeAudioServer:
     body: bytes = b""
     slow_chunk_delay_s: float = 0.2
     huge_bytes: int = 100 * 1024 * 1024
+    files: dict[str, bytes] = field(default_factory=dict)
     requests: list[str] = field(default_factory=list)
     _server: TestServer | None = None
 
@@ -28,6 +29,7 @@ class FakeAudioServer:
                 web.get("/slow", self._slow),
                 web.get("/huge", self._huge),
                 web.get("/garbage", self._garbage),
+                web.get("/files/{name}", self._file),
             ]
         )
         self._server = TestServer(app)
@@ -79,3 +81,10 @@ class FakeAudioServer:
     async def _garbage(self, request: web.Request) -> web.Response:
         self.requests.append(request.path)
         return web.Response(body=b"not audio at all", content_type="audio/mpeg")
+
+    async def _file(self, request: web.Request) -> web.Response:
+        self.requests.append(request.path)
+        body = self.files.get(request.match_info["name"])
+        if body is None:
+            return web.Response(status=404)
+        return web.Response(body=body, content_type="application/octet-stream")

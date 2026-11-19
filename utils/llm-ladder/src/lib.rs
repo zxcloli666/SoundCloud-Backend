@@ -11,6 +11,7 @@ mod race;
 mod request;
 mod schema;
 
+pub use budget::month_start;
 pub use config::{
     BreakerSettings, BudgetSettings, CapSettings, Kind, LadderSettings, ProviderSettings, Rung,
     SecretRef, Settings,

@@ -88,6 +88,10 @@ impl Ladders {
                 }
             }
         }
+        let reset_day = settings
+            .budget
+            .as_ref()
+            .map_or(1, |budget| budget.reset_day);
         let ladders = settings
             .ladders
             .iter()
@@ -97,6 +101,7 @@ impl Ladders {
                     ladder,
                     &providers,
                     spend.clone(),
+                    reset_day,
                     hosting.observer.clone(),
                 );
                 (id.clone(), Arc::new(ladder))
@@ -175,6 +180,7 @@ impl Ladder {
         settings: &LadderSettings,
         providers: &HashMap<&str, Arc<Provider>>,
         spend: Option<Arc<dyn SpendStore>>,
+        reset_day: u32,
         observer: Arc<dyn Observer>,
     ) -> Self {
         let caps = Caps::from(settings.budget);
@@ -204,7 +210,7 @@ impl Ladder {
             deadline: Duration::from_millis(settings.deadline_ms),
             budget: spend
                 .filter(|_| caps.is_set())
-                .map(|store| Arc::new(Budget::new(store, id, caps))),
+                .map(|store| Arc::new(Budget::new(store, id, caps, reset_day))),
             observer,
         }
     }

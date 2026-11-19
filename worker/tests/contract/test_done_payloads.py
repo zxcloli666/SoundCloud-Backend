@@ -29,6 +29,9 @@ DESIGN_CORRELATION = {
     "highlight": "highlight:98765:2",
     "video-find": "video_find:98765:2",
     "video-vlm": "video_vlm:98765:2",
+    "video-keyframe": "video_keyframe:98765:2:3",
+    "video-shot": "video_shot:98765:2:4",
+    "video-assemble": "video_assemble:98765:2:9",
 }
 LRC_LINE = "[59:59.99]а\n"
 REFERENCE_TEXT_BYTES = 16000

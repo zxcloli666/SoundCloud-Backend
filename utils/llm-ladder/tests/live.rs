@@ -269,6 +269,7 @@ async fn a_spent_cap_moves_the_next_request_to_the_unpriced_steps() {
     let bucket = format!("spend_live_{micros}");
     settings.budget = Some(BudgetSettings {
         bucket: bucket.clone(),
+        reset_day: 1,
     });
     let url = std::env::var("NATS_URL").expect("NATS_URL");
     let context = jetstream::new(async_nats::connect(url).await.expect("nats"));

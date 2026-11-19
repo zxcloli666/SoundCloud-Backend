@@ -13,6 +13,7 @@ mod taste;
 mod telemetry;
 mod transport;
 pub mod vector_store;
+pub mod video_gen;
 pub mod worker_contract;
 
 pub use catalog_collection::{
