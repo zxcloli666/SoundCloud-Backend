@@ -91,7 +91,10 @@ fn receiver_of(lane: WorkerLane) -> Option<WorkerLostLane> {
         | WorkerLane::Speak
         | WorkerLane::Highlight
         | WorkerLane::VideoFind
-        | WorkerLane::VideoVlm => None,
+        | WorkerLane::VideoVlm
+        | WorkerLane::VideoKeyframe
+        | WorkerLane::VideoShot
+        | WorkerLane::VideoAssemble => None,
     }
 }
 
@@ -605,6 +608,9 @@ mod tests {
                     | WorkerLane::Highlight
                     | WorkerLane::VideoFind
                     | WorkerLane::VideoVlm
+                    | WorkerLane::VideoKeyframe
+                    | WorkerLane::VideoShot
+                    | WorkerLane::VideoAssemble
             );
             assert!(
                 !promises_reopen

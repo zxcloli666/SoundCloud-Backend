@@ -100,6 +100,48 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "duration_ms": 96000,
             "offset_ms": 1500,
         },
+        "video-keyframe": {
+            "sc_track_id": "98765",
+            "attempt": 2,
+            "step": 3,
+            "cover_url": "https://i1.sndcdn.com/artworks-000-t500x500.jpg",
+            "prompt": "the same girl from the cover walks through rain at night",
+            "negative_prompt": "text, logo, extra people",
+            "width": 720,
+            "height": 720,
+            "seed": 11,
+        },
+        "video-shot": {
+            "sc_track_id": "98765",
+            "attempt": 2,
+            "step": 4,
+            "frame_url": "https://storage.example/video-tmp/gen/98765-2-3.png",
+            "prompt": "slow push in, hair moves in the wind",
+            "negative_prompt": "",
+            "width": 720,
+            "height": 720,
+            "frames": 81,
+            "fps": 16,
+            "stills": 4,
+            "seed": 12,
+        },
+        "video-assemble": {
+            "sc_track_id": "98765",
+            "attempt": 2,
+            "step": 9,
+            "audio_url": "https://storage.example/audio/98765.opus",
+            "audio_offset_ms": 52500,
+            "shots": [
+                {
+                    "url": "https://storage.example/video-tmp/gen/98765-2-4.mp4",
+                    "trim_start_ms": 0,
+                    "duration_ms": 5000,
+                }
+            ],
+            "width": 720,
+            "height": 720,
+            "fps": 16,
+        },
     }
 )
 
@@ -143,6 +185,24 @@ RPC_REPLIES: Mapping[str, tuple[Mapping[str, object], ...]] = MappingProxyType(
     }
 )
 RPC_ERRORS = ("expired", "invalid_request", "internal")
+
+GEN_REASONS = frozenset(
+    {
+        Reason.INVALID_REQUEST,
+        Reason.MODEL_OUTPUT_INVALID,
+        Reason.DEADLINE_EXCEEDED,
+        Reason.ENGINE_CRASHED,
+        Reason.OUT_OF_MEMORY,
+        Reason.DOWNLOAD_FAILED,
+        Reason.INTERNAL_ERROR,
+        Reason.ENGINE_RESTARTED,
+        Reason.INPUTS_GONE,
+    }
+)
+GEN_FILE = {
+    "bytes": 3,
+    "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+}
 
 DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
     {
@@ -279,6 +339,9 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.INPUTS_GONE,
             }
         ),
+        "video-keyframe": GEN_REASONS,
+        "video-shot": GEN_REASONS,
+        "video-assemble": GEN_REASONS | {Reason.UNDECODABLE_AUDIO},
         "highlight": frozenset(
             {
                 Reason.AUDIO_NOT_FOUND,
@@ -378,6 +441,14 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
                     "label": "loop",
                     "model": "Qwen/Qwen3-VL-2B-Instruct-GGUF/Qwen3VL-2B-Q4_K_M.gguf@52d6c8ff",
                     "scores": {"clip": 0.1, "loop": 0.8, "static": 0.1},
+                }
+            return {}
+        case "video-keyframe" | "video-shot" | "video-assemble":
+            if ok:
+                return {
+                    "clip": {**GEN_FILE, "parts": 1},
+                    "files": [{"name": "frame.png", "offset": 0, "bytes": 3}],
+                    "part": {"index": 0, "data": "YWJj"},
                 }
             return {}
     raise AssertionError(f"no fields for lane {lane}")

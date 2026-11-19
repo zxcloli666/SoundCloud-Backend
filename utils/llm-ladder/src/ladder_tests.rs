@@ -262,7 +262,7 @@ fn rungs_of(
         deadline: DEADLINE,
         budget: caps
             .is_set()
-            .then(|| Arc::new(Budget::new(spend.clone(), "chat", caps))),
+            .then(|| Arc::new(Budget::new(spend.clone(), "chat", caps, 1))),
         observer: seen.clone(),
     };
     Bench {

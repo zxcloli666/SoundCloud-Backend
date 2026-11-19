@@ -7,25 +7,30 @@ use crate::pipeline::{
     AI_COMPLETE, AI_RPC_STREAM, AudioIndexRequest, AudioIndexResult,
     COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest, CollabTrainResult,
     CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT,
-    DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, DONE_VIDEO_FIND,
-    DONE_VIDEO_VLM, EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel,
-    EncodeRequest, EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest,
-    HighlightResult, INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest,
-    LyricsEmbeddingResult, MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES,
-    MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS,
-    MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS, MAX_VIDEO_PARTS,
-    PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY,
-    SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM,
-    TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest, TasteTrainResult, TranscriptionRequest,
-    TranscriptionResult, VIDEO_FIND, VIDEO_FIND_STREAM, VIDEO_PART_BYTES, VIDEO_VLM,
-    VIDEO_VLM_STREAM, VideoFindRequest, VideoFindResult, VideoVlmRequest, VideoVlmResult,
-    WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT,
-    WORKER_STREAMS, collab_vectors_suffix,
+    DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, DONE_VIDEO_ASSEMBLE,
+    DONE_VIDEO_FIND, DONE_VIDEO_KEYFRAME, DONE_VIDEO_SHOT, DONE_VIDEO_VLM, EMBED_LYRICS,
+    EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest, EncodeResult,
+    HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult, INDEX_AUDIO,
+    INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult, MAX_COMPLETE_MESSAGE_BYTES,
+    MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
+    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
+    MAX_VIDEO_PARTS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS,
+    SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM,
+    TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest,
+    TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_ASSEMBLE,
+    VIDEO_ASSEMBLE_STREAM, VIDEO_FIND, VIDEO_FIND_STREAM, VIDEO_KEYFRAME, VIDEO_KEYFRAME_STREAM,
+    VIDEO_PART_BYTES, VIDEO_SHOT, VIDEO_SHOT_STREAM, VIDEO_VLM, VIDEO_VLM_STREAM, VideoFindRequest,
+    VideoFindResult, VideoVlmRequest, VideoVlmResult, WORKER_HEALTH_SUBJECT,
+    WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS,
+    collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
     QUERY_VEC_MULAN_DIMENSIONS, TRACKS_CLAP_DIMENSIONS, TRACKS_COLLAB_DIMENSIONS,
     TRACKS_LYRICS_DIMENSIONS, TRACKS_MERT_DIMENSIONS, TRACKS_TASTE_DIMENSIONS,
+};
+use crate::video_gen::{
+    VideoAssembleRequest, VideoGenResult, VideoKeyframeRequest, VideoShotRequest,
 };
 
 pub const CONTRACT_VERSION: u32 = 4;
@@ -60,10 +65,13 @@ pub enum WorkerLane {
     Highlight,
     VideoFind,
     VideoVlm,
+    VideoKeyframe,
+    VideoShot,
+    VideoAssemble,
 }
 
 impl WorkerLane {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
         Self::Audio,
         Self::Lyrics,
         Self::Transcribe,
@@ -75,6 +83,9 @@ impl WorkerLane {
         Self::Highlight,
         Self::VideoFind,
         Self::VideoVlm,
+        Self::VideoKeyframe,
+        Self::VideoShot,
+        Self::VideoAssemble,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -90,6 +101,9 @@ impl WorkerLane {
             Self::Highlight => "highlight",
             Self::VideoFind => "video-find",
             Self::VideoVlm => "video-vlm",
+            Self::VideoKeyframe => "video-keyframe",
+            Self::VideoShot => "video-shot",
+            Self::VideoAssemble => "video-assemble",
         }
     }
 
@@ -106,6 +120,9 @@ impl WorkerLane {
             Self::Highlight => &HIGHLIGHT_LANE,
             Self::VideoFind => &VIDEO_FIND_LANE,
             Self::VideoVlm => &VIDEO_VLM_LANE,
+            Self::VideoKeyframe => &VIDEO_KEYFRAME_LANE,
+            Self::VideoShot => &VIDEO_SHOT_LANE,
+            Self::VideoAssemble => &VIDEO_ASSEMBLE_LANE,
         }
     }
 }
@@ -462,7 +479,85 @@ pub const VIDEO_VLM_LANE: WorkerLaneSpec = WorkerLaneSpec {
     priority_group: None,
 };
 
-pub const WORKER_LANES: [WorkerLaneSpec; 11] = [
+pub const VIDEO_KEYFRAME_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::VideoKeyframe,
+    stream: VIDEO_KEYFRAME_STREAM,
+    durable: "video-keyframe-workers",
+    filter_subject: VIDEO_KEYFRAME,
+    done_subject: Some(DONE_VIDEO_KEYFRAME),
+    correlation_prefix: "video_keyframe",
+    correlation: &["sc_track_id", "attempt", "step"],
+    echo: &[
+        ("sc_track_id", "sc_track_id"),
+        ("attempt", "attempt"),
+        ("step", "step"),
+    ],
+    deadline_s: 900,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 4,
+    nak: Some(NakBackoff {
+        base_s: 60,
+        cap_s: 1800,
+    }),
+    result_max_bytes: 800_000,
+    public: true,
+    priority_group: None,
+};
+
+pub const VIDEO_SHOT_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::VideoShot,
+    stream: VIDEO_SHOT_STREAM,
+    durable: "video-shot-workers",
+    filter_subject: VIDEO_SHOT,
+    done_subject: Some(DONE_VIDEO_SHOT),
+    correlation_prefix: "video_shot",
+    correlation: &["sc_track_id", "attempt", "step"],
+    echo: &[
+        ("sc_track_id", "sc_track_id"),
+        ("attempt", "attempt"),
+        ("step", "step"),
+    ],
+    deadline_s: 1800,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 4,
+    nak: Some(NakBackoff {
+        base_s: 60,
+        cap_s: 1800,
+    }),
+    result_max_bytes: 800_000,
+    public: true,
+    priority_group: None,
+};
+
+pub const VIDEO_ASSEMBLE_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::VideoAssemble,
+    stream: VIDEO_ASSEMBLE_STREAM,
+    durable: "video-assemble-workers",
+    filter_subject: VIDEO_ASSEMBLE,
+    done_subject: Some(DONE_VIDEO_ASSEMBLE),
+    correlation_prefix: "video_assemble",
+    correlation: &["sc_track_id", "attempt", "step"],
+    echo: &[
+        ("sc_track_id", "sc_track_id"),
+        ("attempt", "attempt"),
+        ("step", "step"),
+    ],
+    deadline_s: 600,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 8,
+    nak: Some(NakBackoff {
+        base_s: 60,
+        cap_s: 1800,
+    }),
+    result_max_bytes: 800_000,
+    public: false,
+    priority_group: None,
+};
+
+pub const WORKER_LANES: [WorkerLaneSpec; 14] = [
     AUDIO_LANE,
     LYRICS_LANE,
     TRANSCRIBE_LANE,
@@ -474,6 +569,9 @@ pub const WORKER_LANES: [WorkerLaneSpec; 11] = [
     HIGHLIGHT_LANE,
     VIDEO_FIND_LANE,
     VIDEO_VLM_LANE,
+    VIDEO_KEYFRAME_LANE,
+    VIDEO_SHOT_LANE,
+    VIDEO_ASSEMBLE_LANE,
 ];
 
 pub const fn done_duplicate_window_seconds() -> u64 {
@@ -720,6 +818,12 @@ pub fn schemas() -> BTreeMap<String, Value> {
         done::<VideoFindResult>(WorkerLane::VideoFind),
         request::<VideoVlmRequest>(VIDEO_VLM),
         done::<VideoVlmResult>(WorkerLane::VideoVlm),
+        request::<VideoKeyframeRequest>(VIDEO_KEYFRAME),
+        done::<VideoGenResult>(WorkerLane::VideoKeyframe),
+        request::<VideoShotRequest>(VIDEO_SHOT),
+        done::<VideoGenResult>(WorkerLane::VideoShot),
+        request::<VideoAssembleRequest>(VIDEO_ASSEMBLE),
+        done::<VideoGenResult>(WorkerLane::VideoAssemble),
     ])
 }
 
@@ -841,6 +945,10 @@ fn required_on(lane: WorkerLane, status: WorkerStatus) -> Vec<&'static str> {
             "scores",
         ],
         (WorkerLane::VideoVlm, WorkerStatus::Ok) => vec!["label", "model", "scores"],
+        (
+            WorkerLane::VideoKeyframe | WorkerLane::VideoShot | WorkerLane::VideoAssemble,
+            WorkerStatus::Ok,
+        ) => vec!["clip", "files", "part"],
         _ => Vec::new(),
     }
 }
@@ -917,6 +1025,9 @@ mod tests {
             (WorkerLane::Highlight, 12, 1050, 87_450, None),
             (WorkerLane::VideoFind, 12, 3900, 90_300, None),
             (WorkerLane::VideoVlm, 12, 3900, 90_300, None),
+            (WorkerLane::VideoKeyframe, 12, 5700, 92_100, Some(960)),
+            (WorkerLane::VideoShot, 12, 10_200, 96_600, Some(1860)),
+            (WorkerLane::VideoAssemble, 12, 3900, 90_300, None),
         ];
         for (lane, heartbeat, window, quarantine, bridge) in table {
             let spec = lane.spec();
@@ -1021,7 +1132,17 @@ mod tests {
             .map(|spec| spec.lane.as_str())
             .collect();
 
-        assert_eq!(public, ["audio", "lyrics", "transcribe", "speak"]);
+        assert_eq!(
+            public,
+            [
+                "audio",
+                "lyrics",
+                "transcribe",
+                "speak",
+                "video-keyframe",
+                "video-shot"
+            ]
+        );
     }
 
     #[test]
@@ -1618,5 +1739,41 @@ mod tests {
                 .reasons()
                 .contains(&WorkerReason::InputsGone)
         );
+    }
+
+    #[test]
+    fn the_generation_lanes_carry_files_and_only_gpu_lanes_reach_public_nodes() {
+        let schemas = schemas();
+        let exported = contract();
+        for (lane, done, public) in [
+            ("video-keyframe", DONE_VIDEO_KEYFRAME, true),
+            ("video-shot", DONE_VIDEO_SHOT, true),
+            ("video-assemble", DONE_VIDEO_ASSEMBLE, false),
+        ] {
+            let spec = &exported["lanes"][lane];
+            assert_eq!(spec["public"], public, "{lane}");
+            assert_eq!(
+                spec["correlation"],
+                json!(["sc_track_id", "attempt", "step"])
+            );
+            assert_eq!(
+                rule_of(&schemas, done, "ok")["required"],
+                json!(["clip", "files", "part"])
+            );
+            assert_eq!(rule_of(&schemas, done, "rejected"), &json!(false));
+        }
+        let missing = rule_of(&schemas, DONE_VIDEO_SHOT, "missing");
+        assert_eq!(
+            missing["properties"]["reason"]["enum"],
+            json!(["inputs_gone"])
+        );
+        for subject in [VIDEO_KEYFRAME, VIDEO_SHOT, VIDEO_ASSEMBLE] {
+            let properties = schemas[subject]["properties"].as_object().unwrap();
+            assert!(
+                properties
+                    .keys()
+                    .all(|key| !key.contains("token") && !key.contains("key"))
+            );
+        }
     }
 }

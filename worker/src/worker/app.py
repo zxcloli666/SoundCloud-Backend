@@ -38,7 +38,10 @@ from worker.domain.lyrics.transcribe import TranscribeLane
 from worker.domain.outcome import Producer
 from worker.domain.speak import Speaker
 from worker.domain.taste import TasteLane
+from worker.domain.video_assemble import VideoAssembleLane
 from worker.domain.video_find import VideoFindLane
+from worker.domain.video_keyframe import VideoKeyframeLane
+from worker.domain.video_shot import VideoShotLane
 from worker.domain.video_vlm import VideoVlmLane
 from worker.domain.workspace import WorkRoot, Workspace
 from worker.engines import BATCHED_SLOTS, EngineSlots, RuntimeEngines
@@ -78,6 +81,8 @@ CPU_TOOL_LOADERS: Mapping[str, str] = {
 }
 SLOT_LOADERS: Mapping[str, str] = {
     "clip": "worker.models.clip:ClipSlot",
+    settings_module.IMAGE_EDIT_SLOT: "worker.models.image_edit:ImageEditSlot",
+    settings_module.IMAGE_TO_VIDEO_SLOT: "worker.models.image_to_video:ImageToVideoSlot",
     "muq": "worker.models.muq:MuqSlot",
     "mulan": "worker.models.mulan:MulanSlot",
     "text": "worker.models.text_embed:TextEmbedSlot",
@@ -103,6 +108,9 @@ LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "highlight": (),
     "video-find": ("clip",),
     "video-vlm": (settings_module.VLM_SLOT,),
+    "video-keyframe": (settings_module.IMAGE_EDIT_SLOT,),
+    "video-shot": (settings_module.IMAGE_TO_VIDEO_SLOT,),
+    "video-assemble": (),
 }
 PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "audio": {"mert": "muq", "clap": "mulan"},
@@ -114,6 +122,9 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "highlight": {},
     "video-find": {"clip": "clip"},
     "video-vlm": {"vlm": settings_module.VLM_SLOT},
+    "video-keyframe": {"keyframe": settings_module.IMAGE_EDIT_SLOT},
+    "video-shot": {"shot": settings_module.IMAGE_TO_VIDEO_SLOT},
+    "video-assemble": {},
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
@@ -124,7 +135,18 @@ ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
 MULAN_TOWERS = "towers"
-AUDIO_FETCH_LANES = frozenset({"audio", "transcribe", "highlight", "video-find", "video-vlm"})
+AUDIO_FETCH_LANES = frozenset(
+    {
+        "audio",
+        "transcribe",
+        "highlight",
+        "video-find",
+        "video-vlm",
+        "video-keyframe",
+        "video-shot",
+        "video-assemble",
+    }
+)
 POOL_SPARE = 8
 EXIT_CRASHED = 1
 GATE_INTERVAL_S = 5.0
@@ -480,6 +502,23 @@ class Node:
                 self.counters,
             ),
         }
+        gen_source = AudioSource(
+            audio_session,
+            timeout_s=settings.video_gen.download_timeout_s,
+            idle_s=settings.audio.download_idle_s,
+            max_bytes=settings.video_gen.max_download_mib << 20,
+            counters=self.counters,
+        )
+        part_bytes = self.contract.video_limits.part_bytes
+        processors["video-keyframe"] = lambda: VideoKeyframeLane(
+            engines, gen_source, self.workspace, settings.video_gen, part_bytes, self.counters
+        )
+        processors["video-shot"] = lambda: VideoShotLane(
+            engines, gen_source, self.workspace, settings.video_gen, part_bytes, self.counters
+        )
+        processors["video-assemble"] = lambda: VideoAssembleLane(
+            source, gen_source, self.workspace, settings.video_gen, part_bytes, self.counters
+        )
         rpc_methods: dict[str, Callable[[], Mapping[str, RpcMethod]]] = {
             AI_LANE: lambda: self.ai_methods(engines),
             SPEAK_LANE: lambda: self.speak_methods(engines),
@@ -918,6 +957,8 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
         )
     if name == settings_module.TTS_SLOT:
         options.update(tts_options(settings.tts))
+    if name in (settings_module.IMAGE_EDIT_SLOT, settings_module.IMAGE_TO_VIDEO_SLOT):
+        options.update(video_gen_options(settings))
     if name == MULAN and mulan_towers is not None:
         options[MULAN_TOWERS] = mulan_towers
     return SlotSpec(
@@ -930,6 +971,17 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
         max_wait_ms=slot.max_wait_ms,
         options=options,
     )
+
+
+def video_gen_options(settings: Settings) -> dict[str, object]:
+    shot = settings.video_gen.shot
+    return {
+        "offload": settings.video_gen.offload,
+        "lora_repo": shot.lora_repo,
+        "lora_revision": shot.lora_revision,
+        "lora_high": shot.lora_high.file,
+        "lora_low": shot.lora_low.file,
+    }
 
 
 def tts_options(tts: TtsSection) -> dict[str, object]:

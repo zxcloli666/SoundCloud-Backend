@@ -28,6 +28,8 @@ NATIVE_PACKAGES = (
     "gensim",
     "chromaprint",
     "llama_cpp",
+    "diffusers",
+    "peft",
 )
 LOADED_ON_FIRST_USE = ("nagisa",)
 BUS_ALLOWED = (

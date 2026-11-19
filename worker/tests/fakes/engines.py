@@ -220,6 +220,28 @@ class FakeEngines:
             return forced
         return self.frame_verdict
 
+    async def edit_image(
+        self, image: Uint8Array, args: Mapping[str, object], deadline: Deadline
+    ) -> Uint8Array:
+        deadline.check("edit_image")
+        forced = self._record("edit_image", shape=image.shape, args=dict(args))
+        if forced is not None:
+            return forced
+        height, width = int(str(args["height"])), int(str(args["width"]))
+        return np.full((height, width, 3), 200, dtype=np.uint8)
+
+    async def animate_image(
+        self, image: Uint8Array, args: Mapping[str, object], deadline: Deadline
+    ) -> Uint8Array:
+        deadline.check("animate_image")
+        forced = self._record("animate_image", shape=image.shape, args=dict(args))
+        if forced is not None:
+            return forced
+        count = int(str(args["frames"]))
+        height, width = int(str(args["height"])), int(str(args["width"]))
+        ramp = np.linspace(0, 255, count, dtype=np.uint8)
+        return np.broadcast_to(ramp[:, None, None, None], (count, height, width, 3)).copy()
+
     async def train_collab(
         self,
         sessions_path: Path,

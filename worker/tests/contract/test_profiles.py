@@ -91,6 +91,7 @@ DESIGN = {
 }
 SPEAK_ONLY = {"speak"}
 NOT_YET = {"video-vlm"}
+GENERATION = {"video-keyframe", "video-shot", "video-assemble"}
 
 
 def load(profile: str) -> s.Settings:
@@ -210,7 +211,7 @@ def test_cpu_profile_serves_every_lane_with_one_copy_of_each_model() -> None:
     assert settings.runtime.onednn is False
     assert settings.runtime.allow_slow_lanes is True
     assert settings.runtime.isolate_encode is True
-    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY - NOT_YET
+    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY - NOT_YET - GENERATION
     assert all(settings.slots[slot].replicas == 1 for slot in SYNC_X2)
     assert all(settings.lanes.capacity[lane] > 1 for lane in ("audio", "lyrics", "transcribe"))
 
@@ -334,3 +335,8 @@ def test_the_gpu_speech_profile_runs_the_voice_on_cuda_on_a_public_node(
 def test_the_tts_profile_needs_its_models_folder(contract: Contract) -> None:
     with pytest.raises(StartupError, match=TTS_HOME_ENV):
         Blueprint.of(load("cpu-tts"), contract, {}, cpus=4)
+
+
+def test_no_shipped_profile_turns_on_video_generation() -> None:
+    for path in (CONFIG_DIR / "profiles").glob("*.toml"):
+        assert not GENERATION & set(load(path.stem).lanes.enabled), path.stem

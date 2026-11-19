@@ -6,7 +6,7 @@ pub(crate) mod memory;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveTime, Utc};
 use futures::future::{BoxFuture, join_all};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -43,6 +43,7 @@ pub(crate) struct Budget {
     store: Arc<dyn SpendStore>,
     ladder: String,
     caps: Caps,
+    reset_day: u32,
     outage: Mutex<Option<Instant>>,
 }
 
@@ -55,11 +56,12 @@ pub(crate) struct Caps {
 }
 
 impl Budget {
-    pub fn new(store: Arc<dyn SpendStore>, ladder: &str, caps: Caps) -> Self {
+    pub fn new(store: Arc<dyn SpendStore>, ladder: &str, caps: Caps, reset_day: u32) -> Self {
         Self {
             store,
             ladder: ladder.to_owned(),
             caps,
+            reset_day,
             outage: Mutex::new(None),
         }
     }
@@ -149,7 +151,7 @@ impl Budget {
     }
 
     fn counters(&self, user: Option<&str>, now: DateTime<Utc>) -> Vec<(String, u64)> {
-        let month = now.format("%Y-%m");
+        let month = month_start(now, self.reset_day).format("%Y-%m");
         let day = now.format("%Y-%m-%d");
         let ladder = &self.ladder;
         let user = user.map(user_token);
@@ -185,6 +187,19 @@ impl From<CapSettings> for Caps {
             user_day: settings.user_day_usd.map(micro_usd),
         }
     }
+}
+
+pub fn month_start(now: DateTime<Utc>, reset_day: u32) -> DateTime<Utc> {
+    let this_month = now
+        .date_naive()
+        .with_day(reset_day)
+        .unwrap_or_else(|| now.date_naive());
+    let start = if now.day() >= reset_day {
+        this_month
+    } else {
+        this_month - Months::new(1)
+    };
+    start.and_time(NaiveTime::MIN).and_utc()
 }
 
 fn user_token(user: &str) -> String {

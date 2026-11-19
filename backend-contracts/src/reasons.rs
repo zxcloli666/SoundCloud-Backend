@@ -394,6 +394,32 @@ impl WorkerLane {
                 WorkerReason::WorkerLost,
                 WorkerReason::InputsGone,
             ],
+            Self::VideoKeyframe | Self::VideoShot => &[
+                WorkerReason::InvalidRequest,
+                WorkerReason::ModelOutputInvalid,
+                WorkerReason::DeadlineExceeded,
+                WorkerReason::EngineCrashed,
+                WorkerReason::OutOfMemory,
+                WorkerReason::DownloadFailed,
+                WorkerReason::InternalError,
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::PublicNodeTimeout,
+                WorkerReason::InputsGone,
+            ],
+            Self::VideoAssemble => &[
+                WorkerReason::InvalidRequest,
+                WorkerReason::UndecodableAudio,
+                WorkerReason::ModelOutputInvalid,
+                WorkerReason::DeadlineExceeded,
+                WorkerReason::EngineCrashed,
+                WorkerReason::OutOfMemory,
+                WorkerReason::DownloadFailed,
+                WorkerReason::InternalError,
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::InputsGone,
+            ],
             Self::Ai | Self::Speak => &[],
         }
     }
@@ -418,12 +444,18 @@ impl WorkerLane {
                 WorkerReason::PublicNodeTimeout,
                 WorkerReason::SeparationSkipped,
             ],
+            Self::VideoKeyframe | Self::VideoShot => &[
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::PublicNodeTimeout,
+            ],
             Self::Lyrics
             | Self::Collab
             | Self::Taste
             | Self::Highlight
             | Self::VideoFind
             | Self::VideoVlm => &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost],
+            Self::VideoAssemble => &[WorkerReason::EngineRestarted, WorkerReason::WorkerLost],
             Self::Encode | Self::Ai | Self::Speak => &[],
         }
     }

@@ -41,6 +41,9 @@ impl Settings {
             Some(budget) if identifier(&budget.bucket).is_err() => Err(invalid(
                 "[budget] bucket is not a valid bucket name".to_owned(),
             )),
+            Some(budget) if !(1..=28).contains(&budget.reset_day) => Err(invalid(
+                "[budget] reset_day must be from 1 to 28".to_owned(),
+            )),
             _ => Ok(()),
         }
     }

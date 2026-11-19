@@ -33,6 +33,9 @@ LANES = (
     "highlight",
     "video-find",
     "video-vlm",
+    "video-keyframe",
+    "video-shot",
+    "video-assemble",
 )
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
@@ -42,6 +45,8 @@ RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
 AI_LANE = "ai"
 VIDEO_LANE = "video-find"
+IMAGE_EDIT_SLOT = "image-edit"
+IMAGE_TO_VIDEO_SLOT = "image-to-video"
 LOCAL_LLM_SLOT = "llm-local"
 VLM_SLOT = "vlm"
 VLM_METHOD = "classify"
@@ -79,6 +84,9 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "highlight": (),
         "video-find": ("clip", "cpu-tools"),
         "video-vlm": (VLM_SLOT,),
+        "video-keyframe": (IMAGE_EDIT_SLOT,),
+        "video-shot": (IMAGE_TO_VIDEO_SLOT,),
+        "video-assemble": (),
     }
 )
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})
@@ -210,6 +218,42 @@ class VideoSection:
     encode_fps: int
     max_upload_mib: int
     classifier: VideoClassifierSettings
+
+
+@dataclass(frozen=True)
+class HubWeights:
+    file: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class KeyframeSettings:
+    steps: int
+    true_cfg_scale: float
+
+
+@dataclass(frozen=True)
+class ShotSettings:
+    steps: int
+    guidance_scale: float
+    guidance_scale_2: float
+    lora_repo: str
+    lora_revision: str
+    lora_high: HubWeights
+    lora_low: HubWeights
+
+
+@dataclass(frozen=True)
+class VideoGenSection:
+    max_download_mib: int
+    download_timeout_s: float
+    encode_crf: int
+    encode_preset: str
+    audio_kbps: int
+    max_output_mib: int
+    offload: bool
+    keyframe: KeyframeSettings
+    shot: ShotSettings
 
 
 @dataclass(frozen=True)
@@ -402,6 +446,7 @@ class Settings:
     slots: Mapping[str, SlotSettings]
     audio: AudioSection
     video: VideoSection
+    video_gen: VideoGenSection
     sync: SyncSection
     collab: CollabSection
     taste: TasteSection
@@ -625,6 +670,7 @@ def validate(settings: Settings) -> None:
         *validate_sync(settings),
         *validate_taste(settings),
         *validate_video(settings),
+        *validate_video_gen(settings),
         *validate_local_llm(settings),
         *validate_vlm(settings),
         *validate_tts(settings),
@@ -754,6 +800,21 @@ def validate_video(settings: Settings) -> list[str]:
         problems.append("video.window_s, window_stride_s must be > 0 and ber_max in (0, 0.5)")
     if video.max_verified < 1:
         problems.append("video.max_verified must be >= 1")
+    return problems
+
+
+def validate_video_gen(settings: Settings) -> list[str]:
+    gen = settings.video_gen
+    problems = []
+    if gen.max_download_mib < 1 or gen.max_output_mib < 1 or gen.download_timeout_s <= 0:
+        problems.append("video_gen download and output limits must be > 0")
+    if not 0 <= gen.encode_crf <= 51 or gen.audio_kbps < 32:
+        problems.append("video_gen.encode_crf must be within 0..51 and audio_kbps >= 32")
+    if gen.keyframe.steps < 1 or gen.shot.steps < 1:
+        problems.append("video_gen keyframe and shot steps must be >= 1")
+    for name, weights in (("lora_high", gen.shot.lora_high), ("lora_low", gen.shot.lora_low)):
+        if not weights.file.endswith(".safetensors") or not SHA256_HEX.fullmatch(weights.sha256):
+            problems.append(f"video_gen.shot.{name} must be a .safetensors file with its sha256")
     return problems
 
 

@@ -28,8 +28,8 @@ isolate_encode = false
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
-capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64, speak = 1, highlight = 2, video-find = 1, video-vlm = 1 }
-required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true, speak = true, highlight = true, video-find = true, video-vlm = true }
+capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64, speak = 1, highlight = 2, video-find = 1, video-vlm = 1, video-keyframe = 1, video-shot = 1, video-assemble = 1 }
+required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true, speak = true, highlight = true, video-find = true, video-vlm = true, video-keyframe = true, video-shot = true, video-assemble = true }
 required_grace_s = 300
 
 [slots.muq]
@@ -88,6 +88,20 @@ model = "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
 revision = "1a25a446712ba5ee05982a381eed697ef9b435cf"
 replicas = 1
 max_batch = 16
+max_wait_ms = 0
+
+[slots.image-edit]
+model = "Qwen/Qwen-Image-Edit-2511"
+revision = "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9"
+replicas = 1
+max_batch = 1
+max_wait_ms = 0
+
+[slots.image-to-video]
+model = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+revision = "596658fd9ca6b7b71d5057529bbf319ecbc61d74"
+replicas = 1
+max_batch = 1
 max_wait_ms = 0
 
 [slots.cpu-tools]
@@ -172,6 +186,28 @@ loop_likely = 0.85
 cut_limit_per_min = 2.0
 uncertain_margin = 0.15
 static_margin = 0.3
+
+[video_gen]
+max_download_mib = 64
+download_timeout_s = 120
+encode_crf = 20
+encode_preset = "medium"
+audio_kbps = 160
+max_output_mib = 64
+offload = true
+
+[video_gen.keyframe]
+steps = 40
+true_cfg_scale = 4.0
+
+[video_gen.shot]
+steps = 4
+guidance_scale = 1.0
+guidance_scale_2 = 1.0
+lora_repo = "lightx2v/Wan2.2-Lightning"
+lora_revision = "18bccf8884ec0a078eed79785eb4ef13ea16ce1e"
+lora_high = { file = "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors", sha256 = "d176c808d6fc461999b68e321efcb7501b20b8c3797523ed0df14f7d1deff11e" }
+lora_low = { file = "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors", sha256 = "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9" }
 
 [sync]
 strategy = "anchored"
