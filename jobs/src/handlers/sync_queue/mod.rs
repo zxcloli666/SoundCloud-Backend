@@ -5,11 +5,11 @@ mod create_check;
 #[cfg(test)]
 mod follow_refusal_tests;
 #[cfg(test)]
-mod like_refusal_tests;
-#[cfg(test)]
 mod gate_tests;
 #[cfg(test)]
 mod intent_tests;
+#[cfg(test)]
+mod like_refusal_tests;
 mod mobile;
 mod mobile_flow;
 #[cfg(test)]
@@ -830,9 +830,7 @@ impl SyncQueueHandler {
                     )
                     .await?;
             }
-            ActionError::SoundCloud(error)
-                if error.is_terminal_refusal(&mutation.action_type) =>
-            {
+            ActionError::SoundCloud(error) if error.is_terminal_refusal(&mutation.action_type) => {
                 self.close_refused(mutation, &error.to_string()).await?;
             }
             ActionError::InvalidPayload(_)
