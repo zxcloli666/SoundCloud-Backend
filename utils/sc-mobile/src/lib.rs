@@ -14,6 +14,7 @@ pub mod likes;
 pub mod me;
 pub mod playlists;
 pub mod reactions;
+pub mod reposts;
 pub mod streams;
 
 pub use app::MobileApp;

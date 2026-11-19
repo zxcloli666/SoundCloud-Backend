@@ -1,7 +1,7 @@
 use sc_mobile::{Caller, MobileClient, playlists};
 use serde_json::Value;
 
-use crate::actions::{LEFT, step};
+use crate::actions::{Answer, LEFT, step};
 use crate::journal::Journal;
 
 const TITLE: &str = "probe";
@@ -12,19 +12,7 @@ pub async fn run(
     journal: &mut Journal,
     track: Option<&str>,
 ) {
-    let create = playlists::create(TITLE);
-    let created = step(
-        client,
-        caller,
-        journal,
-        "playlist.create",
-        &create,
-        |body| match playlist_urn(body) {
-            Some(urn) => format!("created {urn}"),
-            None => "the answer names no playlist".to_owned(),
-        },
-    )
-    .await;
+    let created = create(client, caller, journal).await;
     if !created.ok {
         return;
     }
@@ -59,6 +47,36 @@ pub async fn run(
             ),
         );
     }
+}
+
+async fn create(client: &MobileClient, caller: &Caller, journal: &mut Journal) -> Answer {
+    let mut last = None;
+    for (label, request) in playlists::create_variants(TITLE) {
+        let name = format!("playlist.create#{label}");
+        let answer = step(
+            client,
+            caller,
+            journal,
+            &name,
+            &request,
+            |body| match playlist_urn(body) {
+                Some(urn) => format!("created {urn}"),
+                None => "the answer names no playlist".to_owned(),
+            },
+        )
+        .await;
+        let retry = !answer.ok && !answer.blocked && matches!(answer.status, Some(400 | 422));
+        last = Some(answer);
+        if !retry {
+            break;
+        }
+    }
+    last.unwrap_or(Answer {
+        body: Value::Null,
+        ok: false,
+        blocked: false,
+        status: None,
+    })
 }
 
 async fn with_track(

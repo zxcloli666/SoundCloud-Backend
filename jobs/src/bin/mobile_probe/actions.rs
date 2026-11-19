@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::args::Args;
 use crate::datadome;
 use crate::journal::{Journal, Sent, failure_note, json_of};
-use crate::{follow, interaction, like, playlist};
+use crate::{follow, interaction, like, playlist, repost};
 
 pub const LEFT: &str = "stopped on datadome; the action may be left in place, undo it by hand";
 
@@ -12,14 +12,14 @@ pub struct Answer {
     pub body: Value,
     pub ok: bool,
     pub blocked: bool,
+    pub status: Option<u16>,
 }
 
 pub async fn run(client: &MobileClient, args: &Args, caller: &Caller, journal: &mut Journal) {
     match &args.actions_track {
         Some(track) => {
             like::run(client, caller, journal, track).await;
-            let repost = interactions::repost(track);
-            interaction::run(client, caller, journal, "repost", &repost).await;
+            repost::run(client, caller, journal, track).await;
         }
         None => {
             journal.skip("like", "no --actions-track");
@@ -54,6 +54,7 @@ pub async fn step(
 ) -> Answer {
     let outcome = client.call(caller, request).await;
     let blocked = datadome::is_datadome(&outcome);
+    let status = outcome.as_ref().ok().map(|reply| reply.status);
     let body = json_of(&outcome).unwrap_or(Value::Null);
     let failure = failure_note(&outcome);
     let note = failure.clone().unwrap_or_else(|| describe(&body));
@@ -63,6 +64,7 @@ pub async fn step(
         body,
         ok: failure.is_none(),
         blocked,
+        status,
     }
 }
 
@@ -75,14 +77,20 @@ pub fn answer(body: &Value, pointer: &str) -> Option<String> {
 }
 
 pub fn is_item(item: &Value, urn: &str) -> bool {
-    [Some(item), item.get("user"), item.get("track")]
+    [Some(item), item.get("target"), item.get("track")]
         .into_iter()
         .flatten()
         .any(|candidate| names(candidate, urn))
 }
 
 fn names(item: &Value, urn: &str) -> bool {
-    if item.get("urn").and_then(Value::as_str) == Some(urn) {
+    if item.as_str() == Some(urn) {
+        return true;
+    }
+    if ["urn", "target_urn"]
+        .iter()
+        .any(|key| item.get(key).and_then(Value::as_str) == Some(urn))
+    {
         return true;
     }
     item.get("id")
@@ -97,15 +105,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_item_is_named_by_its_urn_or_its_id() {
+    fn an_item_is_named_by_its_target_track_or_own_urn() {
         assert!(is_item(
             &json!({ "urn": "soundcloud:users:7" }),
             "soundcloud:users:7"
         ));
         assert!(is_item(
-            &json!({ "user": { "id": 7 } }),
+            &json!({ "user": "soundcloud:users:1", "target": "soundcloud:users:7" }),
             "soundcloud:users:7"
         ));
-        assert!(!is_item(&json!({ "id": 8 }), "soundcloud:users:7"));
+        assert!(is_item(
+            &json!({ "user": { "id": 1 }, "target": { "id": 7 } }),
+            "soundcloud:users:7"
+        ));
+        assert!(is_item(
+            &json!({ "target_urn": "soundcloud:tracks:3" }),
+            "soundcloud:tracks:3"
+        ));
+        assert!(!is_item(
+            &json!({ "user": { "id": 7 }, "target": { "id": 8 } }),
+            "soundcloud:users:7"
+        ));
     }
 }

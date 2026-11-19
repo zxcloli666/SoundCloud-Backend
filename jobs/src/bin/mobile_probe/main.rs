@@ -11,6 +11,7 @@ mod journal;
 mod like;
 mod playlist;
 mod reaction;
+mod repost;
 mod scrub;
 mod sign_in;
 mod streams;
