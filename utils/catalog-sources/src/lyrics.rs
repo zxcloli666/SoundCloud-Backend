@@ -545,22 +545,101 @@ fn nonblank(value: Option<String>) -> Option<String> {
     })
 }
 
+struct Variant {
+    hints: LyricsHints,
+    artist_required: bool,
+    consensus: bool,
+}
+
+fn variants(hints: &LyricsHints) -> Vec<Variant> {
+    let mut variants = vec![Variant {
+        hints: hints.clone(),
+        artist_required: false,
+        consensus: false,
+    }];
+    if let Some((artist, title)) = split_artist_title(&hints.title) {
+        variants.push(Variant {
+            hints: LyricsHints {
+                artist,
+                title,
+                ..hints.clone()
+            },
+            artist_required: true,
+            consensus: false,
+        });
+    }
+    for segment in bar_segments(&hints.title) {
+        let remix = is_remix_title(&segment);
+        let mut segment_hints = LyricsHints {
+            title: segment,
+            ..hints.clone()
+        };
+        if remix {
+            segment_hints.artist.clear();
+            segment_hints.duration_sec = None;
+        }
+        variants.push(Variant {
+            hints: segment_hints,
+            artist_required: false,
+            consensus: remix,
+        });
+    }
+    variants
+}
+
+fn is_remix_title(title: &str) -> bool {
+    if !title_forms(title).markers.is_empty() {
+        return true;
+    }
+    let lower = title.to_lowercase();
+    ["remix", "rmx"].iter().any(|word| {
+        lower.match_indices(word).any(|(index, _)| {
+            lower[index + word.len()..].starts_with([')', ']', ' ']) || lower.ends_with(word)
+        })
+    })
+}
+
+fn bar_segments(title: &str) -> Vec<String> {
+    let segments: Vec<String> = title
+        .split(['\u{ff5c}', '|'])
+        .map(|segment| segment.trim().to_owned())
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.len() > 1 {
+        segments
+    } else {
+        Vec::new()
+    }
+}
+
 fn select_candidate(
     hints: &LyricsHints,
     candidates: Vec<LyricsCandidate>,
 ) -> Option<LyricsCandidate> {
+    variants(hints)
+        .iter()
+        .find_map(|variant| select_variant(variant, &candidates))
+}
+
+fn select_variant(variant: &Variant, candidates: &[LyricsCandidate]) -> Option<LyricsCandidate> {
+    let hints = &variant.hints;
+    let mut matched: Vec<LyricsCandidate> = candidates
+        .iter()
+        .filter(|candidate| !variant.artist_required || candidate.artist.is_some())
+        .filter(|candidate| matches_hints(hints, candidate))
+        .filter_map(|candidate| fit_synced_to_recording(hints, candidate.clone()))
+        .collect();
+    if variant.consensus {
+        let mut agreeing: HashMap<String, usize> = HashMap::new();
+        for candidate in &matched {
+            *agreeing.entry(body_key(candidate)).or_default() += 1;
+        }
+        matched.retain(|candidate| agreeing.get(&body_key(candidate)).is_some_and(|n| *n > 1));
+    }
     let mut unique: Vec<LyricsCandidate> = Vec::new();
     let mut by_body: HashMap<String, usize> = HashMap::new();
-    for candidate in candidates
-        .into_iter()
-        .filter(|candidate| matches_hints(hints, candidate))
-        .filter_map(|candidate| fit_synced_to_recording(hints, candidate))
-    {
-        let body = candidate
-            .plain_text
-            .as_deref()
-            .or(candidate.synced_lrc.as_deref())?;
-        let key = normalize_body(body);
+    for candidate in matched {
+        let key = body_key(&candidate);
         if key.is_empty() {
             continue;
         }
@@ -578,6 +657,15 @@ fn select_candidate(
     }
     unique.sort_by_key(|candidate| Reverse(candidate_rank(hints, candidate)));
     unique.into_iter().next()
+}
+
+fn body_key(candidate: &LyricsCandidate) -> String {
+    candidate
+        .plain_text
+        .as_deref()
+        .or(candidate.synced_lrc.as_deref())
+        .map(normalize_body)
+        .unwrap_or_default()
 }
 
 fn fit_synced_to_recording(
@@ -819,6 +907,20 @@ pub(crate) fn heuristic_queries(artist: &str, title: &str) -> Vec<String> {
             }
         }
     }
+    for segment in bar_segments(title) {
+        let bare = segment
+            .split(['(', '['])
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        for value in [segment, bare] {
+            let value = normalize_query(&value);
+            let key = value.to_lowercase();
+            if value.chars().count() >= 2 && seen.insert(key) {
+                queries.push(value);
+            }
+        }
+    }
     queries.into_iter().take(MAX_QUERIES).collect()
 }
 
@@ -833,7 +935,25 @@ fn split_artist_title(value: &str) -> Option<(String, String)> {
             return Some((artist.to_owned(), title.to_owned()));
         }
     }
-    None
+    split_unspaced_hyphen(value)
+}
+
+fn split_unspaced_hyphen(value: &str) -> Option<(String, String)> {
+    if value.matches('-').count() != 1 {
+        return None;
+    }
+    let (artist, title) = value.split_once('-')?;
+    let named = |part: &str| {
+        part.chars()
+            .filter(|letter| letter.is_alphanumeric())
+            .count()
+            >= 2
+    };
+    (!artist.ends_with(char::is_whitespace)
+        && !title.starts_with(char::is_whitespace)
+        && named(artist)
+        && named(title))
+    .then(|| (artist.trim().to_owned(), title.trim().to_owned()))
 }
 
 pub(crate) fn failure(error: &SourceError) -> LyricsFailure {
@@ -2216,5 +2336,87 @@ mod tests {
             &clean_hints(&titled("Lose Yourself prod. Dr. Dre", "Eminem")),
             &other_title
         ));
+    }
+
+    fn named(title: &str, artist: &str, seconds: i64, lrc: bool) -> LyricsCandidate {
+        LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: lrc.then(|| format!("[00:01.00]{title} a long enough synced body line")),
+            plain_text: Some(format!("{title} a long enough synced body line")),
+            artist: Some(artist.to_owned()),
+            title: Some(title.to_owned()),
+            duration_sec: Some(seconds),
+            exact: false,
+            query_index: 1,
+        }
+    }
+
+    fn uploaded(title: &str, uploader: &str, ms: i64) -> LyricsHints {
+        LyricsHints {
+            title: title.to_owned(),
+            artist: uploader.to_owned(),
+            duration_sec: Some(ms / 1000),
+            genius_song_id: None,
+            genius_url: None,
+        }
+    }
+
+    #[test]
+    fn unspaced_hyphen_title_splits_into_artist_and_title() {
+        let hints = uploaded(
+            "\u{43f}\u{43e}\u{43b}\u{43c}\u{430}\u{442}\u{435}\u{440}\u{438}-\u{422}\u{420}\u{426}",
+            "pyatka",
+            138_893,
+        );
+        let candidates = vec![named(
+            "\u{422}\u{420}\u{426}",
+            "\u{41f}\u{41e}\u{41b}\u{41c}\u{410}\u{422}\u{415}\u{420}\u{418}",
+            139,
+            false,
+        )];
+        assert!(select_candidate(&hints, candidates).is_some());
+
+        let hints = uploaded("Kurdo-Schocktherapie", "Roland Bodi 1", 170_542);
+        let candidates = vec![named("Schocktherapie", "Kurdo", 170, true)];
+        assert!(select_candidate(&hints, candidates).is_some());
+    }
+
+    #[test]
+    fn unspaced_hyphen_does_not_match_another_artist() {
+        let hints = uploaded("Kurdo-Schocktherapie", "Roland Bodi 1", 170_542);
+        let candidates = vec![named("Schocktherapie", "Someone Else", 170, true)];
+        assert!(select_candidate(&hints, candidates).is_none());
+    }
+
+    #[test]
+    fn bar_separated_remix_takes_the_original_when_records_agree() {
+        let title = "\u{6d77}\u{9614}\u{5929}\u{7a7a} (DJ\u{6728}\u{6708}Remix)\u{ff5c}Tr\u{1edd}i cao bi\u{1ec3}n r\u{1ed9}ng";
+        let hints = uploaded(title, "Zxuan", 104_306);
+        let original = "\u{6d77}\u{9614}\u{5929}\u{7a7a}";
+        let two = vec![
+            named(original, "Beyond", 326, true),
+            named(original, "BEYOND", 320, true),
+        ];
+        assert!(select_candidate(&hints, two).is_some());
+        let one = vec![named(original, "Beyond", 326, true)];
+        assert!(select_candidate(&hints, one).is_none());
+    }
+
+    #[test]
+    fn doubled_letter_artist_with_another_title_stays_unmatched() {
+        let hints = uploaded("At All", "\"KKAAYYTTRRAA\"", 287_347);
+        let candidates = vec![named("At All", "Someone Else", 287, false)];
+        assert!(select_candidate(&hints, candidates).is_none());
+    }
+
+    #[test]
+    fn long_remix_title_without_records_stays_unmatched() {
+        let hints = uploaded(
+            "Ch\u{1eb3}ng Th\u{1ec3} C\u{1ea3}m H\u{f3}a (M\u{1edf} L\u{1ed1}i Cho Em 3) Remix - L\u{1b0}\u{1a1}ng Qu\u{fd} Tu\u{1ea5}n ft An Clock",
+            "iuno",
+            200_000,
+        );
+        let candidates = vec![named("Another Song", "Someone", 200, true)];
+        assert!(select_candidate(&hints, candidates).is_none());
     }
 }
