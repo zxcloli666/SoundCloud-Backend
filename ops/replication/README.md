@@ -248,6 +248,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 181. `0497_drop_tracks_primary_artist_idx`: drops `tracks_primary_artist_idx`, covered by 0496.
 182. `0498_user_events_full_play_idx`: `user_events_full_play_idx` on `user_events (sc_track_id)` for the `full_play` rows, so the artist popularity rollup counts plays from the index, class A, nothing is published.
 183. `0499_recommendation_colike_cursor`: `recommendation_colike_cursor`, class L, one row on core while a colike pass is unfinished: the next `a_id` to reconcile, so a run cut by its 90 min slice, a lease loss or a jobs restart resumes there instead of from the start.
+184. `0500_scd_install`: the generated SQL again, on top of 0494: `recommendation_colike_cursor` gets its registry entry (L), the triggers 0494 made are kept.
 
 A new replicated table (0322-0323): after `scd_sync_publications()` on core, main and star, run `ALTER SUBSCRIPTION <sub> REFRESH PUBLICATION WITH (copy_data = false)` on every subscription: `core_from_main` and `core_from_star` on core, `main_from_core` on main, `star_from_core` on star. A subscription does not pick up a table its publication gained, and until the refresh its apply worker skips the table's changes. Check: the table is `r` in `pg_subscription_rel` on every node and `apply_error_count` does not move.
 
@@ -323,7 +324,7 @@ Order for 0493-0494: core, main and star to 0494 in any order, then `scd_sync_pu
 
 Order for 0495-0498: on core, main and star, one build at a time, pre-create `tracks_album_rollup_idx`, `tracks_primary_artist_plays_idx` and `user_events_full_play_idx` by hand CONCURRENTLY (each `tracks` build reads the heap once, about 27 GB), check `indisvalid` is true, then run the migrations: 0495, 0496 and 0498 no-op via IF NOT EXISTS, 0497 drops the old index. Then jobs of this release on core. A jobs of this release before the indexes still works, its rollups only read the whole tables as before.
 
-Order for 0499: core, main and star in any order (L, a new empty table), then jobs of this release on core. A jobs of this release without the table fails every colike run on its first cursor read, so the migration goes first.
+Order for 0499-0500: core, main and star to 0500 in any order (L, a new empty table, nothing is published), then jobs of this release on core. A jobs of this release without the table fails every colike run on its first cursor read, so the migration goes first.
 
 Order for 0472-0474: only after the api that reads `catalog_audience_ids` (release with #263) runs on main and star: an older api reads `catalog_audience`. Then jobs of this release on core: an older one writes and reconciles `catalog_audience`. Then `jobs-migrate core` on core, and only after `main_from_core` and `star_from_core` have applied everything core wrote before its migration (subscriber lag about 0), `jobs-migrate core` on main and star: a change to a table its subscriber has dropped stops that subscription ("logical replication target relation ... does not exist") until the table is back. The drop frees the old table on each node (about 70 GB).
 

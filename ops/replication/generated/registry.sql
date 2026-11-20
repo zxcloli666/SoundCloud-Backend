@@ -121,6 +121,7 @@ SELECT v.cls FROM (VALUES
     ('playlist_sweep_cursor', 'P'),
     ('playlist_track_projection', 'C'),
     ('playlists', 'C'),
+    ('recommendation_colike_cursor', 'L'),
     ('recommendation_quality_models', 'P'),
     ('repl_checksums', 'K'),
     ('repl_purges', 'X'),
