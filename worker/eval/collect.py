@@ -81,10 +81,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, default=WORKER_ROOT / "eval" / "manifest.json")
     parser.add_argument("--only", default="")
     parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--words-seeds", type=Path, default=None)
     args = parser.parse_args(argv)
     if not args.data:
         parser.error("--data (or EVAL_DATA_DIR) is required")
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s")
+    if args.words_seeds:
+        from eval import collect_words
+
+        return collect_words.run(args.words_seeds, args.data, args.manifest, args.skip_download)
     raw = json.loads(args.seeds.read_text(encoding="utf-8"))
     seeds = [parse_seed(item) for item in raw["seeds"]]
     pools = {code: list(texts) for code, texts in raw.get("text_pool_queries", {}).items()}

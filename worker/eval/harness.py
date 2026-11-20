@@ -19,8 +19,10 @@ from typing import Literal
 
 from eval import reference as reference_tools
 from eval import stats
+from eval import words as words_module
 from eval.collect import CollectError, probe_duration
 from eval.engines import LocalEngines
+from eval.lyricsfile import words_from_json
 from eval.manifest import Manifest, Track, load, parse_lrc, plain_lines
 from eval.reference import ReferenceLine
 from worker import settings as settings_module
@@ -83,6 +85,7 @@ class TrackResult:
     wall_s: float
     lines_total: int | None
     lines_unplaced: int | None
+    words: words_module.WordResult | None = None
 
     @property
     def accepted(self) -> bool:
@@ -228,6 +231,8 @@ async def run(
     sync = settings.sync
     if strategy == "global_ctc":
         sync = replace(sync, strategy="global_ctc")
+    words_gate = sync.quality.max_words_collapsed_share
+    sync = replace(sync, quality=replace(sync.quality, max_words_collapsed_share=1.0))
     engines = LocalEngines(settings, device, drafts=strategy != "no_draft")
     engines.load()
     capture = MetricCapture()
@@ -252,7 +257,7 @@ async def run(
                 result = crashed_result(track, data)
             else:
                 journal.starting(track.id)
-                result = await evaluate(lane, engines, counters, capture, track, data)
+                result = await evaluate(lane, engines, counters, capture, track, data, words_gate)
             journal.finished(result)
             results.append(result)
             log.info(
@@ -289,6 +294,7 @@ async def evaluate(
     capture: MetricCapture,
     track: Track,
     data: Path,
+    words_gate: float,
 ) -> TrackResult:
     audio = data / track.audio
     text = (data / track.input_text).read_text(encoding="utf-8")
@@ -343,7 +349,24 @@ async def evaluate(
         wall_s=wall,
         lines_total=int(fields["lines_total"]) if "lines_total" in fields else None,
         lines_unplaced=int(fields["lines_unplaced"]) if "lines_unplaced" in fields else None,
+        words=score_words(track, fields, capture.last, words_gate, data),
     )
+
+
+def score_words(
+    track: Track,
+    fields: Mapping[str, object],
+    metrics: Mapping[str, object],
+    words_gate: float,
+    data: Path,
+) -> words_module.WordResult | None:
+    if not track.reference_words:
+        return None
+    raw = json.loads((data / track.reference_words).read_text(encoding="utf-8"))
+    produced = list(fields.get("words", []))
+    collapsed = metrics.get("collapsed_share")
+    withheld = bool(produced) and isinstance(collapsed, int | float) and collapsed > words_gate
+    return words_module.score(words_from_json(raw), produced, withheld, track.language == "ja")
 
 
 def crashed_result(track: Track, data: Path) -> TrackResult:
@@ -377,11 +400,17 @@ def result_to_json(result: TrackResult) -> dict[str, object]:
     payload = asdict(result)
     payload["line_times"] = {str(line): list(pair) for line, pair in result.line_times.items()}
     payload["line_features"] = {str(line): list(row) for line, row in result.line_features.items()}
+    payload["words"] = words_module.to_json(result.words) if result.words else None
     return payload
 
 
 def result_from_json(entry: Mapping[str, object]) -> TrackResult:
-    values = {field.name: entry[field.name] for field in dataclasses.fields(TrackResult)}
+    values = {
+        field.name: entry[field.name]
+        for field in dataclasses.fields(TrackResult)
+        if field.name != "words"
+    }
+    values["words"] = words_module.from_json(entry.get("words"))
     values["line_times"] = {
         int(line): (float(pair[0]), float(pair[1]))
         for line, pair in dict(values["line_times"]).items()
@@ -464,6 +493,7 @@ def summarize(
         "peak_vram_mib": dict(peak_vram),
         "wall_s_total": round(sum(r.wall_s for r in results), 1),
     }
+    with_word_metrics(summary, positives)
     audit = next((r for r in results if r.id == manifest.audit_track), None)
     if audit is not None:
         summary["audit"] = {
@@ -477,13 +507,21 @@ def summarize(
 def split_summary(results: Sequence[TrackResult]) -> dict[str, object]:
     positives = [r for r in results if r.expected == "ok"]
     negatives = [r for r in results if r.expected != "ok"]
-    return {
+    summary: dict[str, object] = {
         "positives": len(positives),
         "negatives": len(negatives),
         "accept_rate": share([r.accepted for r in positives]),
         "false_accept": share([r.accepted for r in negatives]),
         "line_metrics": line_metrics(positives),
     }
+    with_word_metrics(summary, positives)
+    return summary
+
+
+def with_word_metrics(summary: dict[str, object], positives: Sequence[TrackResult]) -> None:
+    scored = [result.words for result in positives if result.words]
+    if scored:
+        summary["word_metrics"] = words_module.metrics(scored)
 
 
 def grouped(
@@ -615,6 +653,7 @@ def track_payload(result: TrackResult) -> dict[str, object]:
             str(line): [round(value, 4) for value in row]
             for line, row in result.line_features.items()
         },
+        "word_metrics": words_module.track_metrics(result.words) if result.words else None,
     }
 
 
