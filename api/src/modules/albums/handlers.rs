@@ -26,6 +26,8 @@ struct AlbumDetailDto {
     cover_url: Option<String>,
     confidence: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    sc_playlist_urn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     primary_artist: Option<AlbumArtist>,
     artists: Vec<AlbumArtist>,
     tracks: Vec<Value>,
@@ -87,6 +89,11 @@ async fn detail(
         None
     };
 
+    let sc_playlist_urn =
+        sqlx::query_file_scalar!("queries/albums/handlers/detail_sc_playlist.sql", id)
+            .fetch_optional(&st.pg)
+            .await?;
+
     let track_ids: Vec<String> =
         sqlx::query_file_scalar!("queries/albums/handlers/detail_track_ids.sql", id)
             .fetch_all(&st.pg)
@@ -146,6 +153,7 @@ async fn detail(
         release_year,
         cover_url,
         confidence,
+        sc_playlist_urn,
         primary_artist,
         artists,
         tracks,
