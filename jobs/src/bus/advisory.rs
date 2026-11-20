@@ -609,6 +609,7 @@ mod tests {
                     | WorkerLane::Highlight
                     | WorkerLane::VideoFind
                     | WorkerLane::VideoVlm
+                    | WorkerLane::VideoVlmGpu
                     | WorkerLane::VideoKeyframe
                     | WorkerLane::VideoShot
                     | WorkerLane::VideoAssemble

@@ -104,19 +104,13 @@ DESIGN = {
         },
         dict.fromkeys(SYNC_X2, 4),
     ),
-    "gpu-24-mix": Profile(
-        "slot",
-        "public",
-        {"audio": 16, "lyrics": 32, "transcribe": 2, "video-vlm-gpu": 1},
-        dict.fromkeys(SYNC_X2, 1),
-    ),
 }
 TURNING = {"gpu-video", "gpu-48-mix"}
 GENERATING_ENGINES = {"image-edit", "image-to-video"}
 REGULAR_SLOTS = ("muq", "mulan", "text", "sep", "asr", "align", "mms")
 SPEAK_ONLY = {"speak"}
 VLM_LANES = set(s.VLM_LANES)
-GPU_VLM = {"gpu-video", "gpu-48-mix", "gpu-24-mix"}
+GPU_VLM = {"gpu-video", "gpu-48-mix"}
 GENERATION = {"video-keyframe", "video-shot", "video-assemble"}
 
 
@@ -226,7 +220,7 @@ def test_sixteen_gigabyte_profile_runs_one_engine_per_model(contract: Contract) 
     ]
 
 
-@pytest.mark.parametrize("name", ["gpu-24", "gpu-24-mix", "gpu-48", "gpu-48-mix"])
+@pytest.mark.parametrize("name", ["gpu-24", "gpu-48", "gpu-48-mix"])
 def test_slot_mode_gpu_profiles_use_batches_that_fit_the_card(name: str) -> None:
     settings = load(name)
     batches = {slot: settings.slots[slot].max_batch for slot in SLOT_MODE_MAX_BATCH}

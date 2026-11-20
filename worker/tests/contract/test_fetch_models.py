@@ -16,7 +16,7 @@ from worker import settings as s
 
 PROFILES = sorted(path.stem for path in (CONFIG_DIR / "profiles").glob("*.toml"))
 MULAN = "OpenMuQ/MuQ-MuLan-large"
-FETCHED_AS_FILES = (fm.FASTTEXT_SLOT, fm.ROFORMER_SLOT, s.LOCAL_LLM_SLOT)
+FETCHED_AS_FILES = (fm.FASTTEXT_SLOT, fm.ROFORMER_SLOT, s.LOCAL_LLM_SLOT, s.VLM_SLOT)
 
 
 @pytest.fixture
@@ -87,9 +87,9 @@ def test_public_node_with_transcribe_fetches_every_public_lane_model(
     assert slots == {"muq", "mulan", "cpu-tools", "text", "sep", "asr", "align", "mms"}
 
 
-def test_video_node_fetches_only_the_generation_models(env: dict[str, str]) -> None:
+def test_video_node_fetches_only_the_generation_models_and_the_vlm(env: dict[str, str]) -> None:
     slots = {item.slot for item in plan_for("gpu-video", env)}
-    assert slots == {s.IMAGE_EDIT_SLOT, s.IMAGE_TO_VIDEO_SLOT}
+    assert slots == {s.IMAGE_EDIT_SLOT, s.IMAGE_TO_VIDEO_SLOT, s.VLM_SLOT}
 
 
 def test_the_lightning_lora_is_fetched_only_when_it_is_on(env: dict[str, str]) -> None:
@@ -131,7 +131,7 @@ def test_vlm_weights_come_as_the_model_and_its_projector_only_with_the_lane(
     ]
 
 
-@pytest.mark.parametrize("profile", ["gpu-video", "gpu-48-mix", "gpu-24-mix"])
+@pytest.mark.parametrize("profile", ["gpu-video", "gpu-48-mix"])
 def test_a_gpu_vlm_profile_fetches_the_8b_model_and_its_projector(
     env: dict[str, str], profile: str
 ) -> None:
