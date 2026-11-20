@@ -139,7 +139,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.artist_id, t.ready_home, t.ready_wave, t.sc_track_id, t.track_id)::text) FROM public.artist_playable_tracks t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.track_id = (k ->> 'track_id')::uuid
+SELECT md5(ROW(t.artist_id, t.ready_home, t.ready_wave, t.sc_created_at, t.sc_track_id, t.track_id)::text) FROM public.artist_playable_tracks t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.track_id = (k ->> 'track_id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_artist_sc_accounts(k jsonb)

@@ -3,6 +3,7 @@ WITH locked AS MATERIALIZED (
            track.sc_track_id,
            track.needs_duration_resolve = false AS ready_home,
            track.index_state = 'indexed' AS ready_wave,
+           track.sc_created_at,
            track.sharing = 'public'
                AND track.superseded_by IS NULL
                AND track.storage_state = 'ok'
@@ -16,7 +17,8 @@ WITH locked AS MATERIALIZED (
            locked.id AS track_id,
            locked.sc_track_id,
            locked.ready_home,
-           locked.ready_wave
+           locked.ready_wave,
+           locked.sc_created_at
     FROM locked
     JOIN track_artists AS credit ON credit.track_id = locked.id AND credit.role = 'primary'
     WHERE locked.playable
@@ -32,22 +34,24 @@ WITH locked AS MATERIALIZED (
     RETURNING stored.track_id
 ), written AS (
     INSERT INTO artist_playable_tracks AS stored (
-        artist_id, track_id, sc_track_id, ready_home, ready_wave
+        artist_id, track_id, sc_track_id, ready_home, ready_wave, sc_created_at
     )
     SELECT current.artist_id,
            current.track_id,
            current.sc_track_id,
            current.ready_home,
-           current.ready_wave
+           current.ready_wave,
+           current.sc_created_at
     FROM current
     ORDER BY current.artist_id, current.track_id
     ON CONFLICT (artist_id, track_id) DO UPDATE
     SET sc_track_id = EXCLUDED.sc_track_id,
         ready_home = EXCLUDED.ready_home,
-        ready_wave = EXCLUDED.ready_wave
-    WHERE (stored.sc_track_id, stored.ready_home, stored.ready_wave)
+        ready_wave = EXCLUDED.ready_wave,
+        sc_created_at = EXCLUDED.sc_created_at
+    WHERE (stored.sc_track_id, stored.ready_home, stored.ready_wave, stored.sc_created_at)
           IS DISTINCT FROM
-          (EXCLUDED.sc_track_id, EXCLUDED.ready_home, EXCLUDED.ready_wave)
+          (EXCLUDED.sc_track_id, EXCLUDED.ready_home, EXCLUDED.ready_wave, EXCLUDED.sc_created_at)
     RETURNING stored.track_id
 )
 SELECT (SELECT count(*) FROM removed) AS "removed!",

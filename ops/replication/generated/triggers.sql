@@ -998,7 +998,7 @@ BEGIN
         IF (NEW.artist_id, NEW.track_id) IS DISTINCT FROM (OLD.artist_id, OLD.track_id) THEN
             IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'track_id', OLD.track_id)) THEN
                 IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_playable_tracks' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'track_id', NEW.track_id)) THEN
-                    INSERT INTO public.artist_playable_tracks (artist_id, ready_home, ready_wave, sc_track_id, track_id) VALUES (NEW.artist_id, NEW.ready_home, NEW.ready_wave, NEW.sc_track_id, NEW.track_id);
+                    INSERT INTO public.artist_playable_tracks (artist_id, ready_home, ready_wave, sc_created_at, sc_track_id, track_id) VALUES (NEW.artist_id, NEW.ready_home, NEW.ready_wave, NEW.sc_created_at, NEW.sc_track_id, NEW.track_id);
                 END IF;
                 RETURN NULL;
             END IF;
@@ -1020,12 +1020,12 @@ BEGIN
             RETURN NULL;
         END IF;
         IF held THEN
-            UPDATE public.artist_playable_tracks t SET ready_home = NEW.ready_home, ready_wave = NEW.ready_wave, sc_track_id = NEW.sc_track_id WHERE (t.artist_id, t.track_id) = (NEW.artist_id, NEW.track_id);
+            UPDATE public.artist_playable_tracks t SET ready_home = NEW.ready_home, ready_wave = NEW.ready_wave, sc_created_at = NEW.sc_created_at, sc_track_id = NEW.sc_track_id WHERE (t.artist_id, t.track_id) = (NEW.artist_id, NEW.track_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.artist_playable_tracks (artist_id, ready_home, ready_wave, sc_track_id, track_id)
-        VALUES (NEW.artist_id, NEW.ready_home, NEW.ready_wave, NEW.sc_track_id, NEW.track_id)
+        INSERT INTO public.artist_playable_tracks (artist_id, ready_home, ready_wave, sc_created_at, sc_track_id, track_id)
+        VALUES (NEW.artist_id, NEW.ready_home, NEW.ready_wave, NEW.sc_created_at, NEW.sc_track_id, NEW.track_id)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);

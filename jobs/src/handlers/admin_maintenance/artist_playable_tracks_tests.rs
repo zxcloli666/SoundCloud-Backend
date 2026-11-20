@@ -19,9 +19,9 @@ const DRIFT: &str = "SELECT (
           AND track.storage_state = 'ok'
           AND (track.needs_duration_resolve = false OR track.index_state = 'indexed')
           AND (playable.track_id IS NULL
-               OR (track.sc_track_id, track.needs_duration_resolve = false, track.index_state = 'indexed')
+               OR (track.sc_track_id, track.needs_duration_resolve = false, track.index_state = 'indexed', track.sc_created_at)
                   IS DISTINCT FROM
-                  (playable.sc_track_id, playable.ready_home, playable.ready_wave))
+                  (playable.sc_track_id, playable.ready_home, playable.ready_wave, playable.sc_created_at))
     ) + (
         SELECT count(*)
         FROM artist_playable_tracks AS playable
@@ -149,6 +149,14 @@ async fn the_triggers_keep_the_table_equal_to_the_playable_primary_rows(
     assert_eq!(drift(&pool).await?, 0);
     assert_eq!(playable(&pool).await?.len(), 2);
 
+    execute_for(
+        &pool,
+        two,
+        "UPDATE tracks SET sc_created_at = sc_created_at - interval '1 day' WHERE id = $1",
+    )
+    .await?;
+    assert_eq!(drift(&pool).await?, 0);
+
     let before = row_version(&pool, two).await?;
     execute_for(
         &pool,
@@ -240,6 +248,33 @@ async fn the_backfill_fills_rows_that_existed_before_the_triggers(
     assert!(totals.scanned > 0);
     assert_eq!(drift(&pool).await?, 0);
     assert_eq!(playable(&pool).await?, expected);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_backfill_fills_the_upload_time_of_rows_written_before_it(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool).await?;
+    execute(
+        &pool,
+        "UPDATE artist_playable_tracks SET sc_created_at = NULL",
+    )
+    .await?;
+    assert_eq!(drift(&pool).await?, 4);
+
+    let totals = run(&pool).await?;
+
+    assert_eq!(totals.status, "completed");
+    assert_eq!(totals.changed, 4);
+    assert_eq!(totals.skipped, 0);
+    assert_eq!(drift(&pool).await?, 0);
+    let unfilled: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM artist_playable_tracks WHERE sc_created_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(unfilled, 0);
     Ok(())
 }
 
@@ -376,9 +411,10 @@ async fn track(
     Ok(sqlx::query_scalar(
         "INSERT INTO tracks (
              sc_track_id, urn, title, title_normalized, duration_ms,
-             sharing, storage_state, needs_duration_resolve, index_state
+             sharing, storage_state, needs_duration_resolve, index_state, sc_created_at
          )
-         VALUES ($1, 'soundcloud:tracks:' || $1, 'Track', 'track', 180000, $2, $3, $4, $5)
+         VALUES ($1, 'soundcloud:tracks:' || $1, 'Track', 'track', 180000, $2, $3, $4, $5,
+                 now() - interval '3 days')
          RETURNING id",
     )
     .bind(sc_track_id)
