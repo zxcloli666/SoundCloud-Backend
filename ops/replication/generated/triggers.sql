@@ -3183,6 +3183,77 @@ ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zz_tomb_check;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_skip_listening_history_listened()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    PERFORM 1 FROM public.listening_history_listened t WHERE t.id = NEW.id;
+    IF FOUND THEN
+        RETURN NULL;
+    END IF;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'listening_history_listened' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    INSERT INTO public.listening_history_listened (created_at, history_id, id, listened_ms, soundcloud_user_id)
+    VALUES (NEW.created_at, NEW.history_id, NEW.id, NEW.listened_ms, NEW.soundcloud_user_id)
+    ON CONFLICT DO NOTHING;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.listening_history_listened FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_listening_history_listened();
+ALTER TABLE public.listening_history_listened ENABLE REPLICA TRIGGER zz_skip;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_listening_history_listened()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('listening_history_listened', jsonb_build_object('id', OLD.id), 0, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.listening_history_listened FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_listening_history_listened();
+CREATE OR REPLACE FUNCTION public.scd_erase_listening_history_listened(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.listening_history_listened t WHERE t.id = (k ->> 'id')::uuid;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_listening_history_listened()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'listening_history_listened' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.listening_history_listened FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_listening_history_listened();
+ALTER TABLE public.listening_history_listened ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history_listened FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.listening_history_listened ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.llm_pause FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_llm_pause', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.llm_spend FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_llm_spend', 'cmd', 'migration', 'repl');
@@ -5329,6 +5400,8 @@ BEGIN
             PERFORM 1 FROM public.link_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'listening_history' THEN
             PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'listening_history_listened' THEN
+            PERFORM 1 FROM public.listening_history_listened t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'login_requests' THEN
             PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'mobile_link_requests' THEN
@@ -5370,6 +5443,8 @@ BEGIN
             PERFORM public.scd_erase_link_requests(k, upto);
         WHEN 'listening_history' THEN
             PERFORM public.scd_erase_listening_history(k, upto);
+        WHEN 'listening_history_listened' THEN
+            PERFORM public.scd_erase_listening_history_listened(k, upto);
         WHEN 'login_requests' THEN
             PERFORM public.scd_erase_login_requests(k, upto);
         WHEN 'mobile_link_requests' THEN
@@ -10189,6 +10264,10 @@ BEGIN
             ('listening_history', 'zz_tomb'),
             ('listening_history', 'zz_tomb_check'),
             ('listening_history', 'zzz_suppress'),
+            ('listening_history_listened', 'zz_skip'),
+            ('listening_history_listened', 'zz_tomb'),
+            ('listening_history_listened', 'zz_tomb_check'),
+            ('listening_history_listened', 'zzz_suppress'),
             ('llm_pause', 'zz_guard'),
             ('llm_spend', 'zz_guard'),
             ('login_requests', 'zz_merge'),

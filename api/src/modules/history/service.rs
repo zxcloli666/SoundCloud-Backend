@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use sqlx::types::Uuid;
 
 use crate::common::sc_ids::{EntityKind, EntityRef, require_ref};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +41,17 @@ pub struct RecordHistoryDto {
     pub duration: i32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenedDto {
+    pub listened_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordedHistory {
+    pub id: Uuid,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct HistoryPage {
     pub collection: Vec<ListeningHistory>,
@@ -56,7 +67,7 @@ impl HistoryService {
         Arc::new(Self { pg })
     }
 
-    pub async fn record(&self, sc_user_id: &str, data: &RecordHistoryDto) -> AppResult<()> {
+    pub async fn record(&self, sc_user_id: &str, data: &RecordHistoryDto) -> AppResult<Uuid> {
         let track = require_ref(EntityKind::Track, &data.sc_track_id)?;
         let track_urn = track.urn();
         let cutoff = chrono::Utc::now().naive_utc() - Duration::seconds(60);
@@ -69,13 +80,13 @@ impl HistoryService {
         )
         .fetch_optional(&self.pg)
         .await?;
-        if recent.is_some() {
-            return Ok(());
+        if let Some(id) = recent {
+            return Ok(id);
         }
-        sqlx::query(
+        let id = sqlx::query_scalar(
             "INSERT INTO listening_history \
              (soundcloud_user_id, sc_track_id, title, artist_name, artist_urn, artwork_url, duration) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
         )
         .bind(sc_user_id)
         .bind(&track_urn)
@@ -84,8 +95,29 @@ impl HistoryService {
         .bind(&data.artist_urn)
         .bind(&data.artwork_url)
         .bind(data.duration)
+        .fetch_one(&self.pg)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn report_listened(
+        &self,
+        sc_user_id: &str,
+        history_id: Uuid,
+        listened_ms: i32,
+    ) -> AppResult<()> {
+        let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
+        let stored = sqlx::query_file!(
+            "queries/history/service/insert_listened.sql",
+            history_id,
+            &variants,
+            listened_ms
+        )
         .execute(&self.pg)
         .await?;
+        if stored.rows_affected() == 0 {
+            return Err(AppError::not_found("history entry not found"));
+        }
         Ok(())
     }
 
@@ -117,9 +149,14 @@ impl HistoryService {
 
     pub async fn clear(&self, sc_user_id: &str) -> AppResult<()> {
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        sqlx::query_file!("queries/history/service/clear_by_user.sql", &variants)
-            .execute(&self.pg)
+        let mut tx = self.pg.begin().await?;
+        sqlx::query_file!("queries/history/service/clear_listened_by_user.sql", &variants)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query_file!("queries/history/service/clear_by_user.sql", &variants)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

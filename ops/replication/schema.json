@@ -1074,6 +1074,22 @@
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "listening_history_pkey", "primary": true, "where": null}
    ]
   },
+  "listening_history_listened": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "history_id", "notnull": true, "type": "uuid"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "listened_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "listening_history_listened_pkey", "primary": true, "where": null}
+   ]
+  },
   "llm_pause": {
    "columns": [
     {"default": null, "generated": false, "name": "alerted_at", "notnull": false, "type": "timestamp with time zone"},

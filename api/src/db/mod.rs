@@ -66,8 +66,8 @@ pub(crate) async fn replicate_artist_playable_tracks(pool: &PgPool) -> anyhow::R
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 480,
-    description: "artist playable tracks fresh idx",
+    version: 485,
+    description: "scd install",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,

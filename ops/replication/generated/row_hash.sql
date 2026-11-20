@@ -514,6 +514,18 @@ AS $f$
 SELECT md5(ROW(t.artist_name, t.artist_urn, t.artwork_url, t.duration, t.id, t.played_at, t.sc_track_id, t.soundcloud_user_id, t.title)::text) FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_listening_history_listened(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.created_at, t.history_id, t.id, t.listened_ms, t.soundcloud_user_id)::text) FROM public.listening_history_listened t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_llm_pause(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1638,6 +1650,8 @@ BEGIN
             RETURN public.scd_row_hash_link_requests(k);
         WHEN 'listening_history' THEN
             RETURN public.scd_row_hash_listening_history(k);
+        WHEN 'listening_history_listened' THEN
+            RETURN public.scd_row_hash_listening_history_listened(k);
         WHEN 'llm_pause' THEN
             RETURN public.scd_row_hash_llm_pause(k);
         WHEN 'llm_spend' THEN

@@ -514,6 +514,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_listening_history_listened(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.listening_history_listened t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_llm_pause(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1638,6 +1650,8 @@ BEGIN
             RETURN public.scd_row_json_link_requests(k);
         WHEN 'listening_history' THEN
             RETURN public.scd_row_json_listening_history(k);
+        WHEN 'listening_history_listened' THEN
+            RETURN public.scd_row_json_listening_history_listened(k);
         WHEN 'llm_pause' THEN
             RETURN public.scd_row_json_llm_pause(k);
         WHEN 'llm_spend' THEN

@@ -90,6 +90,7 @@ SELECT v.cls FROM (VALUES
     ('job_status', 'C'),
     ('link_requests', 'A'),
     ('listening_history', 'A'),
+    ('listening_history_listened', 'A'),
     ('llm_pause', 'P'),
     ('llm_spend', 'P'),
     ('login_requests', 'A'),
@@ -265,6 +266,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'link_requests', jsonb_build_object('id', t.id) FROM public.link_requests t ON CONFLICT DO NOTHING;
         WHEN 'listening_history' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'listening_history', jsonb_build_object('id', t.id) FROM public.listening_history t ON CONFLICT DO NOTHING;
+        WHEN 'listening_history_listened' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'listening_history_listened', jsonb_build_object('id', t.id) FROM public.listening_history_listened t ON CONFLICT DO NOTHING;
         WHEN 'login_requests' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'login_requests', jsonb_build_object('id', t.id) FROM public.login_requests t ON CONFLICT DO NOTHING;
         WHEN 'lyrics_cache' THEN
@@ -415,6 +418,7 @@ BEGIN
         ('job_status', 'C'),
         ('link_requests', 'A'),
         ('listening_history', 'A'),
+        ('listening_history_listened', 'A'),
         ('login_requests', 'A'),
         ('lyrics_cache', 'C'),
         ('lyrics_lookup_state', 'C'),
