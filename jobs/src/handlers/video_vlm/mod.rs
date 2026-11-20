@@ -7,10 +7,11 @@ mod stored;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use backend_contracts::pipeline::{VIDEO_VLM, VideoLabel, VideoVlmRequest};
+use backend_contracts::pipeline::{VideoLabel, VideoVlmRequest};
+use backend_contracts::worker_contract::WorkerLane;
 use chrono::Utc;
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
@@ -24,7 +25,7 @@ use crate::config::{VideoFindConfig, VideoVlmConfig};
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::Pacing;
 use crate::handlers::video_find::parts::Parts;
-use crate::handlers::video_gen::Lanes;
+use crate::handlers::video_gen::Nodes;
 use crate::llm::ledger;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
@@ -35,9 +36,43 @@ const RETRY_PUBLISH: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
-    Classify,
+    Classify(WorkerLane),
     Frames,
     Cut(VideoLabel),
+}
+
+impl Step {
+    const fn lane(self) -> WorkerLane {
+        match self {
+            Self::Classify(lane) => lane,
+            Self::Frames | Self::Cut(_) => WorkerLane::VideoVlm,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Judge {
+    Gpu,
+    Haiku,
+    Cpu,
+}
+
+impl Judge {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gpu => "gpu",
+            Self::Haiku => "haiku",
+            Self::Cpu => "cpu",
+        }
+    }
+
+    const fn step(self) -> Step {
+        match self {
+            Self::Gpu => Step::Classify(WorkerLane::VideoVlmGpu),
+            Self::Haiku => Step::Frames,
+            Self::Cpu => Step::Classify(WorkerLane::VideoVlm),
+        }
+    }
 }
 
 pub struct VideoVlm<B, L, V, N> {
@@ -51,9 +86,10 @@ pub struct VideoVlm<B, L, V, N> {
     haiku: Option<V>,
     notify: N,
     reset_day: u32,
+    path: Mutex<Option<Judge>>,
 }
 
-impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
+impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
@@ -77,6 +113,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             haiku,
             notify,
             reset_day,
+            path: Mutex::new(None),
         }
     }
 
@@ -91,6 +128,8 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             tick_s = self.config.tick.as_secs(),
             haiku = self.haiku.is_some(),
             month_usd = self.config.month_usd,
+            gpu_seen_s = self.config.gpu_seen.as_secs(),
+            gpu_timeout_s = self.config.gpu_timeout.as_secs(),
             "video VLM sweep started"
         );
         let mut ticker = tokio::time::interval(self.config.tick);
@@ -107,7 +146,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     }
 
     pub(crate) async fn dispatch(&self, cancellation: &CancellationToken) -> JobResult {
-        queue::requeue_unanswered(&self.pool, self.config.timeout).await?;
+        queue::requeue_unanswered(&self.pool, self.config.timeout, self.config.gpu_timeout).await?;
         self.verify_stored().await?;
         let free = self.config.in_flight - queue::busy(&self.pool).await?;
         if free <= 0 {
@@ -118,18 +157,56 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             return Ok(());
         }
         debug!(claimed = claimed.len(), "video VLM requests claimed");
-        let open = self.haiku_open().await?;
+        let judge = self.judge().await?;
+        self.note(judge);
         for claim in claimed {
             if cancellation.is_cancelled() {
                 self.release(&claim, Duration::ZERO, "shutdown").await;
                 continue;
             }
-            self.send(&claim, open).await;
+            let judge = match (judge, claim.gpu_failed()) {
+                (Judge::Gpu, true) => self.spare().await?,
+                _ => judge,
+            };
+            self.send(&claim, judge).await;
         }
         Ok(())
     }
 
-    async fn send(&self, claim: &Claimed, open: bool) {
+    async fn judge(&self) -> JobResult<Judge> {
+        match self.lanes.serving(WorkerLane::VideoVlmGpu) {
+            true => Ok(Judge::Gpu),
+            false => self.spare().await,
+        }
+    }
+
+    async fn spare(&self) -> JobResult<Judge> {
+        match self.haiku_open().await? {
+            true => Ok(Judge::Haiku),
+            false => Ok(Judge::Cpu),
+        }
+    }
+
+    fn local(&self, claim: &Claimed) -> Judge {
+        match self.lanes.serving(WorkerLane::VideoVlmGpu) && !claim.gpu_failed() {
+            true => Judge::Gpu,
+            false => Judge::Cpu,
+        }
+    }
+
+    fn note(&self, judge: Judge) {
+        let mut last = self.path.lock().unwrap_or_else(PoisonError::into_inner);
+        if *last != Some(judge) {
+            info!(
+                path = judge.as_str(),
+                was = last.map_or("none", Judge::as_str),
+                "video VLM checks switched path"
+            );
+            *last = Some(judge);
+        }
+    }
+
+    async fn send(&self, claim: &Claimed, judge: Judge) {
         let Some(held) = &claim.held else {
             self.drop_unreadable(claim).await;
             return;
@@ -140,12 +217,18 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                 return;
             }
             Some(known) if known.label != VideoLabel::Static => Step::Cut(known.label),
-            _ if open => Step::Frames,
-            _ => Step::Classify,
+            _ => judge.step(),
         };
         if let Err(error) = self.publish(claim, held, step).await {
             warn!(track = %claim.sc_track_id, %error, "video VLM request was not published");
             self.release(claim, RETRY_PUBLISH, "publish_failed").await;
+            return;
+        }
+        if step.lane() != WorkerLane::VideoVlmGpu {
+            return;
+        }
+        if let Err(error) = queue::sent_gpu(&self.pool, &claim.sc_track_id, claim.attempt).await {
+            warn!(track = %claim.sc_track_id, %error, "GPU VLM send was not marked; it waits for the common timeout");
         }
     }
 
@@ -165,7 +248,11 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         let request = self.request(claim, held, step)?;
         let payload = serde_json::to_value(&request).map_err(JobError::permanent)?;
         self.lanes
-            .publish(VIDEO_VLM, payload, claim.message_id(held))
+            .publish(
+                step.lane().spec().filter_subject,
+                payload,
+                claim.message_id(held),
+            )
             .await
             .map_err(JobError::retryable)
     }
@@ -189,7 +276,8 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                 Step::Cut(label) => Some(label),
                 _ => None,
             },
-            prompt: (step == Step::Classify).then(|| prompt::local(&prompt::Features::of(held))),
+            prompt: matches!(step, Step::Classify(_))
+                .then(|| prompt::local(&prompt::Features::of(held))),
         })
     }
 

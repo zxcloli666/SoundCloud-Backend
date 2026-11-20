@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use backend_contracts::pipeline::{Producer, VideoClip, VideoLabel, VideoPart, VideoVlmResult};
 use backend_contracts::reasons::{WorkerReason, WorkerStatus};
+use backend_contracts::worker_contract::WorkerLane;
 use base64::Engine as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -16,6 +17,7 @@ use crate::handlers::video_find::tests::{Memory, config as find_config};
 
 mod fakes;
 mod find;
+mod gpu;
 mod haiku;
 mod local;
 mod stored;
@@ -32,6 +34,8 @@ fn vlm_config(haiku: bool) -> VideoVlmConfig {
         month_usd: 5.0,
         recheck: Duration::from_secs(1_800),
         verify_stored: 0,
+        gpu_seen: Duration::from_secs(120),
+        gpu_timeout: Duration::from_secs(720),
         haiku: haiku.then(|| crate::config::AnthropicLadder {
             steps: Vec::new(),
             reset_day: 17,
@@ -231,7 +235,7 @@ fn file_part(
 }
 
 async fn finish(vlm: &Rig, result: VideoVlmResult) -> anyhow::Result<()> {
-    vlm.finish(result)
+    vlm.finish(WorkerLane::VideoVlm, result)
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
@@ -274,7 +278,9 @@ async fn the_request_names_the_temp_file_by_its_storage_url_and_a_resend_gets_a_
     let first = claim(&pool, 1).await?.remove(0);
     let held = first.held.clone().unwrap();
 
-    let request = vlm.request(&first, &held, Step::Classify).unwrap();
+    let request = vlm
+        .request(&first, &held, Step::Classify(WorkerLane::VideoVlm))
+        .unwrap();
 
     assert_eq!(
         request.video_url,
@@ -287,7 +293,7 @@ async fn the_request_names_the_temp_file_by_its_storage_url_and_a_resend_gets_a_
     sqlx::query("UPDATE track_video_dispatch SET updated_at = now() - interval '2 hours' WHERE sc_track_id = '11'")
         .execute(&pool)
         .await?;
-    queue::requeue_unanswered(&pool, Duration::from_secs(3_600))
+    queue::requeue_unanswered(&pool, Duration::from_secs(3_600), Duration::from_secs(720))
         .await
         .unwrap();
     assert_eq!(stage(&pool, "11").await?.0, "pending_vlm");
@@ -488,25 +494,33 @@ fn an_ok_answer_needs_its_label_and_exactly_the_file_its_label_allows() {
     half.part = None;
 
     for bad in [no_label, static_with_file, half] {
-        assert!(judge(&bad).is_err());
+        assert!(judge(WorkerLane::VideoVlm, &bad).is_err());
     }
     assert!(matches!(
-        judge(&clip_part("11", 1, b"ab", &[b"ab"], 0)).unwrap(),
+        judge(
+            WorkerLane::VideoVlm,
+            &clip_part("11", 1, b"ab", &[b"ab"], 0)
+        )
+        .unwrap(),
         Verdict::Labelled(_)
     ));
     assert!(matches!(
-        judge(&loop_part("11", 1, b"ab", &[b"ab"], 0)).unwrap(),
+        judge(
+            WorkerLane::VideoVlm,
+            &loop_part("11", 1, b"ab", &[b"ab"], 0)
+        )
+        .unwrap(),
         Verdict::Labelled(_)
     ));
     assert!(matches!(
-        judge(&answer("11", 1, VideoLabel::Static)).unwrap(),
+        judge(WorkerLane::VideoVlm, &answer("11", 1, VideoLabel::Static)).unwrap(),
         Verdict::Labelled(_)
     ));
 }
 
 #[test]
 fn failures_split_into_gone_again_and_drop_and_foreign_reasons_are_refused() {
-    let verdict = |reason| judge(&failure("11", 1, reason)).unwrap();
+    let verdict = |reason| judge(WorkerLane::VideoVlm, &failure("11", 1, reason)).unwrap();
 
     assert_eq!(verdict(WorkerReason::InputsGone), Verdict::Gone);
     assert_eq!(
@@ -521,6 +535,18 @@ fn failures_split_into_gone_again_and_drop_and_foreign_reasons_are_refused() {
         verdict(WorkerReason::ModelOutputInvalid),
         Verdict::Drop(WorkerReason::ModelOutputInvalid)
     );
-    assert!(judge(&failure("11", 1, WorkerReason::NoVideoFound)).is_err());
-    assert!(judge(&failure("abc", 1, WorkerReason::InputsGone)).is_err());
+    assert!(
+        judge(
+            WorkerLane::VideoVlm,
+            &failure("11", 1, WorkerReason::NoVideoFound)
+        )
+        .is_err()
+    );
+    assert!(
+        judge(
+            WorkerLane::VideoVlm,
+            &failure("abc", 1, WorkerReason::InputsGone)
+        )
+        .is_err()
+    );
 }

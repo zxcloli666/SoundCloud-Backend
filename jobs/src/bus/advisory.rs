@@ -92,6 +92,7 @@ fn receiver_of(lane: WorkerLane) -> Option<WorkerLostLane> {
         | WorkerLane::Highlight
         | WorkerLane::VideoFind
         | WorkerLane::VideoVlm
+        | WorkerLane::VideoVlmGpu
         | WorkerLane::VideoKeyframe
         | WorkerLane::VideoShot
         | WorkerLane::VideoAssemble => None,
@@ -608,6 +609,7 @@ mod tests {
                     | WorkerLane::Highlight
                     | WorkerLane::VideoFind
                     | WorkerLane::VideoVlm
+                    | WorkerLane::VideoVlmGpu
                     | WorkerLane::VideoKeyframe
                     | WorkerLane::VideoShot
                     | WorkerLane::VideoAssemble

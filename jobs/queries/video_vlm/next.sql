@@ -1,7 +1,7 @@
 UPDATE track_video_dispatch
 SET payload = jsonb_set(
         jsonb_set(
-            payload,
+            payload - 'vlm_gpu',
             '{vlm_sent}',
             to_jsonb(COALESCE((payload ->> 'vlm_sent')::int, 0) + 1)
         ),

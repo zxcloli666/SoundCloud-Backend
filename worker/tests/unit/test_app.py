@@ -277,3 +277,21 @@ def test_gpu_profiles_keep_encode_on_the_shared_slots(contract: Contract, tmp_pa
 def test_the_node_routes_encode_through_priority_batchers(node: Node) -> None:
     assert set(node.priority_batchers) == {"mulan"}
     assert set(node.batchers) >= {"muq", "mulan", "text"}
+
+
+def test_llama_engines_find_the_cuda_libraries_of_the_image(tmp_path: Path) -> None:
+    site = tmp_path / "site-packages"
+    for package in ("cu13", "cublas"):
+        (site / "nvidia" / package / "lib").mkdir(parents=True)
+    env = app.llama_env(["", str(tmp_path / "missing"), str(site)], {"LD_LIBRARY_PATH": "/opt/x"})
+    assert env == {
+        "OMP_WAIT_POLICY": "PASSIVE",
+        "LD_LIBRARY_PATH": os.pathsep.join(
+            [
+                str(site / "nvidia" / "cu13" / "lib"),
+                str(site / "nvidia" / "cublas" / "lib"),
+                "/opt/x",
+            ]
+        ),
+    }
+    assert app.llama_env([str(tmp_path / "missing")], {}) == {"OMP_WAIT_POLICY": "PASSIVE"}

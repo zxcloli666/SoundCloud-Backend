@@ -139,6 +139,8 @@ pub struct VideoVlmConfig {
     pub month_usd: f64,
     pub recheck: Duration,
     pub verify_stored: i64,
+    pub gpu_seen: Duration,
+    pub gpu_timeout: Duration,
     pub haiku: Option<AnthropicLadder>,
 }
 
@@ -160,6 +162,11 @@ impl VideoVlmConfig {
             month_usd,
             recheck: Duration::from_secs(env::positive_u64("VIDEO_VLM_RECHECK_SECONDS", 1_800)?),
             verify_stored: env::parse("VIDEO_VLM_VERIFY_STORED", "0")?,
+            gpu_seen: Duration::from_secs(env::parse("VIDEO_VLM_GPU_SEEN_SECONDS", "120")?),
+            gpu_timeout: Duration::from_secs(env::positive_u64(
+                "VIDEO_VLM_GPU_TIMEOUT_SECONDS",
+                720,
+            )?),
             haiku,
         })
     }

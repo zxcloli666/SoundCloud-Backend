@@ -10,12 +10,12 @@ use super::queue::{self, Known};
 use super::result::Frames;
 use super::{LADDER, VideoVlm};
 use crate::handlers::video_accounts::Notify;
-use crate::handlers::video_gen::Lanes;
+use crate::handlers::video_gen::Nodes;
 use crate::llm::ledger;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
 
-impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
+impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     pub(super) async fn framed(&self, track: &str, attempt: i32, frames: &Frames) -> JobResult {
         let joined = self
             .parts
@@ -103,7 +103,7 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             debug!(track, attempt, "stale VLM frames ignored");
             return Ok(());
         };
-        self.send(&claim, false).await;
+        self.send(&claim, self.local(&claim)).await;
         Ok(())
     }
 }

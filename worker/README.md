@@ -34,6 +34,7 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 | `highlight` | `HIGHLIGHT` | `highlight.track.new` | `done.highlight` | нет |
 | `video-find` | `VIDEO_FIND` | `video.find.new` | `done.video_find` | нет |
 | `video-vlm` | `VIDEO_VLM` | `video.vlm.new` | `done.video_vlm` | нет |
+| `video-vlm-gpu` | `VIDEO_VLM_GPU` | `video.vlm_gpu.new` | `done.video_vlm_gpu` | да |
 | `video-keyframe` | `VIDEO_KEYFRAME` | `video.keyframe.new` | `done.video_keyframe` | да |
 | `video-shot` | `VIDEO_SHOT` | `video.shot.new` | `done.video_shot` | да |
 | `video-assemble` | `VIDEO_ASSEMBLE` | `video.assemble.new` | `done.video_assemble` | нет |
@@ -74,6 +75,14 @@ clip или static; грамматика не даёт другого ответ
 `label` (метку уже дал jobs) только режет кусок для `clip` и `loop` (с `pad_ms` в начале) и отдаёт его частями, как у
 `video-find`, для `static` ничего не качает. Модель в базовом конфиге Qwen3-VL-4B Q4_K_M на CPU.
 Лейн выключен в профиле `cpu`, хост включает его сам; веса тянет `fetch_models`.
+
+`video-vlm-gpu` - тот же код и тот же слот `vlm` на публичной GPU-ноде, но jobs шлёт туда только
+задачу с `prompt`: кадры для Haiku и нарезку делает worker1 по `video-vlm`. Профили `gpu-video` и
+`gpu-48-mix` ставят в слот Qwen3-VL-8B Q4_K_M с mmproj Q8_0 и `vlm.gpu_layers = -1`
+(все слои на карте, устройство `llama-cuda`). На 49 роликах 8B с промптом jobs угадал 39.
+GPU-сборка llama.cpp есть только в `:gpu-cuda13`: в `:gpu` слот с `gpu_layers` не грузится
+(`llama_supports_gpu_offload` ложно), лейн ломается, и jobs уводит проверки на Haiku или 4B.
+Веса 8B (5.03 + 0.75 ГБ) тянет `fetch-models` профиля.
 
 Генерация ролика по обложке: три лейна. `video-keyframe` и `video-shot` есть в `gpu-video` и `gpu-48-mix`,
 `video-assemble` включает хост.
@@ -164,8 +173,8 @@ pull, так что без pull там всегда 0. Пришедшая зад
 | `cpu` | `lane` | audio 2, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16, highlight 2, video-find 1 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
 | `cpu-tts` | `lane` | speak 1 | - | доверенный хост под озвучку, без GPU |
 | `gpu-tts` | `lane` | speak 1 | - | публичная нода под озвучку, движок на CUDA, образ `:gpu` |
-| `gpu-video` | `lane` | video-keyframe 1, video-shot 1 | - | публичная нода под генерацию видео, bf16 с выгрузкой в RAM, образ `:gpu` |
-| `gpu-48-mix` | `slot` | audio 32, lyrics 64, transcribe 8, video-keyframe 1, video-shot 1 | 4/4/4/4 | публичная нода 48 ГБ (L40S): обычные лейны, генерация видео по очереди с ними. В `lane` muq, mulan и text стоят в одном процессе и идут по очереди: audio ~1500/ч против ~6000/ч у 3090 на `gpu-24` |
+| `gpu-video` | `lane` | video-vlm-gpu 1, video-keyframe 1, video-shot 1 | - | публичная нода под генерацию видео, bf16 с выгрузкой в RAM; 8B VLM своей группой по очереди с генерацией, образ `:gpu-cuda13` |
+| `gpu-48-mix` | `slot` | audio 32, lyrics 64, transcribe 8, video-vlm-gpu 1, video-keyframe 1, video-shot 1 | 4/4/4/4 | публичная нода 48 ГБ (L40S): обычные лейны и 8B VLM в группе `regular`, генерация видео по очереди с ними. В `lane` muq, mulan и text стоят в одном процессе и идут по очереди: audio ~1500/ч против ~6000/ч у 3090 на `gpu-24`. Образ `:gpu-cuda13` |
 
 ### Память и выбор карты
 
@@ -233,6 +242,8 @@ pull, так что без pull там всегда 0. Пришедшая зад
 | `gpu-24` (sep, asr, align ×2, остальные ×1) | 7.68 + 0.46 + 1.56 + 1.84 = 11.54 | 10 × 0.45 = 4.5 | ~16 ГБ; живая нагрузка до ~20 ГБ (замер) |
 | `gpu-48` (sep, asr, align, mms ×4) | 7.68 + 3 × (0.46 + 1.56 + 1.84 + 0.63) = 21.15 | 19 × 0.45 = 8.55 | ~29.7 ГБ, вызовы поверх не замерены (оценка) |
 | `gpu-48-mix`, `regular`, `slot` (sep, asr, align, mms ×4) | 21.15 | 19 × 0.45 = 8.55 | ~29.7 ГБ, с вызовами ~33 ГБ из 45 (замер); видео одно: пик Qwen ~43 ГиБ (замер) |
+| 8B VLM (`vlm`, Q4_K_M, mmproj Q8_0, 4096 токенов) | 5.03 + 0.75 | 0.45 | ~7.5 ГБ: KV 0.58, буферы ~0.7 (оценка, не замерено) |
+| `gpu-48-mix`, `regular` с 8B VLM | 26.9 | 20 × 0.45 = 9 | ~33 + 7.5 ≈ 40.5 ГБ из 45 (оценка) |
 | `gpu-12`, `lane`, одна реплика | 7.68 | 2 × 0.45 = 0.9 | ~8.6 ГБ (оценка) |
 | `gpu-12-audio`, `lane` | 0.67 + 1.33 + 1.19 = 3.19 | 0.45 | ~3.6 ГБ (оценка) |
 | голос F16 / Q4_K_M | уже с контекстом | | 5.05 / 2.56 ГиБ (замер) |
@@ -586,8 +597,11 @@ Q8_0 из конфига между ними
 `:gpu-cuda13` проверен 2026-10-15 на RTX 5060 Ti (sm_120, драйвер 595.84, CUDA 13.2), образ
 9.8.19: models-тесты 47 passed, 3 skipped. Blackwell (sm_100, sm_120) идёт только на `:gpu-cuda13`,
 Pascal и Volta (V100) остаются на `:gpu`. CUDA приезжает колёсами `nvidia-*`, драйвер — с хоста.
-llama.cpp для локальной модели во всех трёх сборках один: колесо `llama-cpp-python` под CPU из
-`uv.lock`; на x86_64 ему нужен процессор с AVX2, FMA, F16C и BMI2 (Haswell, Zen и новее).
+llama.cpp в `:cpu` и `:gpu` - колесо `llama-cpp-python` под CPU из `uv.lock`; на x86_64 ему нужен
+процессор с AVX2, FMA, F16C и BMI2 (Haswell, Zen и новее). В `:gpu-cuda13` на x86_64 стоит
+колесо `v0.3.36-cu130` (783 МБ, sha256 в `uv.lock`): `libcudart.so.13` и `libcublas.so.13` оно берёт из
+`nvidia/cu13/lib` образа, папку в `LD_LIBRARY_PATH` движков llama.cpp ставит воркер. Колесо под
+CUDA 12 для `:gpu` - `v0.3.36-cu125`, 1.77 ГБ, после установки 6.1 ГБ; в образ оно не взято.
 
 ```bash
 docker build -f docker/Dockerfile --build-arg FLAVOR=cu126 -t worker:gpu .

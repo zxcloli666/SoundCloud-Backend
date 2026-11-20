@@ -12,7 +12,7 @@ use super::haiku::Vision;
 use super::queue::{self, Held, HeldFile, Known};
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::{Pacing, final_key};
-use crate::handlers::video_gen::Lanes;
+use crate::handlers::video_gen::Nodes;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
 
@@ -39,20 +39,22 @@ pub(super) enum Verdict {
     Frames(Box<Frames>),
     Drop(WorkerReason),
     Again(WorkerReason),
+    Fallback(WorkerReason),
     Gone,
 }
 
-impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
-    pub async fn finish(&self, result: VideoVlmResult) -> JobResult {
+impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
+    pub async fn finish(&self, lane: WorkerLane, result: VideoVlmResult) -> JobResult {
         let attempt = i32::try_from(result.attempt)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("video attempt is out of range")))?;
         let track = result.sc_track_id.as_str();
-        match judge(&result).map_err(JobError::permanent)? {
+        match judge(lane, &result).map_err(JobError::permanent)? {
             Verdict::Labelled(answer) => self.labelled(track, attempt, &result, &answer).await,
             Verdict::Answered(answer) => self.answered(track, attempt, &answer).await,
             Verdict::Frames(frames) => self.framed(track, attempt, &frames).await,
             Verdict::Drop(reason) => self.dropped(track, attempt, reason).await,
             Verdict::Again(reason) => self.again(track, attempt, reason).await,
+            Verdict::Fallback(reason) => self.fallback(track, attempt, reason).await,
             Verdict::Gone => self.gone(track, attempt).await,
         }
     }
@@ -260,6 +262,19 @@ impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         Ok(())
     }
 
+    async fn fallback(&self, track: &str, attempt: i32, reason: WorkerReason) -> JobResult {
+        match queue::gpu_failed(&self.pool, track, attempt, reason.as_str()).await? {
+            true => info!(
+                track,
+                attempt,
+                reason = reason.as_str(),
+                "GPU VLM check failed; it goes to the next path"
+            ),
+            false => debug!(track, attempt, "stale VLM result ignored"),
+        }
+        Ok(())
+    }
+
     async fn gone(&self, track: &str, attempt: i32) -> JobResult {
         let Some(held) = queue::held(&self.pool, track, attempt).await? else {
             debug!(track, attempt, "stale VLM result ignored");
@@ -396,7 +411,7 @@ fn verify(held: &Held, answer: &Judged) -> Value {
     verify
 }
 
-pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
+pub(super) fn judge(lane: WorkerLane, result: &VideoVlmResult) -> anyhow::Result<Verdict> {
     ensure!(
         catalog_ingest::normalize_sc_track_id(&result.sc_track_id).as_deref()
             == Some(result.sc_track_id.as_str()),
@@ -411,13 +426,14 @@ pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
         (status, None) => bail!("VLM {} result has no reason", status.as_str()),
         (status, Some(reason)) => {
             ensure!(
-                reason.status() == status && reason.is_published_on(WorkerLane::VideoVlm),
+                reason.status() == status && reason.is_published_on(lane),
                 "VLM result carries reason {} its lane never publishes as {}",
                 reason.as_str(),
                 status.as_str()
             );
             Ok(match reason.failure_class() {
                 _ if reason == WorkerReason::InputsGone => Verdict::Gone,
+                _ if reason == WorkerReason::PublicNodeTimeout => Verdict::Fallback(reason),
                 Some(FailureClass::Transient | FailureClass::Reopenable) => Verdict::Again(reason),
                 _ => Verdict::Drop(reason),
             })

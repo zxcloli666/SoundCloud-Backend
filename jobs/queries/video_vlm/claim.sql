@@ -11,7 +11,7 @@ WITH due AS (
 UPDATE track_video_dispatch AS dispatch
 SET stage = 'vlm_dispatched',
     payload = jsonb_set(
-        dispatch.payload,
+        dispatch.payload - 'vlm_gpu',
         '{vlm_sent}',
         to_jsonb(COALESCE((dispatch.payload ->> 'vlm_sent')::int, 0) + 1)
     ),

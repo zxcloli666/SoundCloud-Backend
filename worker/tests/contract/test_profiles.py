@@ -88,11 +88,20 @@ DESIGN = {
     ),
     "cpu-tts": Profile("lane", "trusted", {"speak": 1}, {}),
     "gpu-tts": Profile("lane", "public", {"speak": 1}, {}),
-    "gpu-video": Profile("lane", "public", {"video-keyframe": 1, "video-shot": 1}, {}),
+    "gpu-video": Profile(
+        "lane", "public", {"video-vlm-gpu": 1, "video-keyframe": 1, "video-shot": 1}, {}
+    ),
     "gpu-48-mix": Profile(
         "slot",
         "public",
-        {"audio": 32, "lyrics": 64, "transcribe": 8, "video-keyframe": 1, "video-shot": 1},
+        {
+            "audio": 32,
+            "lyrics": 64,
+            "transcribe": 8,
+            "video-vlm-gpu": 1,
+            "video-keyframe": 1,
+            "video-shot": 1,
+        },
         dict.fromkeys(SYNC_X2, 4),
     ),
 }
@@ -100,7 +109,8 @@ TURNING = {"gpu-video", "gpu-48-mix"}
 GENERATING_ENGINES = {"image-edit", "image-to-video"}
 REGULAR_SLOTS = ("muq", "mulan", "text", "sep", "asr", "align", "mms")
 SPEAK_ONLY = {"speak"}
-NOT_YET = {"video-vlm"}
+VLM_LANES = set(s.VLM_LANES)
+GPU_VLM = {"gpu-video", "gpu-48-mix"}
 GENERATION = {"video-keyframe", "video-shot", "video-assemble"}
 
 
@@ -223,7 +233,7 @@ def test_cpu_profile_serves_every_lane_with_one_copy_of_each_model() -> None:
     assert settings.runtime.onednn is False
     assert settings.runtime.allow_slow_lanes is True
     assert settings.runtime.isolate_encode is True
-    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY - NOT_YET - GENERATION
+    assert set(settings.lanes.enabled) == set(s.LANES) - SPEAK_ONLY - VLM_LANES - GENERATION
     assert all(settings.slots[slot].replicas == 1 for slot in SYNC_X2)
     assert all(settings.lanes.capacity[lane] > 1 for lane in ("audio", "lyrics", "transcribe"))
 
@@ -369,10 +379,15 @@ def test_the_video_profile_loads_one_generation_engine_at_a_time(contract: Contr
     assert {plan.name: plan.turn_group for plan in plans} == {
         "image-edit": "keyframe",
         "image-to-video": "shot",
+        s.VLM_SLOT: "vlm",
     }
     assert settings.runtime.turn_home == ""
     assert settings.runtime.turn_hold_s > 0
-    assert s.turn_lanes(settings) == {"video-keyframe": "keyframe", "video-shot": "shot"}
+    assert s.turn_lanes(settings) == {
+        "video-vlm-gpu": "vlm",
+        "video-keyframe": "keyframe",
+        "video-shot": "shot",
+    }
 
 
 def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
@@ -381,7 +396,7 @@ def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
     settings = load("gpu-48-mix")
     runtime = settings.runtime
     assert dict(runtime.turn_groups) == {
-        "regular": REGULAR_SLOTS,
+        "regular": (*REGULAR_SLOTS, s.VLM_SLOT),
         "keyframe": (s.IMAGE_EDIT_SLOT,),
         "shot": (s.IMAGE_TO_VIDEO_SLOT,),
     }
@@ -391,6 +406,7 @@ def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
         "audio": "regular",
         "lyrics": "regular",
         "transcribe": "regular",
+        "video-vlm-gpu": "regular",
         "video-keyframe": "keyframe",
         "video-shot": "shot",
     }
@@ -404,6 +420,7 @@ def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
             for index in range(4)
         },
         "cpu-tools": "",
+        s.VLM_SLOT: "regular",
         "image-edit": "keyframe",
         "image-to-video": "shot",
     }
@@ -429,6 +446,27 @@ def test_the_mixed_profile_keeps_the_large_card_layout() -> None:
         assert mixed.slots[slot].replicas == large.slots[slot].replicas, slot
     for lane in ("audio", "lyrics", "transcribe"):
         assert mixed.lanes.capacity[lane] == large.lanes.capacity[lane], lane
+
+
+@pytest.mark.parametrize("name", sorted(GPU_VLM))
+def test_a_gpu_vlm_profile_runs_the_8b_model_wholly_on_the_card(
+    contract: Contract, name: str
+) -> None:
+    settings = load(name)
+    assert settings.slots[s.VLM_SLOT].model == "Qwen/Qwen3-VL-8B-Instruct-GGUF"
+    assert settings.vlm.file == "Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+    assert settings.vlm.gpu_layers == -1
+    plans = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=16).plans
+    spec = next(spec for plan in plans for spec in plan.slots if spec.name == s.VLM_SLOT)
+    assert spec.device == s.VLM_DEVICES["cuda"]
+    assert spec.options["gpu_layers"] == -1
+    assert not devices.uses_torch(spec.device)
+
+
+def test_only_the_gpu_vlm_profiles_serve_the_gpu_vlm_lane() -> None:
+    for path in (CONFIG_DIR / "profiles").glob("*.toml"):
+        serves = "video-vlm-gpu" in load(path.stem).lanes.enabled
+        assert serves is (path.stem in GPU_VLM), path.stem
 
 
 def test_no_other_profile_shares_an_engine_turn() -> None:

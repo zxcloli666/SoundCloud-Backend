@@ -394,6 +394,21 @@ impl WorkerLane {
                 WorkerReason::WorkerLost,
                 WorkerReason::InputsGone,
             ],
+            Self::VideoVlmGpu => &[
+                WorkerReason::InvalidRequest,
+                WorkerReason::UndecodableAudio,
+                WorkerReason::AudioTooLarge,
+                WorkerReason::ModelOutputInvalid,
+                WorkerReason::DeadlineExceeded,
+                WorkerReason::EngineCrashed,
+                WorkerReason::OutOfMemory,
+                WorkerReason::DownloadFailed,
+                WorkerReason::InternalError,
+                WorkerReason::EngineRestarted,
+                WorkerReason::WorkerLost,
+                WorkerReason::PublicNodeTimeout,
+                WorkerReason::InputsGone,
+            ],
             Self::VideoKeyframe | Self::VideoShot => &[
                 WorkerReason::InvalidRequest,
                 WorkerReason::ModelOutputInvalid,
@@ -444,7 +459,7 @@ impl WorkerLane {
                 WorkerReason::PublicNodeTimeout,
                 WorkerReason::SeparationSkipped,
             ],
-            Self::VideoKeyframe | Self::VideoShot => &[
+            Self::VideoKeyframe | Self::VideoShot | Self::VideoVlmGpu => &[
                 WorkerReason::EngineRestarted,
                 WorkerReason::WorkerLost,
                 WorkerReason::PublicNodeTimeout,

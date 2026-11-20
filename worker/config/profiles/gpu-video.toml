@@ -5,12 +5,24 @@ trust = "public"
 mode = "lane"
 device = "cuda"
 idle_unload_s = 600
-turn_groups = { keyframe = ["image-edit"], shot = ["image-to-video"] }
+turn_groups = { keyframe = ["image-edit"], shot = ["image-to-video"], vlm = ["vlm"] }
 
 [lanes]
-enabled = ["video-keyframe", "video-shot"]
-capacity = { video-keyframe = 1, video-shot = 1 }
-required = { video-keyframe = false, video-shot = false }
+enabled = ["video-vlm-gpu", "video-keyframe", "video-shot"]
+capacity = { video-vlm-gpu = 1, video-keyframe = 1, video-shot = 1 }
+required = { video-vlm-gpu = false, video-keyframe = false, video-shot = false }
 
 [video_gen]
 offload = true
+
+[slots.vlm]
+model = "Qwen/Qwen3-VL-8B-Instruct-GGUF"
+revision = "f982a07559d4a2f6c8744d840bf6fccab30eea96"
+
+[vlm]
+file = "Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+sha256 = "67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2"
+mmproj = "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+mmproj_sha256 = "c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd"
+gpu_layers = -1
+threads = 2

@@ -33,6 +33,7 @@ LANES = (
     "highlight",
     "video-find",
     "video-vlm",
+    "video-vlm-gpu",
     "video-keyframe",
     "video-shot",
     "video-assemble",
@@ -52,8 +53,9 @@ IMAGE_EDIT_SLOT = "image-edit"
 IMAGE_TO_VIDEO_SLOT = "image-to-video"
 LOCAL_LLM_SLOT = "llm-local"
 VLM_SLOT = "vlm"
+VLM_LANES = ("video-vlm", "video-vlm-gpu")
 VLM_METHOD = "classify"
-VLM_DEVICE = "llama-cpu"
+VLM_DEVICES: Mapping[str, str] = MappingProxyType({"cpu": "llama-cpu", "cuda": "llama-cuda"})
 VLM_FILE_SUFFIX = ".gguf"
 VLM_MIN_FRAME_SIDE = 64
 VLM_MAX_FRAME_SIDE = 1024
@@ -87,6 +89,7 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "highlight": (),
         "video-find": ("clip", "cpu-tools"),
         "video-vlm": (VLM_SLOT,),
+        "video-vlm-gpu": (VLM_SLOT,),
         "video-keyframe": (IMAGE_EDIT_SLOT,),
         "video-shot": (IMAGE_TO_VIDEO_SLOT,),
         "video-assemble": (),
@@ -894,11 +897,11 @@ def validate_vlm(settings: Settings) -> list[str]:
     problems = []
     slot = settings.slots.get(VLM_SLOT)
     if (
-        "video-vlm" in settings.lanes.enabled
+        set(VLM_LANES) & set(settings.lanes.enabled)
         and slot is not None
         and not (slot.model and slot.revision)
     ):
-        problems.append(f"lane video-vlm needs slots.{VLM_SLOT}.model and revision")
+        problems.append(f"lanes {list(VLM_LANES)} need slots.{VLM_SLOT}.model and revision")
     for name, file in (("file", vlm.file), ("mmproj", vlm.mmproj)):
         if not file.endswith(VLM_FILE_SUFFIX):
             problems.append(f"vlm.{name} must be a {VLM_FILE_SUFFIX} file of the model repo")

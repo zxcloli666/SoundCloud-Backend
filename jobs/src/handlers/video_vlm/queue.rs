@@ -28,6 +28,8 @@ pub(super) struct Held {
     pub(super) vlm_sent: i64,
     #[serde(default)]
     pub(super) haiku: Option<Known>,
+    #[serde(default)]
+    pub(super) gpu_failed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -68,6 +70,10 @@ pub(super) struct Claimed {
 }
 
 impl Claimed {
+    pub(super) fn gpu_failed(&self) -> bool {
+        self.held.as_ref().is_some_and(|held| held.gpu_failed)
+    }
+
     pub(super) fn message_id(&self, held: &Held) -> String {
         let (track, attempt, sent) = (&self.sc_track_id, self.attempt, held.vlm_sent);
         match held.file {
@@ -77,12 +83,41 @@ impl Claimed {
     }
 }
 
-pub(super) async fn requeue_unanswered(pool: &PgPool, timeout: Duration) -> JobResult {
-    sqlx::query_file!("queries/video_vlm/unanswered.sql", timeout.as_secs_f64())
+pub(super) async fn requeue_unanswered(
+    pool: &PgPool,
+    timeout: Duration,
+    gpu_timeout: Duration,
+) -> JobResult {
+    sqlx::query_file!(
+        "queries/video_vlm/unanswered.sql",
+        timeout.as_secs_f64(),
+        gpu_timeout.as_secs_f64()
+    )
+    .execute(pool)
+    .await
+    .map_err(JobError::retryable)?;
+    Ok(())
+}
+
+pub(super) async fn sent_gpu(pool: &PgPool, track: &str, attempt: i32) -> JobResult {
+    sqlx::query_file!("queries/video_vlm/sent_gpu.sql", track, attempt)
         .execute(pool)
         .await
         .map_err(JobError::retryable)?;
     Ok(())
+}
+
+pub(super) async fn gpu_failed(
+    pool: &PgPool,
+    track: &str,
+    attempt: i32,
+    why: &str,
+) -> JobResult<bool> {
+    let row = sqlx::query_file!("queries/video_vlm/gpu_failed.sql", track, attempt, why)
+        .fetch_optional(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(row.is_some())
 }
 
 pub(super) async fn busy(pool: &PgPool) -> JobResult<i64> {

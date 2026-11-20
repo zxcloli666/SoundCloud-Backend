@@ -452,11 +452,9 @@ impl JobHandlers {
         &self,
         pool: sqlx::PgPool,
         config: &JobsConfig,
-        bus: crate::bus::Bus,
-    ) -> Result<
-        Option<Arc<VideoVlm<Objects, crate::bus::Bus, Anthropic, Telegram>>>,
-        crate::ClientBuildError,
-    > {
+        lanes: Fleet,
+    ) -> Result<Option<Arc<VideoVlm<Objects, Fleet, Anthropic, Telegram>>>, crate::ClientBuildError>
+    {
         let Some(objects) = config.video_find.objects.as_ref() else {
             return Ok(None);
         };
@@ -470,7 +468,7 @@ impl JobHandlers {
             config.video_vlm.clone(),
             &config.video_find,
             Objects::connect(objects).await,
-            bus,
+            lanes,
             haiku,
             Telegram::new(config.video_accounts.tg_webhook.clone())?,
         ))))

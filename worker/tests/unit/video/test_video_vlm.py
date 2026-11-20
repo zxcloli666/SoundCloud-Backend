@@ -52,6 +52,7 @@ class Harness:
         self.engines = FakeEngines()
         counters = Counters()
         self.lane = VideoVlmLane(
+            "video-vlm",
             self.engines,
             AudioSource(
                 session,

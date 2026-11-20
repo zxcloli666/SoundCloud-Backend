@@ -46,25 +46,39 @@ def test_every_flavor_is_a_locked_torch_build() -> None:
     assert "--extra" not in UV_SYNC
 
 
-def test_every_flavor_carries_the_local_llm_engine_from_hashed_wheels() -> None:
-    pins = [pin for pin in PYPROJECT["project"]["dependencies"] if pin.startswith(LLAMA + "==")]
+def llama_version() -> str:
+    groups = PYPROJECT["dependency-groups"]
+    pins = {pin for group in torch_groups() for pin in groups[group] if pin.startswith(LLAMA)}
     assert len(pins) == 1
-    assert "optional-dependencies" not in PYPROJECT["project"]
+    return pins.pop().partition("==")[2]
+
+
+def test_every_flavor_carries_the_local_llm_engine_from_hashed_wheels() -> None:
+    project = PYPROJECT["project"]
+    assert not any(pin.startswith(LLAMA) for pin in project["dependencies"])
+    assert "optional-dependencies" not in project
+    version = llama_version()
     sources = PYPROJECT["tool"]["uv"]["sources"][LLAMA]
-    version = pins[0].partition("==")[2]
-    assert sorted(source["marker"] for source in sources) == [
-        "sys_platform == 'linux' and platform_machine == 'aarch64'",
-        "sys_platform == 'linux' and platform_machine == 'x86_64'",
-    ]
+    for group in torch_groups():
+        assert sorted(source["marker"] for source in sources if source["group"] == group) == [
+            "sys_platform == 'linux' and platform_machine == 'aarch64'",
+            "sys_platform == 'linux' and platform_machine == 'x86_64'",
+        ]
     locked = [
         wheel
         for package in LOCK["package"]
         if package["name"] == LLAMA and "url" in package["source"]
         for wheel in package["wheels"]
     ]
-    assert sorted(wheel["url"] for wheel in locked) == sorted(source["url"] for source in sources)
-    assert all(f"/v{version}/" in wheel["url"] for wheel in locked)
+    assert {wheel["url"] for wheel in locked} == {source["url"] for source in sources}
+    assert all(f"/v{version}" in wheel["url"] for wheel in locked)
     assert all(wheel["hash"].startswith("sha256:") for wheel in locked)
+
+
+def test_only_the_cuda13_flavor_runs_llama_on_the_card() -> None:
+    sources = PYPROJECT["tool"]["uv"]["sources"][LLAMA]
+    cuda = {source["group"] for source in sources if f"/v{llama_version()}-cu" in source["url"]}
+    assert cuda == {"cu130"}
 
 
 def test_image_contract_is_the_backend_export() -> None:

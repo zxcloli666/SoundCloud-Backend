@@ -1,4 +1,5 @@
 use backend_contracts::pipeline::{VideoLabel, VideoVlmResult};
+use backend_contracts::worker_contract::WorkerLane;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
@@ -145,7 +146,7 @@ async fn a_cut_for_another_label_than_the_known_one_is_refused(pool: PgPool) {
 
 #[test]
 fn a_motion_answer_without_a_file_is_the_local_answer_and_needs_its_model() {
-    let verdict = judge(&answer("11", 1, VideoLabel::Clip)).unwrap();
+    let verdict = judge(WorkerLane::VideoVlm, &answer("11", 1, VideoLabel::Clip)).unwrap();
     let Verdict::Answered(known) = verdict else {
         panic!("not an answer: {verdict:?}");
     };
@@ -154,12 +155,12 @@ fn a_motion_answer_without_a_file_is_the_local_answer_and_needs_its_model() {
         (VideoLabel::Clip, LOCAL)
     );
     assert!(matches!(
-        judge(&answer("11", 1, VideoLabel::Loop)).unwrap(),
+        judge(WorkerLane::VideoVlm, &answer("11", 1, VideoLabel::Loop)).unwrap(),
         Verdict::Answered(_)
     ));
     let mut unnamed = answer("11", 1, VideoLabel::Clip);
     unnamed.model = None;
-    assert!(judge(&unnamed).is_err());
+    assert!(judge(WorkerLane::VideoVlm, &unnamed).is_err());
 }
 
 #[test]

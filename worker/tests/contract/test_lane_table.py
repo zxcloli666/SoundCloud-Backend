@@ -19,6 +19,7 @@ speak       SPEAK_RPC     speak.rpc.>            90  30   6   8   -    -     -  
 highlight   HIGHLIGHT     highlight.track.new   120  60  12  64  30  600  1050    - private
 video-find  VIDEO_FIND     video.find.new       600  60  12  16  60 1800  3900    - private
 video-vlm   VIDEO_VLM      video.vlm.new        600  60  12   4  60 1800  3900    - private
+video-vlm-gpu VIDEO_VLM_GPU video.vlm_gpu.new   600  60  12   4  60 1800  4200  660 public
 video-keyframe VIDEO_KEYFRAME video.keyframe.new 900 60 12 4 60 1800 5700  960 public
 video-shot  VIDEO_SHOT     video.shot.new      1800  60  12   4  60 1800 10200 1860 public
 video-assemble VIDEO_ASSEMBLE video.assemble.new 600 60 12 8 60 1800 3900    - private
@@ -33,6 +34,7 @@ TRAIN_TASTE     train.taste.>     work_queue   86400   3600
 HIGHLIGHT       highlight.>       work_queue   86400  86400
 VIDEO_FIND      video.find.>      work_queue   86400  86400
 VIDEO_VLM       video.vlm.>       work_queue   86400  86400
+VIDEO_VLM_GPU   video.vlm_gpu.>   work_queue   86400  86400
 VIDEO_KEYFRAME  video.keyframe.>  work_queue   86400  86400
 VIDEO_SHOT      video.shot.>      work_queue   86400  86400
 VIDEO_ASSEMBLE  video.assemble.>  work_queue   86400  86400
@@ -54,6 +56,7 @@ DONE_SUBJECTS = {
     "highlight": "done.highlight",
     "video-find": "done.video_find",
     "video-vlm": "done.video_vlm",
+    "video-vlm-gpu": "done.video_vlm_gpu",
     "video-keyframe": "done.video_keyframe",
     "video-shot": "done.video_shot",
     "video-assemble": "done.video_assemble",
