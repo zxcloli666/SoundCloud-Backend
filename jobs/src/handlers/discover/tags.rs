@@ -1,14 +1,12 @@
 use std::time::Instant;
 
-use sqlx::{Connection, PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool};
 use tracing::{info, warn};
 
 use super::paced::{run_statement, update_by_ranges};
 use crate::queue::{JobError, JobResult};
 
 const DROP_COUNTS: &str = include_str!("../../../queries/discover/artist_tags/drop_counts.sql");
-const PREFER_SEQUENTIAL_SCAN: &str =
-    include_str!("../../../queries/discover/artist_tags/prefer_sequential_scan.sql");
 const CREATE_COUNTS: &str = include_str!("../../../queries/discover/artist_tags/create_counts.sql");
 const INDEX_COUNTS: &str = include_str!("../../../queries/discover/artist_tags/index_counts.sql");
 const ANALYZE_COUNTS: &str =
@@ -33,16 +31,8 @@ pub(super) async fn refresh(pool: &PgPool) -> JobResult {
 
 async fn refresh_on(connection: &mut PgConnection) -> Result<u64, JobError> {
     run_statement(connection, DROP_COUNTS).await?;
-    count_genres(connection).await?;
+    run_statement(connection, CREATE_COUNTS).await?;
     run_statement(connection, INDEX_COUNTS).await?;
     run_statement(connection, ANALYZE_COUNTS).await?;
     update_by_ranges(connection, UPDATE_RANGE).await
-}
-
-async fn count_genres(connection: &mut PgConnection) -> JobResult {
-    let mut transaction = connection.begin().await.map_err(JobError::retryable)?;
-    run_statement(&mut transaction, PREFER_SEQUENTIAL_SCAN).await?;
-    run_statement(&mut transaction, CREATE_COUNTS).await?;
-    transaction.commit().await.map_err(JobError::retryable)?;
-    Ok(())
 }
