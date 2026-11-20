@@ -532,7 +532,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 61);
+        assert_eq!(kinds.len(), 62);
     }
 
     #[test]
