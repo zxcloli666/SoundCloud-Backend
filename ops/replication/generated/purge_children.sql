@@ -470,6 +470,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_job_queue_waits(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.kind, t.lane INTO p FROM public.job_queue_waits t WHERE t.kind = (k ->> 'kind')::text AND t.lane = (k ->> 'lane')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.job_queue_waits t WHERE t.kind = (k ->> 'kind')::text AND t.lane = (k ->> 'lane')::text;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_job_status(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1527,6 +1542,8 @@ BEGIN
             PERFORM public.scd_purge_discover_tag_counts(k);
         WHEN 'enrich_calibration' THEN
             PERFORM public.scd_purge_enrich_calibration(k);
+        WHEN 'job_queue_waits' THEN
+            PERFORM public.scd_purge_job_queue_waits(k);
         WHEN 'job_status' THEN
             PERFORM public.scd_purge_job_status(k);
         WHEN 'llm_pause' THEN

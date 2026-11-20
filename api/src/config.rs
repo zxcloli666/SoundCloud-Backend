@@ -49,6 +49,7 @@ pub struct ColdCfg {
     pub liked_playlists_ttl_sec: u64,
     pub followings_ttl_sec: u64,
     pub owned_ttl_sec: u64,
+    pub library_sync_cooldown_sec: u64,
     #[allow(dead_code)]
     pub evict_after_sec: u64,
 }
@@ -493,6 +494,7 @@ impl AppConfig {
                 liked_playlists_ttl_sec: env_u64("COLD_TTL_LIKED_PLAYLISTS_SEC", 1800),
                 followings_ttl_sec: env_u64("COLD_TTL_FOLLOWINGS_SEC", 1800),
                 owned_ttl_sec: env_u64("COLD_TTL_OWNED_SEC", 300),
+                library_sync_cooldown_sec: env_u64("LIBRARY_SYNC_COOLDOWN_SEC", 21600),
                 evict_after_sec: env_u64("COLD_EVICT_AFTER_SEC", 2_592_000),
             },
 

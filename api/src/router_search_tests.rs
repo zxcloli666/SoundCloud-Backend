@@ -140,6 +140,7 @@ pub(super) fn config(redis: &str) -> AppConfig {
             liked_playlists_ttl_sec: 3600,
             followings_ttl_sec: 3600,
             owned_ttl_sec: 300,
+            library_sync_cooldown_sec: 21600,
             evict_after_sec: 86_400,
         },
         max_track_duration_ms: 420_000,

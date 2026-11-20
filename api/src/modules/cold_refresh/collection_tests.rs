@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::collection::ensure;
+use crate::background_jobs::wait::WaitLane;
 
 async fn fail_for_good(
     pool: &PgPool,
@@ -169,9 +170,9 @@ async fn a_star_owner_collection_is_read_ahead_of_other_owners(pool: PgPool) -> 
         priorities,
         [
             ("followings:42:public".into(), 20),
-            ("liked-tracks:42:owner".into(), 25),
-            ("liked-tracks:43:owner".into(), 20),
-            ("liked-tracks:44:owner".into(), 20),
+            ("liked-tracks:42:owner".into(), 45),
+            ("liked-tracks:43:owner".into(), 40),
+            ("liked-tracks:44:owner".into(), 40),
             ("track-favoriters:42:public".into(), 15)
         ]
     );
@@ -191,7 +192,7 @@ async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     assert_eq!(
         priorities,
         [
-            ("liked-tracks:42:owner".into(), 20),
+            ("liked-tracks:42:owner".into(), 40),
             ("liked-tracks:42:public".into(), 15)
         ]
     );
@@ -204,7 +205,84 @@ async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(owner, (20, 1));
+    assert_eq!(owner, (40, 1));
+    Ok(())
+}
+
+async fn publish_waits(pool: &PgPool, read: (i64, &str), queue: (i64, &str)) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO job_queue_waits (kind, lane, due, oldest_due_at, updated_at) VALUES
+             ('catalog.collection', 'read', $1, now() - $2::interval, now()),
+             ('catalog.collection', 'queue', $3, now() - $4::interval, now())",
+    )
+    .bind(read.0)
+    .bind(read.1)
+    .bind(queue.0)
+    .bind(queue.1)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn the_first_page_of_an_owner_pass_waits_in_the_read_lane_and_the_rest_in_the_queue(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    publish_waits(&pool, (2, "3 seconds"), (4200, "40 minutes")).await?;
+
+    let first = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    let wait = first.wait.expect("an owner read shows its wait");
+    assert_eq!((wait.lane, wait.ahead), (WaitLane::Read, 2));
+    assert!((3..=4).contains(&wait.eta_seconds));
+    assert_eq!(first.synced_items, None);
+
+    sqlx::query(
+        "INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id, page_count, item_count)
+         VALUES ('42', 'liked-tracks', 'owner', $1, 1, $2, 3, 600)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await?;
+    sqlx::query("UPDATE background_jobs SET priority = 20")
+        .execute(&pool)
+        .await?;
+
+    let rest = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    let wait = rest.wait.expect("the rest of the pass shows its wait");
+    assert_eq!((wait.lane, wait.ahead), (WaitLane::Queue, 4200));
+    assert!((2400..=2401).contains(&wait.eta_seconds));
+    assert_eq!(rest.synced_items, Some(600));
+    let priority: i16 = sqlx::query_scalar("SELECT priority FROM background_jobs")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(
+        priority, 20,
+        "a read in the middle of a pass keeps it out of the read lane"
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_stale_or_missing_wait_is_not_shown(pool: PgPool) -> anyhow::Result<()> {
+    let unknown = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    assert!(unknown.wait.is_none());
+
+    publish_waits(&pool, (2, "3 seconds"), (5, "1 minute")).await?;
+    sqlx::query("UPDATE job_queue_waits SET updated_at = now() - interval '6 minutes'")
+        .execute(&pool)
+        .await?;
+    let stale = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    assert!(stale.wait.is_none());
+
+    sqlx::query("UPDATE job_queue_waits SET updated_at = now()")
+        .execute(&pool)
+        .await?;
+    let viewer = ensure(&pool, CatalogCollection::LikedTracks, "42", false, 600).await?;
+    assert!(
+        viewer.wait.is_none(),
+        "a viewer read is not in a library lane"
+    );
     Ok(())
 }
 

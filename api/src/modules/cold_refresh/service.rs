@@ -1,4 +1,5 @@
 use super::collection::CollectionSync;
+use super::library_sync::LibrarySync;
 use crate::config::ColdCfg;
 use crate::error::AppResult;
 use crate::modules::indexing::IndexingService;
@@ -184,6 +185,14 @@ impl ColdRefreshService {
         .await
     }
 
+    pub async fn library_sync(&self, sc_user_id: &str) -> AppResult<LibrarySync> {
+        super::library_sync::state(&self.pg, sc_user_id, self.cfg.library_sync_cooldown_sec).await
+    }
+
+    pub async fn sync_library(&self, sc_user_id: &str) -> AppResult<LibrarySync> {
+        super::library_sync::request(&self.pg, sc_user_id, self.cfg.library_sync_cooldown_sec).await
+    }
+
     pub async fn audience_page(
         &self,
         coll: AudienceCollection,
@@ -319,6 +328,8 @@ fn refreshing() -> CollectionSync {
         queued_since: None,
         error_code: None,
         retry_after_seconds: 5,
+        wait: None,
+        synced_items: None,
     }
 }
 
@@ -329,6 +340,8 @@ fn ready() -> CollectionSync {
         queued_since: None,
         error_code: None,
         retry_after_seconds: 0,
+        wait: None,
+        synced_items: None,
     }
 }
 

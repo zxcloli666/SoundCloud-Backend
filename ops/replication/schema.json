@@ -1001,6 +1001,26 @@
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "featured_items_pkey", "primary": true, "where": null}
    ]
   },
+  "job_queue_waits": {
+   "columns": [
+    {"default": null, "generated": false, "name": "due", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "lane", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "oldest_due_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_job_queue_waits", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_copy_job_queue_waits", "gated": false, "name": "zz_owner_copy", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["kind", "lane"], "expr": false, "keys": ["kind", "lane"], "name": "job_queue_waits_pkey", "primary": true, "where": null}
+   ]
+  },
   "job_status": {
    "columns": [
     {"default": null, "generated": false, "name": "available_at", "notnull": false, "type": "timestamp with time zone"},
@@ -1019,6 +1039,23 @@
    ],
    "unique": [
     {"cols": ["kind", "dedup_key"], "expr": false, "keys": ["kind", "dedup_key"], "name": "job_status_pkey", "primary": true, "where": null}
+   ]
+  },
+  "library_sync_requests": {
+   "columns": [
+    {"default": null, "generated": false, "name": "requested_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_merge_library_sync_requests", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_library_sync_requests", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "library_sync_requests_pkey", "primary": true, "where": null}
    ]
   },
   "link_requests": {

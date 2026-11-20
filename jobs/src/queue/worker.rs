@@ -27,6 +27,7 @@ pub(crate) struct QueueWorker {
     governor: Option<Arc<WriteGovernor>>,
     realign: Option<Arc<LaneRealign>>,
     shares_between_kinds: bool,
+    priority_floor: Option<i16>,
 }
 
 pub(super) struct JobTaskExit {
@@ -52,11 +53,17 @@ impl QueueWorker {
             governor: None,
             realign: None,
             shares_between_kinds: false,
+            priority_floor: None,
         }
     }
 
     pub(crate) fn sharing_between_kinds(mut self) -> Self {
         self.shares_between_kinds = true;
+        self
+    }
+
+    pub(crate) fn claiming_from(mut self, priority: i16) -> Self {
+        self.priority_floor = Some(priority);
         self
     }
 
@@ -66,6 +73,10 @@ impl QueueWorker {
         limit: usize,
     ) -> Result<Vec<LeasedJob>, QueueError> {
         let lease = self.config.lease_duration;
+        if let Some(priority) = self.priority_floor {
+            let order = ClaimOrder::AtLeast(priority);
+            return self.repository.claim(self.kinds, order, limit, lease).await;
+        }
         let Some(turn) = self.turn(successful_claims) else {
             let order = next_claim_order(successful_claims);
             return self.repository.claim(self.kinds, order, limit, lease).await;

@@ -12,7 +12,7 @@ use super::setup;
 use crate::handlers::catalog_read::PublicCatalogReader;
 use crate::handlers::catalog_remote::{CatalogRemote, owner_error, postpone, public_error};
 use crate::handlers::playlist_observe::PlaylistReadError;
-use crate::queue::JobError;
+use crate::queue::{JobError, PriorityStep};
 
 fn started(ago: Duration) -> state::Snapshot {
     state::Snapshot {
@@ -70,15 +70,15 @@ fn delay_of(error: &JobError) -> Option<u64> {
     }
 }
 
-fn floor_of(error: &JobError) -> Option<i16> {
+fn step_of(error: &JobError) -> Option<PriorityStep> {
     match error {
-        JobError::Postponed { step_down_to, .. } => *step_down_to,
+        JobError::Postponed { step, .. } => Some(*step),
         _ => None,
     }
 }
 
 #[test]
-fn a_public_walk_gives_way_after_every_page_and_an_owner_walk_keeps_its_place() {
+fn a_public_walk_gives_way_after_every_page_and_an_owner_walk_leaves_the_read_lane() {
     let likes_of = |owner| CatalogCollectionPayload {
         collection: CatalogCollection::LikedTracks,
         subject_id: "42".to_owned(),
@@ -88,8 +88,14 @@ fn a_public_walk_gives_way_after_every_page_and_an_owner_walk_keeps_its_place() 
     let public = another_page(&likes_of(false));
     let owner = another_page(&likes_of(true));
 
-    assert_eq!((delay_of(&public), floor_of(&public)), (Some(1), Some(5)));
-    assert_eq!((delay_of(&owner), floor_of(&owner)), (Some(1), None));
+    assert_eq!(
+        (delay_of(&public), step_of(&public)),
+        (Some(1), Some(PriorityStep::DownTo(5)))
+    );
+    assert_eq!(
+        (delay_of(&owner), step_of(&owner)),
+        (Some(1), Some(PriorityStep::OutOfReadLane))
+    );
 }
 
 #[test]

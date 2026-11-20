@@ -24,6 +24,8 @@ const QUEUE_DEAD_LETTERS: &str = "jobs_queue_dead_letters";
 const QUEUE_KIND_DEPTH: &str = "jobs_queue_kind_depth";
 const QUEUE_KIND_OLDEST_DUE: &str = "jobs_queue_kind_oldest_due_seconds";
 const QUEUE_KIND_OLDEST_AGE: &str = "jobs_queue_kind_oldest_age_seconds";
+const LIBRARY_WAIT_DUE: &str = "jobs_library_wait_due";
+const LIBRARY_WAIT_SECONDS: &str = "jobs_library_wait_seconds";
 const POOL_CONNECTIONS: &str = "jobs_pg_pool_connections";
 const POOL_WAIT: &str = "jobs_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "jobs_pg_pool_wait_last_seconds";
@@ -404,6 +406,13 @@ pub fn record_star_priority_round(
         .increment(u64::try_from(picked).unwrap_or(u64::MAX));
     metrics::gauge!(STAR_PRIORITY_WAITING, "pipeline" => pipeline, "tier" => tier)
         .set(waiting_seconds as f64);
+}
+
+pub fn record_library_wait(kind: &str, lane: &str, due: i64, waiting_seconds: f64) {
+    let (kind, lane) = (kind.to_owned(), lane.to_owned());
+    metrics::gauge!(LIBRARY_WAIT_DUE, "kind" => kind.clone(), "lane" => lane.clone())
+        .set(due as f64);
+    metrics::gauge!(LIBRARY_WAIT_SECONDS, "kind" => kind, "lane" => lane).set(waiting_seconds);
 }
 
 pub fn record_star_priority_queued(kind: &'static str, tier: &'static str, waiting_seconds: f64) {

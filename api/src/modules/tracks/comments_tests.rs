@@ -112,6 +112,7 @@ async fn a_private_track_serves_no_comments_and_keeps_none(pool: PgPool) -> anyh
             liked_playlists_ttl_sec: 3600,
             followings_ttl_sec: 3600,
             owned_ttl_sec: 3600,
+            library_sync_cooldown_sec: 21600,
             evict_after_sec: 86400,
         },
     );

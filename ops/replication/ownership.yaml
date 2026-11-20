@@ -61,6 +61,7 @@ tables:
     pk: [kind, dedup_key]
     columns: {kind: text, dedup_key: text, state: "text NOT NULL", available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
     note: "jobs writes on state change of the 3 kinds the api reads"
+  job_queue_waits: {class: C, note: "jobs on core rewrites the 4 rows every 30 s: due library reads and the wait of the oldest one, per kind and lane (read: priority 40 and up, queue: 20 to 39); the api shows them as the sync wait"}
   lyrics_cache: {class: C, derived: {lyrics_cache_fts_trg: {writes: [lyrics_cache.fts]}, star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   lyrics_lookup_state:
     class: C
@@ -266,6 +267,7 @@ tables:
     groups: {row: {version: row_v, cols: rest}}
     note: "versioned although insert-only: the R6 id comes back on a re-dislike and must beat the tombstone"
   featured_items: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  library_sync_requests: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}, note: "the last sync now of a user; any api node claims it once per LIBRARY_SYNC_COOLDOWN_SEC"}
   link_requests:
     class: A
     delete: tombstone

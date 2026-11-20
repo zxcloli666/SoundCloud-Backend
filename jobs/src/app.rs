@@ -11,7 +11,7 @@ use backend_contracts::pipeline::{
 };
 use backend_contracts::video_gen::VideoGenResult;
 use backend_contracts::worker_contract::WorkerLane;
-use backend_contracts::{ImpressionBatch, JobCommand};
+use backend_contracts::{ImpressionBatch, JobCommand, LIBRARY_READ_KINDS, LIBRARY_READ_PRIORITY};
 use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -31,7 +31,7 @@ use crate::handlers::{
 use crate::health::HealthState;
 use crate::queue::{
     JobError, JobRepository, LaneRealign, LookupLane, LookupWorker, NewJob, QueueError,
-    QueueWorker, WriteGovernor, recover_exhausted,
+    QueueWorker, WriteGovernor, publish_library_waits, recover_exhausted,
 };
 use crate::scheduler::Scheduler;
 use crate::supervisor::Supervisor;
@@ -42,6 +42,7 @@ pub async fn run() -> anyhow::Result<()> {
     info!(
         core_fast = config.queue.core_fast.concurrency,
         core_bulk = config.queue.core_bulk.concurrency,
+        library_read = config.queue.library_read.concurrency,
         lyrics_lookups = config.lyrics.concurrency,
         maintenance = config.queue.maintenance.concurrency,
         ops = config.queue.ops.concurrency,
@@ -147,6 +148,10 @@ pub async fn run() -> anyhow::Result<()> {
         databases.queue.clone(),
         format!("{}:core-bulk", config.instance_id),
     );
+    let library_read_repository = JobRepository::new(
+        databases.queue.clone(),
+        format!("{}:library-read", config.instance_id),
+    );
     let maintenance_repository = JobRepository::new(
         databases.queue.clone(),
         format!("{}:maintenance", config.instance_id),
@@ -175,12 +180,20 @@ pub async fn run() -> anyhow::Result<()> {
         core_bulk_repository,
         handlers.clone(),
         config.queue.clone(),
-        config.queue.core_bulk.clone(),
+        config.queue.shared_bulk(),
         CORE_BULK_KINDS,
     )
     .governed_by(bulk_governor.clone())
     .sharing_between_kinds()
     .realigned_by(realign.clone());
+    let library_read_worker = QueueWorker::new(
+        library_read_repository,
+        handlers.clone(),
+        config.queue.clone(),
+        config.queue.library_read.clone(),
+        &LIBRARY_READ_KINDS,
+    )
+    .claiming_from(LIBRARY_READ_PRIORITY);
     let maintenance_worker = QueueWorker::new(
         maintenance_repository,
         handlers.clone(),
@@ -470,6 +483,14 @@ pub async fn run() -> anyhow::Result<()> {
     supervisor.spawn(
         "core bulk worker",
         core_bulk_worker.run(cancellation.clone()),
+    );
+    supervisor.spawn(
+        "library read worker",
+        library_read_worker.run(cancellation.clone()),
+    );
+    supervisor.spawn(
+        "library queue waits",
+        publish_library_waits(databases.main.fast.clone(), cancellation.clone()),
     );
     supervisor.spawn(
         "lyrics lookup worker",

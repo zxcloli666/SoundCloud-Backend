@@ -322,6 +322,7 @@ impl EnrichConfig {
 pub struct QueueConfig {
     pub core_fast: QueueLaneConfig,
     pub core_bulk: QueueLaneConfig,
+    pub library_read: QueueLaneConfig,
     pub maintenance: QueueLaneConfig,
     pub ops: QueueLaneConfig,
     pub poll_interval: Duration,
@@ -523,6 +524,7 @@ impl JobsConfig {
         let queue = QueueConfig {
             core_fast: QueueLaneConfig::from_env("JOBS_CORE_FAST", 8)?,
             core_bulk: QueueLaneConfig::from_env("JOBS_CORE_BULK", 16)?,
+            library_read: QueueLaneConfig::from_env("JOBS_LIBRARY_READ", 4)?,
             maintenance: QueueLaneConfig::from_env("JOBS_MAINTENANCE", 8)?,
             ops: QueueLaneConfig::from_env("JOBS_OPS", 8)?,
             poll_interval: Duration::from_millis(env::positive_u64("JOBS_POLL_INTERVAL_MS", 250)?),
@@ -1119,9 +1121,26 @@ impl SubscriptionsConfig {
 }
 
 impl QueueConfig {
+    pub fn shared_bulk(&self) -> QueueLaneConfig {
+        let concurrency = self.core_bulk.concurrency - self.library_read.concurrency;
+        QueueLaneConfig {
+            concurrency,
+            claim_batch: self.core_bulk.claim_batch.min(concurrency),
+        }
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         self.core_fast.validate("JOBS_CORE_FAST")?;
         self.core_bulk.validate("JOBS_CORE_BULK")?;
+        self.library_read.validate("JOBS_LIBRARY_READ")?;
+        if self.library_read.concurrency >= self.core_bulk.concurrency {
+            return Err(ConfigError::Invalid {
+                key: "JOBS_LIBRARY_READ_CONCURRENCY".to_owned(),
+                reason: "must stay below JOBS_CORE_BULK_CONCURRENCY: the library read slots are \
+                         taken out of the bulk lane"
+                    .to_owned(),
+            });
+        }
         self.maintenance.validate("JOBS_MAINTENANCE")?;
         self.ops.validate("JOBS_OPS")?;
 
@@ -1176,6 +1195,10 @@ mod tests {
         QueueConfig {
             core_fast: lane.clone(),
             core_bulk: lane.clone(),
+            library_read: QueueLaneConfig {
+                concurrency: 2,
+                claim_batch: 2,
+            },
             maintenance: lane.clone(),
             ops: lane,
             poll_interval: Duration::from_millis(100),
@@ -1211,6 +1234,16 @@ mod tests {
         let mut config = queue_config();
         config.ops.claim_batch = config.ops.concurrency + 1;
 
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn the_library_read_slots_come_out_of_the_bulk_lane() {
+        let mut config = queue_config();
+        let shared = config.shared_bulk();
+        assert_eq!((shared.concurrency, shared.claim_batch), (6, 6));
+
+        config.library_read.concurrency = config.core_bulk.concurrency;
         assert!(config.validate().is_err());
     }
 

@@ -22,6 +22,14 @@ pub enum ClaimOrder {
     Priority,
     Oldest,
     Kind(JobKind),
+    AtLeast(i16),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PriorityStep {
+    Keep,
+    DownTo(i16),
+    OutOfReadLane,
 }
 
 #[derive(Clone, Debug)]
@@ -75,7 +83,7 @@ pub enum JobError {
     Postponed {
         delay: std::time::Duration,
         error: anyhow::Error,
-        step_down_to: Option<i16>,
+        step: PriorityStep,
     },
     Settled {
         failure: CollectionFailure,
@@ -91,17 +99,21 @@ impl JobError {
                 std::time::Duration::from_secs(86400),
             ),
             error: error.into(),
-            step_down_to: None,
+            step: PriorityStep::Keep,
         }
     }
 
     pub fn stepping_down_to(self, floor: i16) -> Self {
+        self.stepping(PriorityStep::DownTo(floor))
+    }
+
+    pub fn leaving_read_lane(self) -> Self {
+        self.stepping(PriorityStep::OutOfReadLane)
+    }
+
+    fn stepping(self, step: PriorityStep) -> Self {
         match self {
-            Self::Postponed { delay, error, .. } => Self::Postponed {
-                delay,
-                error,
-                step_down_to: Some(floor),
-            },
+            Self::Postponed { delay, error, .. } => Self::Postponed { delay, error, step },
             other => other,
         }
     }

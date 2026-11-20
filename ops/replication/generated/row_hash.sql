@@ -478,6 +478,18 @@ AS $f$
 SELECT md5(ROW(t.active, t.created_at, t.id, t.row_v, t.sc_urn, t.type, t.weight)::text) FROM public.featured_items t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_job_queue_waits(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.due, t.kind, t.lane, t.oldest_due_at, t.updated_at)::text) FROM public.job_queue_waits t WHERE t.kind = (k ->> 'kind')::text AND t.lane = (k ->> 'lane')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_job_status(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -488,6 +500,18 @@ SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
 SELECT md5(ROW(t.available_at, t.dedup_key, t.kind, t.state, t.updated_at)::text) FROM public.job_status t WHERE t.kind = (k ->> 'kind')::text AND t.dedup_key = (k ->> 'dedup_key')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_library_sync_requests(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.requested_at, t.row_v, t.sc_user_id)::text) FROM public.library_sync_requests t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_link_requests(k jsonb)
@@ -1656,8 +1680,12 @@ BEGIN
             RETURN public.scd_row_hash_entity_reads(k);
         WHEN 'featured_items' THEN
             RETURN public.scd_row_hash_featured_items(k);
+        WHEN 'job_queue_waits' THEN
+            RETURN public.scd_row_hash_job_queue_waits(k);
         WHEN 'job_status' THEN
             RETURN public.scd_row_hash_job_status(k);
+        WHEN 'library_sync_requests' THEN
+            RETURN public.scd_row_hash_library_sync_requests(k);
         WHEN 'link_requests' THEN
             RETURN public.scd_row_hash_link_requests(k);
         WHEN 'listening_history' THEN

@@ -42,13 +42,9 @@ pub(super) async fn process_job(
             let completion = repository.complete(&job).await?;
             log_completion(&job, completion, true);
         }
-        Err(JobError::Postponed {
-            delay,
-            error,
-            step_down_to,
-        }) => {
+        Err(JobError::Postponed { delay, error, step }) => {
             let completion = repository
-                .postpone(&job, &error.to_string(), delay, step_down_to)
+                .postpone(&job, &error.to_string(), delay, step)
                 .await?;
             log_completion(&job, completion, false);
         }

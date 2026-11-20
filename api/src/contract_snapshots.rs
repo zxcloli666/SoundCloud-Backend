@@ -3,6 +3,7 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 
+use crate::background_jobs::wait::{QueueWait, WaitLane};
 use crate::cache::ListPageResult;
 use crate::error::AppError;
 use crate::modules::cold_refresh::collection::{CollectionPage, CollectionSync};
@@ -41,6 +42,12 @@ fn sync() -> CollectionSync {
         ),
         error_code: Some("not_found"),
         retry_after_seconds: 5,
+        wait: Some(QueueWait {
+            lane: WaitLane::Queue,
+            ahead: 4200,
+            eta_seconds: 2400,
+        }),
+        synced_items: Some(600),
     }
 }
 
@@ -84,7 +91,9 @@ fn a_collection_page_passes_soundcloud_cards_through_untouched() {
                 "lastCompletedAt": "2026-09-12T10:00:00Z",
                 "queuedSince": "2026-09-12T11:30:00Z",
                 "errorCode": "not_found",
-                "retryAfterSeconds": 5
+                "retryAfterSeconds": 5,
+                "wait": {"lane": "queue", "ahead": 4200, "etaSeconds": 2400},
+                "syncedItems": 600
             }
         })
     );
@@ -99,6 +108,8 @@ fn an_empty_collection_page_keeps_every_field_and_a_null_completion() {
             queued_since: None,
             error_code: None,
             retry_after_seconds: 0,
+            wait: None,
+            synced_items: None,
         },
         0,
         30,
@@ -118,7 +129,9 @@ fn an_empty_collection_page_keeps_every_field_and_a_null_completion() {
                 "lastCompletedAt": null,
                 "queuedSince": null,
                 "errorCode": null,
-                "retryAfterSeconds": 0
+                "retryAfterSeconds": 0,
+                "wait": null,
+                "syncedItems": null
             }
         })
     );
@@ -192,6 +205,11 @@ fn playlist_membership_status_stays_camel_case_with_every_counter() {
         ),
         error_code: None,
         retry_after_seconds: 0,
+        wait: Some(QueueWait {
+            lane: WaitLane::Read,
+            ahead: 3,
+            eta_seconds: 4,
+        }),
     };
 
     assert_eq!(
@@ -209,7 +227,8 @@ fn playlist_membership_status_stays_camel_case_with_every_counter() {
             "observedAt": "2026-09-12T10:00:00Z",
             "queuedSince": "2026-09-12T10:05:00Z",
             "errorCode": null,
-            "retryAfterSeconds": 0
+            "retryAfterSeconds": 0,
+            "wait": {"lane": "read", "ahead": 3, "etaSeconds": 4}
         })
     );
 }
@@ -230,6 +249,7 @@ fn a_failing_playlist_read_reports_its_code_and_wait() {
         queued_since: None,
         error_code: Some("forbidden"),
         retry_after_seconds: 1800,
+        wait: None,
     };
 
     let served = wire(&status);
@@ -238,6 +258,21 @@ fn a_failing_playlist_read_reports_its_code_and_wait() {
     assert_eq!(served["queuedSince"], json!(null));
     assert_eq!(served["errorCode"], json!("forbidden"));
     assert_eq!(served["retryAfterSeconds"], json!(1800));
+}
+
+#[test]
+fn a_library_sync_answer_names_its_state_and_the_next_press() {
+    use crate::modules::cold_refresh::library_sync::LibrarySync;
+
+    assert_eq!(
+        wire(&LibrarySync {
+            status: "cooldown",
+            available_at: chrono::DateTime::parse_from_rfc3339("2026-09-12T16:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }),
+        json!({"status": "cooldown", "availableAt": "2026-09-12T16:00:00Z"})
+    );
 }
 
 #[test]

@@ -183,12 +183,12 @@ impl PoolCoverage {
     }
 }
 
-pub const QUEUE_POOL_MINIMUM_CONNECTIONS: u32 = 7;
+pub const QUEUE_POOL_MINIMUM_CONNECTIONS: u32 = 8;
 
 pub fn queue_pool_from_env() -> Result<PoolConfig, ConfigError> {
     let pool = PoolConfig {
         minimum: env::parse("PG_QUEUE_POOL_MIN", "1")?,
-        maximum: env::parse("PG_QUEUE_POOL_MAX", "7")?,
+        maximum: env::parse("PG_QUEUE_POOL_MAX", "8")?,
         acquire_timeout: Duration::from_millis(env::positive_u64(
             "PG_QUEUE_ACQUIRE_TIMEOUT_MS",
             5_000,

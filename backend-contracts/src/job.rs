@@ -102,6 +102,20 @@ pub const STAR_PRIORITY_BONUS: i16 = 5;
 
 pub const INDEX_TRACK_PRIORITY: i16 = 5;
 
+pub const OWNER_COLLECTION_PRIORITY: i16 = 20;
+
+pub const LIBRARY_SYNC_PRIORITY: i16 = 30;
+
+pub const LIBRARY_READ_PRIORITY: i16 = 40;
+
+pub const LIBRARY_READ_BOOST: i16 = 20;
+
+pub const LIBRARY_READ_KINDS: [JobKind; 2] =
+    [JobKind::CatalogCollection, JobKind::PlaylistObserveShadow];
+
+const _: () = assert!(LIBRARY_SYNC_PRIORITY + STAR_PRIORITY_BONUS < LIBRARY_READ_PRIORITY);
+const _: () = assert!(OWNER_COLLECTION_PRIORITY + LIBRARY_READ_BOOST >= LIBRARY_READ_PRIORITY);
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
@@ -538,6 +552,13 @@ mod tests {
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
         assert_eq!(kinds.len(), 63);
+    }
+
+    #[test]
+    fn library_reads_share_the_bulk_lane() {
+        for kind in LIBRARY_READ_KINDS {
+            assert_eq!(kind.lane(), JobLane::CoreBulk);
+        }
     }
 
     #[test]
