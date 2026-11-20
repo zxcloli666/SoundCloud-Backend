@@ -7,7 +7,7 @@ from typing import Any
 import cv2
 import numpy as np
 from huggingface_hub import hf_hub_download
-from llama_cpp import Llama, LogitsProcessorList
+from llama_cpp import Llama, LogitsProcessorList, llama_supports_gpu_offload
 from llama_cpp.llama_chat_format import Qwen25VLChatHandler
 from llama_cpp.llama_grammar import LlamaGrammar
 
@@ -27,6 +27,9 @@ class VlmSlot:
     def load(self, spec: SlotSpec) -> None:
         file = text_option(spec, "file")
         mmproj = text_option(spec, "mmproj")
+        gpu_layers = int_option(spec, "gpu_layers")
+        if gpu_layers and not llama_supports_gpu_offload():
+            raise RuntimeError(f"{VLM_SLOT} wants GPU layers, and this llama.cpp build has no GPU")
         model_path = hf_hub_download(
             spec.model, file, revision=spec.revision, local_files_only=True
         )
@@ -39,7 +42,7 @@ class VlmSlot:
             n_ctx=int_option(spec, "context_tokens"),
             n_threads=CALL_GUARD.threads or None,
             n_threads_batch=CALL_GUARD.threads or None,
-            n_gpu_layers=int_option(spec, "gpu_layers"),
+            n_gpu_layers=gpu_layers,
             verbose=False,
         )
 

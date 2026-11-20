@@ -20,7 +20,6 @@ from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import VideoSection, VlmSettings
 
-LANE = "video-vlm"
 LABELS = ("clip", "loop", "static")
 ANSWERS = ("clip", "static")
 STATIC = "static"
@@ -46,6 +45,7 @@ class Job:
 class VideoVlmLane:
     def __init__(
         self,
+        lane: str,
         engines: Engines,
         source: AudioSource,
         workspace: Workspace,
@@ -55,6 +55,7 @@ class VideoVlmLane:
         part_bytes: int,
         counters: Counters,
     ) -> None:
+        self._lane = lane
         self._engines = engines
         self._source = source
         self._workspace = workspace
@@ -68,7 +69,7 @@ class VideoVlmLane:
         try:
             return await self._run(parse(request), deadline)
         except Exception as error:
-            return embedding.outcome_of_error(error, LANE, self._counters)
+            return embedding.outcome_of_error(error, self._lane, self._counters)
 
     async def _run(self, job: Job, deadline: Deadline) -> Outcome:
         if job.label == STATIC:

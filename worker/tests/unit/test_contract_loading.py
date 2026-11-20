@@ -31,6 +31,7 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "highlight",
         "video-find",
         "video-vlm",
+        "video-vlm-gpu",
         "video-keyframe",
         "video-shot",
         "video-assemble",
@@ -40,6 +41,7 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "lyrics",
         "transcribe",
         "speak",
+        "video-vlm-gpu",
         "video-keyframe",
         "video-shot",
     }

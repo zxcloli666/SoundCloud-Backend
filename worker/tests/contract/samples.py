@@ -100,6 +100,13 @@ REQUESTS: Mapping[str, Mapping[str, object]] = MappingProxyType(
             "duration_ms": 96000,
             "offset_ms": 1500,
         },
+        "video-vlm-gpu": {
+            "sc_track_id": "98765",
+            "attempt": 2,
+            "video_url": "https://storage.example/video-tmp/98765-2-0.mp4",
+            "duration_ms": 96000,
+            "offset_ms": 1500,
+        },
         "video-keyframe": {
             "sc_track_id": "98765",
             "attempt": 2,
@@ -189,6 +196,21 @@ RPC_ERRORS = ("expired", "invalid_request", "internal")
 GEN_REASONS = frozenset(
     {
         Reason.INVALID_REQUEST,
+        Reason.MODEL_OUTPUT_INVALID,
+        Reason.DEADLINE_EXCEEDED,
+        Reason.ENGINE_CRASHED,
+        Reason.OUT_OF_MEMORY,
+        Reason.DOWNLOAD_FAILED,
+        Reason.INTERNAL_ERROR,
+        Reason.ENGINE_RESTARTED,
+        Reason.INPUTS_GONE,
+    }
+)
+DESIGN_VLM_REASONS = frozenset(
+    {
+        Reason.INVALID_REQUEST,
+        Reason.UNDECODABLE_AUDIO,
+        Reason.AUDIO_TOO_LARGE,
         Reason.MODEL_OUTPUT_INVALID,
         Reason.DEADLINE_EXCEEDED,
         Reason.ENGINE_CRASHED,
@@ -324,21 +346,8 @@ DESIGN_REASONS: Mapping[str, frozenset[Reason]] = MappingProxyType(
                 Reason.INPUTS_GONE,
             }
         ),
-        "video-vlm": frozenset(
-            {
-                Reason.INVALID_REQUEST,
-                Reason.UNDECODABLE_AUDIO,
-                Reason.AUDIO_TOO_LARGE,
-                Reason.MODEL_OUTPUT_INVALID,
-                Reason.DEADLINE_EXCEEDED,
-                Reason.ENGINE_CRASHED,
-                Reason.OUT_OF_MEMORY,
-                Reason.DOWNLOAD_FAILED,
-                Reason.INTERNAL_ERROR,
-                Reason.ENGINE_RESTARTED,
-                Reason.INPUTS_GONE,
-            }
-        ),
+        "video-vlm": DESIGN_VLM_REASONS,
+        "video-vlm-gpu": DESIGN_VLM_REASONS,
         "video-keyframe": GEN_REASONS,
         "video-shot": GEN_REASONS,
         "video-assemble": GEN_REASONS | {Reason.UNDECODABLE_AUDIO},
@@ -435,7 +444,7 @@ def fields_for(lane: str, status: Status) -> dict[str, object]:
                     "scores": {"ber": 0.0211, "peak": 428.0},
                 }
             return {}
-        case "video-vlm":
+        case "video-vlm" | "video-vlm-gpu":
             if ok:
                 return {
                     "label": "loop",

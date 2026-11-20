@@ -29,6 +29,7 @@ from worker.runtime.engine_client import (
 )
 from worker.runtime.memory import NO_USAGE, Usage
 from worker.runtime.protocol import Pong, SlotSpec
+from worker.settings import VLM_DEVICES
 
 MODE_SLOT = "slot"
 MODE_LANE = "lane"
@@ -48,7 +49,7 @@ STATE_BROKEN = "broken"
 STATE_UNLOADED = "unloaded"
 STATE_STOPPED = "stopped"
 PLANNED_CAUSES = frozenset({CAUSE_DEADLINE, CAUSE_PING, CAUSE_RECYCLE, CAUSE_STOP, CAUSE_SWITCH})
-GPU_DEVICES = frozenset({"auto", "cuda"})
+GPU_DEVICES = frozenset({"auto", "cuda", VLM_DEVICES["cuda"]})
 INLINE_SLOTS = frozenset({"vad", "lid", "fingerprint"})
 BULK_NICE = 10
 RESERVED_THREADS_MAX = 4

@@ -4,9 +4,11 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 
@@ -109,6 +111,7 @@ LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "highlight": (),
     "video-find": ("clip",),
     "video-vlm": (settings_module.VLM_SLOT,),
+    "video-vlm-gpu": (settings_module.VLM_SLOT,),
     "video-keyframe": (settings_module.IMAGE_EDIT_SLOT,),
     "video-shot": (settings_module.IMAGE_TO_VIDEO_SLOT,),
     "video-assemble": (),
@@ -123,6 +126,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "highlight": {},
     "video-find": {"clip": "clip"},
     "video-vlm": {"vlm": settings_module.VLM_SLOT},
+    "video-vlm-gpu": {"vlm": settings_module.VLM_SLOT},
     "video-keyframe": {"keyframe": settings_module.IMAGE_EDIT_SLOT},
     "video-shot": {"shot": settings_module.IMAGE_TO_VIDEO_SLOT},
     "video-assemble": {},
@@ -130,7 +134,9 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
 SPEAK_LANE = "speak"
-LOCAL_LLM_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
+LLAMA_ENV = MappingProxyType({"OMP_WAIT_POLICY": "PASSIVE"})
+LIBRARY_PATH_ENV = "LD_LIBRARY_PATH"
+CUDA_LIBRARY_PACKAGES = ("cu13", "cuda_runtime", "cublas")
 TTS_THREADS_ENV = "SCD_QWEN_THREADS"
 ENCODE_ENGINE = "encode"
 MULAN = "mulan"
@@ -143,6 +149,7 @@ AUDIO_FETCH_LANES = frozenset(
         "highlight",
         "video-find",
         "video-vlm",
+        "video-vlm-gpu",
         "video-keyframe",
         "video-shot",
         "video-assemble",
@@ -230,11 +237,15 @@ class Blueprint:
             if replicas[TEXT_SLOT] < 1:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
+        llama = llama_env(sys.path, environ)
         plans = [
             growth_plan(
                 settings,
                 turn_plan(
-                    settings, vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+                    settings,
+                    vlm_plan(
+                        settings, tts_plan(settings, local_llm_plan(settings, plan, llama)), llama
+                    ),
                 ),
             )
             for plan in plan_engines(runtime.mode, specs, replicas, groups)
@@ -494,22 +505,6 @@ class Node:
                 self.contract.video_limits.part_bytes,
                 self.counters,
             ),
-            "video-vlm": lambda: VideoVlmLane(
-                engines,
-                AudioSource(
-                    audio_session,
-                    timeout_s=settings.video.download_timeout_s,
-                    idle_s=settings.audio.download_idle_s,
-                    max_bytes=settings.video.max_download_mib << 20,
-                    counters=self.counters,
-                ),
-                self.workspace,
-                settings.video,
-                settings.vlm,
-                settings_module.vlm_ref(settings),
-                self.contract.video_limits.part_bytes,
-                self.counters,
-            ),
         }
         gen_source = AudioSource(
             audio_session,
@@ -519,6 +514,26 @@ class Node:
             counters=self.counters,
         )
         part_bytes = self.contract.video_limits.part_bytes
+        vlm_source = AudioSource(
+            audio_session,
+            timeout_s=settings.video.download_timeout_s,
+            idle_s=settings.audio.download_idle_s,
+            max_bytes=settings.video.max_download_mib << 20,
+            counters=self.counters,
+        )
+        for vlm_lane in settings_module.VLM_LANES:
+            processors[vlm_lane] = partial(
+                VideoVlmLane,
+                vlm_lane,
+                engines,
+                vlm_source,
+                self.workspace,
+                settings.video,
+                settings.vlm,
+                settings_module.vlm_ref(settings),
+                part_bytes,
+                self.counters,
+            )
         processors["video-keyframe"] = lambda: VideoKeyframeLane(
             engines, gen_source, self.workspace, settings.video_gen, part_bytes, self.counters
         )
@@ -905,7 +920,7 @@ def check_local_llm_cpu(settings: Settings) -> None:
         raise StartupError(f"lane ai needs the local model, and this CPU lacks {missing}")
 
 
-def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+def local_llm_plan(settings: Settings, plan: EnginePlan, env: Mapping[str, str]) -> EnginePlan:
     if settings_module.LOCAL_LLM_SLOT not in plan.slot_names:
         return plan
     local = settings.llm.local
@@ -916,11 +931,11 @@ def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
         nice=local.nice,
         idle_unload_s=float(local.idle_unload_s),
         shares_budget=True,
-        env=LOCAL_LLM_ENV,
+        env=env,
     )
 
 
-def vlm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+def vlm_plan(settings: Settings, plan: EnginePlan, env: Mapping[str, str]) -> EnginePlan:
     if settings_module.VLM_SLOT not in plan.slot_names:
         return plan
     vlm = settings.vlm
@@ -929,8 +944,25 @@ def vlm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
         threads=vlm.threads,
         nice=vlm.nice,
         idle_unload_s=float(vlm.idle_unload_s),
-        env=LOCAL_LLM_ENV,
+        env=env,
     )
+
+
+def llama_env(paths: Iterable[str], environ: Mapping[str, str]) -> dict[str, str]:
+    folders = [str(folder) for folder in cuda_library_folders(paths)]
+    if not folders:
+        return dict(LLAMA_ENV)
+    inherited = [environ[LIBRARY_PATH_ENV]] if environ.get(LIBRARY_PATH_ENV) else []
+    return {**LLAMA_ENV, LIBRARY_PATH_ENV: os.pathsep.join([*folders, *inherited])}
+
+
+def cuda_library_folders(paths: Iterable[str]) -> list[Path]:
+    places = [Path(entry) / "nvidia" for entry in paths if entry]
+    found: list[Path] = []
+    for package in CUDA_LIBRARY_PACKAGES:
+        folders = [place / package / "lib" for place in places]
+        found += [folder for folder in folders if folder.is_dir()][:1]
+    return found
 
 
 def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
@@ -1048,7 +1080,7 @@ def slot_device(settings: Settings, name: str) -> str:
     if name == settings_module.LOCAL_LLM_SLOT:
         return settings_module.LOCAL_LLM_DEVICE
     if name == settings_module.VLM_SLOT:
-        return settings_module.VLM_DEVICE
+        return settings_module.VLM_DEVICES["cuda" if settings.vlm.gpu_layers else "cpu"]
     if name == settings_module.TTS_SLOT:
         return settings_module.TTS_DEVICES[settings.tts.device]
     return "cpu" if name in CPU_ONLY_SLOTS else settings.runtime.device

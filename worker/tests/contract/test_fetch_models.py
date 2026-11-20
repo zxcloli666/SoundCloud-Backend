@@ -131,6 +131,28 @@ def test_vlm_weights_come_as_the_model_and_its_projector_only_with_the_lane(
     ]
 
 
+@pytest.mark.parametrize("profile", ["gpu-video", "gpu-48-mix", "gpu-24-mix"])
+def test_a_gpu_vlm_profile_fetches_the_8b_model_and_its_projector(
+    env: dict[str, str], profile: str
+) -> None:
+    files = [item.artifact for item in plan_for(profile, env) if item.slot == s.VLM_SLOT]
+    repo, revision = "Qwen/Qwen3-VL-8B-Instruct-GGUF", "f982a07559d4a2f6c8744d840bf6fccab30eea96"
+    assert files == [
+        fm.HubFile(
+            repo,
+            revision,
+            "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            "67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2",
+        ),
+        fm.HubFile(
+            repo,
+            revision,
+            "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            "c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd",
+        ),
+    ]
+
+
 def test_a_worker_without_the_ai_lane_needs_no_local_model_weights(env: dict[str, str]) -> None:
     environ = {
         **env,
