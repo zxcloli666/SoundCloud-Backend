@@ -35,6 +35,7 @@ CAUSE_DEADLINE = "deadline"
 CAUSE_PING = "ping"
 CAUSE_RECYCLE = "recycle"
 CAUSE_STOP = "stop"
+CAUSE_SWITCH = "switch"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
 CAUSE_MEMORY = "memory"
 COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan", LOCAL_LLM_SLOT, TTS_SLOT})
@@ -318,11 +319,11 @@ class EngineClient:
             self._log.error("engine_kill_join_timeout", pid=self.pid, cause=cause)
             self._give_up(cause)
 
-    async def stop(self) -> None:
+    async def stop(self, cause: str = CAUSE_STOP) -> None:
         if not self.alive:
             return
         if self._kill_cause is None:
-            self._kill_cause = CAUSE_STOP
+            self._kill_cause = cause
         deadline = self._clock.now() + self._stop_grace_s
         try:
             await self.command(CommandKind.STOP, None, self._stop_grace_s)

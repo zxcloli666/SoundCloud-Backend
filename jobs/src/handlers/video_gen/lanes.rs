@@ -1,9 +1,11 @@
 use std::future::Future;
+use std::time::{Duration, Instant};
 
 use backend_contracts::pipeline::{VIDEO_ASSEMBLE, VIDEO_KEYFRAME, VIDEO_SHOT};
 use backend_contracts::video_gen::{
     VideoAssembleRequest, VideoAssembleShot, VideoKeyframeRequest, VideoShotRequest,
 };
+use backend_contracts::worker_contract::WorkerLane;
 use serde_json::Value;
 use url::Url;
 
@@ -12,7 +14,14 @@ use super::state::Gen;
 use crate::bus::Bus;
 use crate::config::VideoGenConfig;
 use crate::handlers::indexing::canonical_storage_url;
+use crate::health::worker_status::WorkerStatusBoard;
 use crate::queue::{JobError, JobResult};
+
+pub const STAGE_LANES: [(&str, WorkerLane); 3] = [
+    ("keyframe", WorkerLane::VideoKeyframe),
+    ("shot", WorkerLane::VideoShot),
+    ("assemble", WorkerLane::VideoAssemble),
+];
 
 pub trait Lanes: Send + Sync {
     fn publish(
@@ -23,6 +32,10 @@ pub trait Lanes: Send + Sync {
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
 }
 
+pub trait Nodes: Lanes {
+    fn serving(&self, lane: WorkerLane) -> bool;
+}
+
 impl Lanes for Bus {
     async fn publish(
         &self,
@@ -31,6 +44,35 @@ impl Lanes for Bus {
         message_id: String,
     ) -> anyhow::Result<()> {
         self.publish_dedup(subject, &payload, &message_id).await
+    }
+}
+
+pub struct Fleet {
+    bus: Bus,
+    workers: WorkerStatusBoard,
+    seen: Duration,
+}
+
+impl Fleet {
+    pub fn new(bus: Bus, workers: WorkerStatusBoard, seen: Duration) -> Self {
+        Self { bus, workers, seen }
+    }
+}
+
+impl Lanes for Fleet {
+    async fn publish(
+        &self,
+        subject: &'static str,
+        payload: Value,
+        message_id: String,
+    ) -> anyhow::Result<()> {
+        self.bus.publish_dedup(subject, &payload, &message_id).await
+    }
+}
+
+impl Nodes for Fleet {
+    fn serving(&self, lane: WorkerLane) -> bool {
+        self.workers.served_within(lane, self.seen, Instant::now())
     }
 }
 

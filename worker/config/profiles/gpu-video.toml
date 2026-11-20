@@ -5,7 +5,7 @@ trust = "public"
 mode = "lane"
 device = "cuda"
 idle_unload_s = 600
-exclusive_slots = ["image-edit", "image-to-video"]
+turn_groups = { keyframe = ["image-edit"], shot = ["image-to-video"] }
 
 [lanes]
 enabled = ["video-keyframe", "video-shot"]

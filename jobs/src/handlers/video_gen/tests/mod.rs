@@ -19,7 +19,7 @@ use sqlx::PgPool;
 use url::Url;
 
 use super::director::{Brief, Character, Director, Look, Plan, PlannedShot, Review, Verdict};
-use super::lanes::Lanes;
+use super::lanes::{Lanes, Nodes};
 use super::{Store, VideoGen};
 use crate::config::{AnthropicLadder, VideoGenConfig};
 use crate::handlers::video_accounts::Notify;
@@ -50,6 +50,7 @@ pub(super) fn config() -> VideoGenConfig {
         fps: 16,
         frames: 81,
         stills: 4,
+        node_seen: Duration::from_secs(120),
         director: Some(AnthropicLadder {
             steps: Vec::new(),
             reset_day: 17,
@@ -226,6 +227,7 @@ impl Store for Memory {
 pub(super) struct Wire {
     pub(super) sent: Arc<Mutex<Vec<(String, Value, String)>>>,
     pub(super) down: Arc<AtomicBool>,
+    pub(super) absent: Arc<Mutex<Vec<WorkerLane>>>,
 }
 
 impl Wire {
@@ -258,6 +260,12 @@ impl Lanes for Wire {
             .unwrap()
             .push((subject.to_owned(), payload, message_id));
         Ok(())
+    }
+}
+
+impl Nodes for Wire {
+    fn serving(&self, lane: WorkerLane) -> bool {
+        !self.absent.lock().unwrap().contains(&lane)
     }
 }
 

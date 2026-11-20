@@ -7,14 +7,14 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use super::director::Director;
-use super::lanes::Lanes;
+use super::lanes::Nodes;
 use super::parts::Delivered;
 use super::state::{self, Gen, Save, Stage};
 use super::{Store, VideoGen};
 use crate::handlers::video_accounts::Notify;
 use crate::queue::{JobError, JobResult};
 
-impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
+impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
     pub async fn finish(&self, lane: WorkerLane, result: VideoGenResult) -> JobResult {
         let out_of_range =
             || JobError::permanent(anyhow::anyhow!("generation result is out of range"));

@@ -39,6 +39,9 @@ LANES = (
 )
 TRUST_LEVELS = ("trusted", "public")
 RUNTIME_MODES = ("slot", "lane")
+TURN_SWITCH_UNLOAD = "unload"
+TURN_SWITCH_EXIT = "exit"
+TURN_SWITCHES = (TURN_SWITCH_UNLOAD, TURN_SWITCH_EXIT)
 DEVICES = ("auto", "cuda", "cpu")
 SYNC_STRATEGIES = ("anchored", "global_ctc")
 RESCUE_STRATEGIES = ("global_ctc", "none")
@@ -154,8 +157,11 @@ class RuntimeSection:
     isolate_encode: bool
     memory_growth_cap_mib: int
     memory_guard_kill: bool
-    exclusive_slots: tuple[str, ...]
-    exclusive_turn_s: int
+    turn_groups: Mapping[str, tuple[str, ...]]
+    turn_home: str
+    turn_hold_s: int
+    turn_probe_s: int
+    turn_switch: str
 
 
 @dataclass(frozen=True)
@@ -724,11 +730,28 @@ def validate_runtime(settings: Settings) -> list[str]:
         problems.append("runtime.threads must be >= 0")
     if runtime.memory_growth_cap_mib < 0:
         problems.append("runtime.memory_growth_cap_mib must be >= 0")
-    stray = sorted(set(runtime.exclusive_slots) - set(settings.slots))
+    return problems + validate_turn(settings)
+
+
+def validate_turn(settings: Settings) -> list[str]:
+    runtime = settings.runtime
+    problems = []
+    grouped = [slot for members in runtime.turn_groups.values() for slot in members]
+    stray = sorted(set(grouped) - set(settings.slots))
     if stray:
-        problems.append(f"runtime.exclusive_slots has unknown slots {stray}")
-    if runtime.exclusive_turn_s <= 0:
-        problems.append("runtime.exclusive_turn_s must be > 0")
+        problems.append(f"runtime.turn_groups has unknown slots {stray}")
+    if len(set(grouped)) != len(grouped):
+        problems.append("runtime.turn_groups puts a slot in two groups")
+    if runtime.turn_home and runtime.turn_home not in runtime.turn_groups:
+        problems.append(f"runtime.turn_home {runtime.turn_home!r} is not a turn group")
+    if runtime.turn_hold_s <= 0 or runtime.turn_probe_s <= 0:
+        problems.append("runtime.turn_hold_s and runtime.turn_probe_s must be > 0")
+    if runtime.turn_switch not in TURN_SWITCHES:
+        problems.append(f"runtime.turn_switch must be one of {TURN_SWITCHES}")
+    for lane in settings.lanes.enabled:
+        groups = lane_groups(settings, lane)
+        if len(groups) > 1:
+            problems.append(f"lane {lane} spans turn groups {groups}")
     return problems
 
 
@@ -1020,6 +1043,21 @@ def local_llm_ref(settings: Settings) -> str:
 def vlm_ref(settings: Settings) -> str:
     slot = settings.slots[VLM_SLOT]
     return f"{slot.model}/{settings.vlm.file}@{slot.revision[:8]}"
+
+
+def turn_lanes(settings: Settings) -> dict[str, str]:
+    return {
+        lane: groups[0]
+        for lane in settings.lanes.enabled
+        if (groups := lane_groups(settings, lane))
+    }
+
+
+def lane_groups(settings: Settings, lane: str) -> list[str]:
+    slots = set(LANE_SLOTS.get(lane, ()))
+    return [
+        group for group, members in settings.runtime.turn_groups.items() if slots & set(members)
+    ]
 
 
 def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) -> tuple[str, ...]:

@@ -24,6 +24,7 @@ use crate::handlers::admin_rpc::AdminCatalogRpc;
 use crate::handlers::auth_rpc::AuthRpc;
 use crate::handlers::highlights::HighlightHandler;
 use crate::handlers::taste::{TasteHandler, TasteResult};
+use crate::handlers::video_gen::Fleet;
 use crate::handlers::{
     CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, MAINTENANCE_KINDS, OPS_KINDS, accepts_ingress,
 };
@@ -322,7 +323,15 @@ pub async fn run() -> anyhow::Result<()> {
         supervisor.spawn("video VLM sweep", video_vlm.sweep(cancellation.clone()));
     }
     if let Some(video_gen) = handlers
-        .video_gen(databases.main.bulk.clone(), &config, video_gen_bus.clone())
+        .video_gen(
+            databases.main.bulk.clone(),
+            &config,
+            Fleet::new(
+                video_gen_bus.clone(),
+                health.workers(),
+                config.video_gen.node_seen,
+            ),
+        )
         .await?
     {
         for lane in [

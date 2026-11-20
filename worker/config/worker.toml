@@ -27,8 +27,11 @@ threads = 0
 isolate_encode = false
 memory_growth_cap_mib = 3072
 memory_guard_kill = false
-exclusive_slots = []
-exclusive_turn_s = 900
+turn_groups = {}
+turn_home = ""
+turn_hold_s = 900
+turn_probe_s = 10
+turn_switch = "unload"
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]

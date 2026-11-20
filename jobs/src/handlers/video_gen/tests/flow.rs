@@ -10,7 +10,7 @@ use super::super::LADDER;
 use super::super::director::{Look, Verdict};
 use super::{
     Bench, PLAN_USD, REVIEW_USD, Scripted, TRACK, Wire, bench, config, due_now, failed, lyrics,
-    plan, reply, row, star, superlike, track,
+    plan, queued, reply, row, star, superlike, track,
 };
 use crate::llm::anthropic::LlmError;
 use crate::llm::ledger;
@@ -382,4 +382,78 @@ async fn a_bad_plan_is_retried_and_then_fails(pool: PgPool) {
     assert_eq!(rejections.as_array().unwrap().len(), 3);
     assert_eq!(faults, 3);
     assert!(wire.sent.lock().unwrap().is_empty());
+}
+
+async fn sent_at(pool: &PgPool) -> Option<chrono::DateTime<Utc>> {
+    sqlx::query_scalar("SELECT sent_at FROM track_video_gen WHERE sc_track_id = $1")
+        .bind(TRACK)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn sent_long_ago(pool: &PgPool) {
+    sqlx::query("UPDATE track_video_gen SET sent_at = now() - interval '5 hours'")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn without_a_generating_node_nothing_is_planned_or_paid_for(pool: PgPool) {
+    waiting(&pool).await;
+    let (bench, director, _, wire, _) = bench(&pool, config());
+    director.plans(Ok(plan()));
+    wire.absent
+        .lock()
+        .unwrap()
+        .extend([WorkerLane::VideoKeyframe, WorkerLane::VideoShot]);
+
+    for _ in 0..3 {
+        bench.dispatch().await.unwrap();
+        due_now(&pool).await;
+    }
+
+    assert!(queued(&pool).await.is_empty());
+    assert!(director.briefs.lock().unwrap().is_empty());
+    assert!(wire.sent.lock().unwrap().is_empty());
+
+    wire.absent.lock().unwrap().clear();
+    bench.dispatch().await.unwrap();
+
+    assert_eq!(director.briefs.lock().unwrap().len(), 1);
+    assert_eq!(wire.subjects(), ["video.keyframe.new"]);
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_sent_step_waits_for_its_node_without_faults_or_resends(pool: PgPool) {
+    waiting(&pool).await;
+    let (bench, director, _, wire, _) = bench(&pool, config());
+    director.plans(Ok(plan()));
+    bench.dispatch().await.unwrap();
+    assert_eq!(wire.subjects(), ["video.keyframe.new"]);
+    wire.absent.lock().unwrap().push(WorkerLane::VideoKeyframe);
+
+    for _ in 0..3 {
+        sent_long_ago(&pool).await;
+        due_now(&pool).await;
+        bench.dispatch().await.unwrap();
+    }
+
+    let (stage, _, _, faults) = row(&pool, TRACK).await;
+    assert_eq!((stage.as_str(), faults), ("keyframe", 0));
+    assert!(
+        sent_at(&pool)
+            .await
+            .is_some_and(|at| Utc::now() - at < chrono::Duration::minutes(1))
+    );
+    assert_eq!(wire.subjects(), ["video.keyframe.new"]);
+
+    wire.absent.lock().unwrap().clear();
+    bench.dispatch().await.unwrap();
+
+    assert_eq!(row(&pool, TRACK).await.3, 0);
+    assert_eq!(wire.subjects(), ["video.keyframe.new"]);
+    keyframe(&bench, &wire).await;
+    assert_eq!(row(&pool, TRACK).await.0, "keyframe_review");
 }

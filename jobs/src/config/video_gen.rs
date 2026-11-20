@@ -22,6 +22,7 @@ pub struct VideoGenConfig {
     pub fps: u32,
     pub frames: u32,
     pub stills: u32,
+    pub node_seen: Duration,
     pub director: Option<AnthropicLadder>,
 }
 
@@ -49,6 +50,7 @@ impl VideoGenConfig {
             fps: bounded("VIDEO_GEN_FPS", 16, 1, 60)?,
             frames,
             stills: bounded("VIDEO_GEN_STILLS", 4, 1, 8)?,
+            node_seen: seconds("VIDEO_GEN_NODE_SEEN_SECONDS", 120)?,
             director,
         })
     }
