@@ -290,7 +290,8 @@ async fn pages_past_the_tracks_window_keep_the_full_ranking(pool: PgPool) -> any
         .await?;
     }
     super::lexicon_refresh::refresh(&pool).await?;
-    let found = pages(&service(&pool)?, 8).await?;
+    let search = service(&pool)?;
+    let found = pages(&search, 8).await?;
     let want = by_rank(
         (1..=5).flat_map(|group| group * 100 + 1..=group * 100 + 30),
         |id| id / 100,
@@ -305,7 +306,8 @@ async fn hidden_hits_above_the_window_still_leave_a_full_page(pool: PgPool) -> a
     ranked_songs(&pool, 101..=130, "public", "2").await?;
     ranked_songs(&pool, 201..=230, "public", "1").await?;
     super::lexicon_refresh::refresh(&pool).await?;
-    let found = pages(&service(&pool)?, 3).await?;
+    let search = service(&pool)?;
+    let found = pages(&search, 3).await?;
     let want = by_rank((101..=130).chain(201..=230), |id| 3 - id / 100);
     assert_eq!(found, want);
     Ok(())

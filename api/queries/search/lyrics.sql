@@ -17,7 +17,7 @@ hits AS MATERIALIZED (
 boundary AS MATERIALIZED (
     SELECT hits.tier, hits.rank FROM hits
     ORDER BY hits.tier, hits.rank DESC
-    OFFSET greatest(64, $4 + $5) + 16
+    OFFSET greatest(64, $4::bigint + $5::bigint) + 16
     LIMIT 1
 ),
 front AS MATERIALIZED (
@@ -30,7 +30,7 @@ front AS MATERIALIZED (
        OR (hits.tier = (SELECT boundary.tier FROM boundary) AND hits.rank >= (SELECT boundary.rank FROM boundary))
 ),
 covered AS MATERIALIZED (
-    SELECT (SELECT count(*) FROM front) >= greatest(64, $4 + $5) OR NOT EXISTS (SELECT 1 FROM boundary) AS ok
+    SELECT (SELECT count(*) FROM front) >= greatest(64, $4::bigint + $5::bigint) OR NOT EXISTS (SELECT 1 FROM boundary) AS ok
 ),
 ranked AS MATERIALIZED (
     SELECT picked.sc_track_id, picked.tier,
