@@ -39,7 +39,7 @@ head AS (
              regexp_split_to_table(
                  coalesce(lc.plain_text, regexp_replace(coalesce(lc.synced_lrc, ''), '\[[0-9:.]+\]', '', 'g')), E'\n'
              ) WITH ORDINALITY AS split(line, n)
-        WHERE lc.sc_track_id = ranked.sc_track_id AND split.n <= 150 AND btrim(split.line) <> ''
+        WHERE lc.sc_track_id = ranked.sc_track_id AND split.n <= 150 AND btrim(split.line) <> '' AND btrim(split.line) !~ '^\['
         ORDER BY score DESC, split.n
         LIMIT 1
     ) best
@@ -62,9 +62,10 @@ LEFT JOIN LATERAL (
          regexp_split_to_table(
              coalesce(lc.plain_text, regexp_replace(coalesce(lc.synced_lrc, ''), '\[[0-9:.]+\]', '', 'g')), E'\n'
          ) WITH ORDINALITY AS split(line, n)
-    WHERE page.line IS NULL AND lc.sc_track_id = page.sc_track_id AND split.n <= 150 AND btrim(split.line) <> ''
+    WHERE page.line IS NULL AND lc.sc_track_id = page.sc_track_id AND split.n <= 150 AND btrim(split.line) <> '' AND btrim(split.line) !~ '^\['
     ORDER BY score DESC, split.n
     LIMIT 1
 ) tail ON true
 WHERE coalesce(page.line, tail.line) IS NOT NULL
+  AND coalesce(page.score, tail.score) >= 0.6
 ORDER BY page.tier, page.score DESC NULLS LAST, page.pos

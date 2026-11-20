@@ -117,6 +117,57 @@ async fn gibberish_and_deleted_tracks_are_never_hits(pool: PgPool) -> anyhow::Re
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_weak_partial_match_is_not_a_hit(pool: PgPool) -> anyhow::Result<()> {
+    seed(&pool).await?;
+    let answer = service(&pool)?
+        .lyrics("forever trusting who we are", None, Some(50))
+        .await?;
+    let ids: Vec<i64> = answer
+        .collection
+        .iter()
+        .filter_map(|hit| hit.track["id"].as_i64())
+        .collect();
+    assert_eq!(ids, vec![1]);
+    assert!(answer.collection.iter().all(|hit| hit.score >= 0.6));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_single_word_is_not_a_lyrics_query(pool: PgPool) -> anyhow::Result<()> {
+    seed(&pool).await?;
+    let answer = service(&pool)?.lyrics("forever", None, None).await?;
+    assert!(answer.collection.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_section_header_is_not_a_matched_line(pool: PgPool) -> anyhow::Result<()> {
+    song(
+        &pool,
+        5,
+        "Rapper",
+        "[Verse 1: Kanye West]\nwalking down the street\n[Chorus: Kanye West]\ncounting all the money",
+        "lrclib",
+        Some("lrclib"),
+    )
+    .await?;
+    super::lexicon_refresh::refresh(&pool).await?;
+    let answer = service(&pool)?.lyrics("kanye west", None, None).await?;
+    assert!(answer.collection.is_empty());
+    Ok(())
+}
+
+#[test]
+fn only_phrases_and_caseless_scripts_are_lyrics_queries() {
+    for query in ["love you", "never gonna give", "лето 2024", "愛してる"] {
+        assert!(super::lyrics::is_phrase(query), "{query}");
+    }
+    for query in ["drake", "Любовь", "2024"] {
+        assert!(!super::lyrics::is_phrase(query), "{query}");
+    }
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_short_query_is_an_empty_text_page(pool: PgPool) -> anyhow::Result<()> {
     let answer = service(&pool)?.lyrics(" a ", Some(-1), Some(500)).await?;
     assert_eq!(
