@@ -231,8 +231,11 @@ class Blueprint:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
         plans = [
-            turn_plan(
-                settings, vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+            growth_plan(
+                settings,
+                turn_plan(
+                    settings, vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+                ),
             )
             for plan in plan_engines(runtime.mode, specs, replicas, groups)
         ]
@@ -942,6 +945,16 @@ def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
         idle_unload_s=float(settings.tts.idle_unload_s),
         env={TTS_THREADS_ENV: str(threads)},
     )
+
+
+def growth_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    caps = [
+        slot.memory_growth_cap_mib
+        for name in plan.slot_names
+        if (slot := settings.slots.get(name)) is not None
+    ]
+    cap = max(caps, default=0)
+    return replace(plan, memory_growth_cap_mib=cap) if cap else plan
 
 
 def turn_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:

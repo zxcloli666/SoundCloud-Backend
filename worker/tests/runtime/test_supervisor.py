@@ -501,6 +501,18 @@ async def test_memory_guard_only_reports_when_kill_is_off() -> None:
         await supervisor.stop()
 
 
+async def test_an_engine_with_its_own_cap_grows_past_the_runtime_cap() -> None:
+    counters = Counters()
+    roomy = EnginePlan("a", (fake_spec("a"),), memory_growth_cap_mib=2048)
+    supervisor = await started_supervisor([roomy], GUARD_POLICY, counters)
+    try:
+        reply = await call_once(supervisor, "a", "ballast", {"mib": 400, "hold_s": 1.0}, 30.0)
+        assert reply.ok
+        assert counters.value("engine_memory_over_cap_total", engine="a", kill="true") == 0
+    finally:
+        await supervisor.stop()
+
+
 async def test_memory_guard_leaves_loading_and_idle_engines_alone() -> None:
     counters = Counters()
     heavy = fake_spec("a", load_ballast_mib=400, load_delay_s=0.5)

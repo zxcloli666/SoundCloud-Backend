@@ -70,6 +70,7 @@ class EnginePlan:
     idle_unload_s: float = 0.0
     shares_budget: bool = False
     turn_group: str = ""
+    memory_growth_cap_mib: int = 0
     env: Mapping[str, str] = field(default_factory=dict)
 
     @property
@@ -772,27 +773,28 @@ class Supervisor:
             ):
                 continue
             held = client.usage().held_mib
+            cap = managed.plan.memory_growth_cap_mib or self._policy.memory_growth_cap_mib
             if not client.calling:
-                self._settle_peak(client, peaks.pop(client, 0))
+                self._settle_peak(client, peaks.pop(client, 0), cap)
                 client.idle_held_mib = held
                 continue
             growth = held - client.idle_held_mib
             if growth <= peaks.get(client, 0):
                 continue
             peaks[client] = growth
-            if growth > self._policy.memory_growth_cap_mib:
-                await self._over_cap(client, held, growth)
+            if growth > cap:
+                await self._over_cap(client, held, growth, cap)
         for gone in [client for client in peaks if not client.alive]:
             del peaks[gone]
 
-    def _settle_peak(self, client: EngineClient, growth: int) -> None:
+    def _settle_peak(self, client: EngineClient, growth: int, cap: int) -> None:
         if growth <= 0:
             return
         self._counters.gauge("engine_call_growth_mib", growth, engine=client.name)
-        if growth * GROWTH_LOG_SHARE >= self._policy.memory_growth_cap_mib:
+        if growth * GROWTH_LOG_SHARE >= cap:
             self._log.info("engine_memory_growth", engine=client.name, growth_mib=growth)
 
-    async def _over_cap(self, client: EngineClient, held: int, growth: int) -> None:
+    async def _over_cap(self, client: EngineClient, held: int, growth: int, cap: int) -> None:
         kill = self._policy.memory_guard_kill
         self._counters.inc(
             "engine_memory_over_cap_total", engine=client.name, kill=str(kill).lower()
@@ -804,7 +806,7 @@ class Supervisor:
             held_mib=held,
             idle_held_mib=client.idle_held_mib,
             growth_mib=growth,
-            growth_cap_mib=self._policy.memory_growth_cap_mib,
+            growth_cap_mib=cap,
             kill=kill,
         )
         if kill:

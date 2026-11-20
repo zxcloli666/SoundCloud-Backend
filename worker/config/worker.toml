@@ -103,6 +103,7 @@ revision = "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9"
 replicas = 1
 max_batch = 1
 max_wait_ms = 0
+memory_growth_cap_mib = 16384
 
 [slots.image-to-video]
 model = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
@@ -110,6 +111,7 @@ revision = "596658fd9ca6b7b71d5057529bbf319ecbc61d74"
 replicas = 1
 max_batch = 1
 max_wait_ms = 0
+memory_growth_cap_mib = 16384
 
 [slots.cpu-tools]
 model = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"

@@ -180,6 +180,7 @@ class SlotSettings:
     max_batch: int
     max_wait_ms: int
     fallback: str | None = None
+    memory_growth_cap_mib: int = 0
 
 
 @dataclass(frozen=True)
@@ -730,6 +731,9 @@ def validate_runtime(settings: Settings) -> list[str]:
         problems.append("runtime.threads must be >= 0")
     if runtime.memory_growth_cap_mib < 0:
         problems.append("runtime.memory_growth_cap_mib must be >= 0")
+    capped = sorted(name for name, slot in settings.slots.items() if slot.memory_growth_cap_mib < 0)
+    if capped:
+        problems.append(f"slots {capped}: memory_growth_cap_mib must be >= 0")
     return problems + validate_turn(settings)
 
 

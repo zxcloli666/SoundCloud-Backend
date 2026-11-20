@@ -97,6 +97,7 @@ DESIGN = {
     ),
 }
 TURNING = {"gpu-video", "gpu-48-mix"}
+GENERATING_ENGINES = {"image-edit", "image-to-video"}
 REGULAR_SLOTS = ("muq", "mulan", "text", "sep", "asr", "align", "mms")
 SPEAK_ONLY = {"speak"}
 NOT_YET = {"video-vlm"}
@@ -403,6 +404,17 @@ def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
         "image-to-video": "shot",
     }
     assert blueprint.policy.exit_on_switch is True
+
+
+@pytest.mark.parametrize("name", sorted(TURNING))
+def test_generation_engines_get_their_own_memory_growth_cap(contract: Contract, name: str) -> None:
+    settings = load(name)
+    plans = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=16).plans
+    caps = {plan.name: plan.memory_growth_cap_mib for plan in plans}
+    for slot in (s.IMAGE_EDIT_SLOT, s.IMAGE_TO_VIDEO_SLOT):
+        cap = settings.slots[slot].memory_growth_cap_mib
+        assert caps[slot] == cap > settings.runtime.memory_growth_cap_mib
+    assert all(caps[plan] == 0 for plan in caps if plan not in GENERATING_ENGINES)
 
 
 def test_the_mixed_profile_keeps_the_large_card_batches() -> None:

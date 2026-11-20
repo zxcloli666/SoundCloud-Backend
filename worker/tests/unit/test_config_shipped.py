@@ -79,7 +79,7 @@ def test_worker_toml_matches_settings() -> None:
     raw = tomllib.loads((CONFIG_DIR / "worker.toml").read_text(encoding="utf-8"))
     schema = schema_paths(s.Settings)
     shipped = normalized(toml_paths(raw), schema)
-    optional = {("slots", WILDCARD, "fallback")}
+    optional = {("slots", WILDCARD, "fallback"), ("slots", WILDCARD, "memory_growth_cap_mib")}
     empty_by_default = {("runtime", "turn_groups", WILDCARD)}
     assert shipped - schema - optional == set(), "keys in worker.toml unknown to settings.py"
     assert schema - shipped - empty_by_default == set(), (
