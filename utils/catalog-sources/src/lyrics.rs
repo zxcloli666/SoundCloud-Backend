@@ -549,6 +549,7 @@ struct Variant {
     hints: LyricsHints,
     artist_required: bool,
     consensus: bool,
+    recording_seconds: Option<i64>,
 }
 
 fn variants(hints: &LyricsHints) -> Vec<Variant> {
@@ -556,6 +557,7 @@ fn variants(hints: &LyricsHints) -> Vec<Variant> {
         hints: hints.clone(),
         artist_required: false,
         consensus: false,
+        recording_seconds: hints.duration_sec,
     }];
     if let Some((artist, title)) = split_artist_title(&hints.title) {
         variants.push(Variant {
@@ -566,6 +568,7 @@ fn variants(hints: &LyricsHints) -> Vec<Variant> {
             },
             artist_required: true,
             consensus: false,
+            recording_seconds: hints.duration_sec,
         });
     }
     for segment in bar_segments(&hints.title) {
@@ -582,6 +585,7 @@ fn variants(hints: &LyricsHints) -> Vec<Variant> {
             hints: segment_hints,
             artist_required: false,
             consensus: remix,
+            recording_seconds: hints.duration_sec,
         });
     }
     variants
@@ -627,7 +631,7 @@ fn select_variant(variant: &Variant, candidates: &[LyricsCandidate]) -> Option<L
         .iter()
         .filter(|candidate| !variant.artist_required || candidate.artist.is_some())
         .filter(|candidate| matches_hints(hints, candidate))
-        .filter_map(|candidate| fit_synced_to_recording(hints, candidate.clone()))
+        .filter_map(|candidate| fit_variant_sync(variant, candidate.clone()))
         .collect();
     if variant.consensus {
         let mut agreeing: HashMap<String, usize> = HashMap::new();
@@ -657,6 +661,22 @@ fn select_variant(variant: &Variant, candidates: &[LyricsCandidate]) -> Option<L
     }
     unique.sort_by_key(|candidate| Reverse(candidate_rank(hints, candidate)));
     unique.into_iter().next()
+}
+
+fn fit_variant_sync(variant: &Variant, mut candidate: LyricsCandidate) -> Option<LyricsCandidate> {
+    if !variant.consensus {
+        return fit_synced_to_recording(&variant.hints, candidate);
+    }
+    let recording = LyricsHints {
+        duration_sec: variant.recording_seconds,
+        ..variant.hints.clone()
+    };
+    if candidate.synced_lrc.is_some()
+        && duration_gap(&recording, &candidate) > SYNCED_DURATION_TOLERANCE_SEC
+    {
+        candidate.synced_lrc = None;
+    }
+    (candidate.synced_lrc.is_some() || candidate.plain_text.is_some()).then_some(candidate)
 }
 
 fn body_key(candidate: &LyricsCandidate) -> String {
@@ -2388,6 +2408,13 @@ mod tests {
         assert!(select_candidate(&hints, candidates).is_none());
     }
 
+    fn two_again(original: &str) -> Vec<LyricsCandidate> {
+        vec![
+            named(original, "Beyond", 326, true),
+            named(original, "BEYOND", 320, true),
+        ]
+    }
+
     #[test]
     fn bar_separated_remix_takes_the_original_when_records_agree() {
         let title = "\u{6d77}\u{9614}\u{5929}\u{7a7a} (DJ\u{6728}\u{6708}Remix)\u{ff5c}Tr\u{1edd}i cao bi\u{1ec3}n r\u{1ed9}ng";
@@ -2400,6 +2427,12 @@ mod tests {
         assert!(select_candidate(&hints, two).is_some());
         let one = vec![named(original, "Beyond", 326, true)];
         assert!(select_candidate(&hints, one).is_none());
+        let recut = select_candidate(&hints, two_again(original)).unwrap();
+        assert!(recut.synced_lrc.is_none());
+        assert!(recut.plain_text.is_some());
+        let same_length = uploaded(title, "Zxuan", 325_000);
+        let fitted = select_candidate(&same_length, two_again(original)).unwrap();
+        assert!(fitted.synced_lrc.is_some());
     }
 
     #[test]
