@@ -20,6 +20,7 @@ fn request() -> HomeRequest {
     HomeRequest {
         sc_user_id: LISTENER.to_owned(),
         languages: None,
+        genres: None,
         per_cluster: PER_CLUSTER,
         hide_listened: false,
     }

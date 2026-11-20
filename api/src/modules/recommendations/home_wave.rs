@@ -42,6 +42,7 @@ const RECENT_ARTISTS_LIMIT: i64 = 60;
 pub struct HomeRequest {
     pub sc_user_id: String,
     pub languages: Option<Vec<String>>,
+    pub genres: Option<Vec<String>>,
     pub per_cluster: usize,
     pub hide_listened: bool,
 }
@@ -100,6 +101,8 @@ impl RecommendationsService {
         let sc_user_id = req.sc_user_id.clone();
         let languages_vec = req.languages.clone();
         let languages = languages_vec.as_deref();
+        let genres_vec = req.genres.clone();
+        let genres = genres_vec.as_deref();
 
         let signals = load_user_signals(&self.pg, &sc_user_id).await?;
 
@@ -138,6 +141,7 @@ impl RecommendationsService {
             self,
             &sc_user_id,
             languages,
+            genres,
             SmartWaveSeed::User,
             WAVE_LIMIT,
             req.hide_listened,
@@ -323,9 +327,10 @@ impl RecommendationsService {
             .as_ref()
             .map(|l| l.join(","))
             .unwrap_or_default();
+        let genres = req.genres.as_ref().map(|g| g.join(",")).unwrap_or_default();
         let key = format!(
-            "home:{}:{}:{}:{}",
-            req.sc_user_id, lang, req.per_cluster, req.hide_listened
+            "home:{}:{}:{}:{}:{}",
+            req.sc_user_id, lang, genres, req.per_cluster, req.hide_listened
         );
         self.cluster_flights
             .run(&key, || {
