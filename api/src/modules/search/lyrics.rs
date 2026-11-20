@@ -34,10 +34,10 @@ impl SearchService {
         limit: Option<i64>,
     ) -> AppResult<LyricsSearchResponse> {
         let request = Request::new(q, page.unwrap_or(0), limit.unwrap_or(DEFAULT_LIMIT));
-        let Some(q) = request.q.clone() else {
+        let Some(q) = request.q.clone().filter(|q| is_phrase(q)) else {
             return Ok(response(&request, Vec::new(), false));
         };
-        let key = request.key("search-lyrics-v2", &q, None);
+        let key = request.key("search-lyrics-v3", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
             let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Lyrics).await? else {
@@ -79,6 +79,17 @@ impl SearchService {
         })
         .await
     }
+}
+
+pub(super) fn is_phrase(q: &str) -> bool {
+    let words = q
+        .split(|letter: char| !letter.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .count();
+    words > 1
+        || q.chars().any(|letter| {
+            letter.is_alphabetic() && !letter.is_lowercase() && !letter.is_uppercase()
+        })
 }
 
 fn response(request: &Request, collection: Vec<LyricsHit>, has_more: bool) -> LyricsSearchResponse {

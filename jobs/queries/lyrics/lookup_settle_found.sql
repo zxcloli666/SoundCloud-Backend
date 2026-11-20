@@ -95,13 +95,21 @@ WITH owned_state AS MATERIALIZED (
         embedding_state = NULL,
         content_generation = lyrics_cache.content_generation + 1,
         updated_at = now()
-    WHERE NOT $9::boolean
-       OR lyrics_cache.plain_text IS NULL
+    WHERE lyrics_cache.plain_text IS NULL
        OR lyrics_cache.source NOT IN ('lrclib', 'musixmatch', 'genius', 'netease')
+       OR (lyrics_cache.synced_lrc IS NULL AND EXCLUDED.synced_lrc IS NOT NULL)
     RETURNING lyrics_cache.sc_track_id,
               lyrics_cache.synced_lrc,
               lyrics_cache.plain_text,
               lyrics_cache.source
+), touched AS (
+    UPDATE lyrics_cache AS cache
+    SET updated_at = now()
+    FROM claim
+    WHERE cache.sc_track_id = claim.sc_track_id
+      AND claim.current
+      AND NOT EXISTS (SELECT 1 FROM upserted)
+    RETURNING cache.sc_track_id
 ), rescheduled AS (
     UPDATE lyrics_lookup_state AS state
     SET status = 'retry',

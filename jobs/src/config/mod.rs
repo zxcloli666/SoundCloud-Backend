@@ -250,6 +250,8 @@ pub struct LyricsConfig {
     pub concurrency: usize,
     pub claim_seconds: i64,
     pub backfill_batch: i64,
+    pub upgrade_batch: i64,
+    pub upgrade_age_days: i32,
     pub refetch_share_percent: i64,
     pub musixmatch_base: String,
 }
@@ -268,6 +270,8 @@ impl LyricsConfig {
             concurrency: env::non_zero_usize("LYRICS_LOOKUP_CONCURRENCY", 128)?,
             claim_seconds: env::positive_u64("LYRICS_LOOKUP_CLAIM_SECONDS", 1_200)? as i64,
             backfill_batch: env::positive_u64("LYRICS_LOOKUP_BACKFILL_BATCH", 20_000)? as i64,
+            upgrade_batch: env::parse::<u32>("LYRICS_UPGRADE_BATCH", "10")? as i64,
+            upgrade_age_days: env::positive_u64("LYRICS_UPGRADE_AGE_DAYS", 60)?.min(3650) as i32,
             refetch_share_percent: refetch_share_percent as i64,
             musixmatch_base: env::optional("MUSIXMATCH_API_BASE")
                 .unwrap_or_else(|| "https://apic-desktop.musixmatch.com/ws/1.1".to_owned()),
