@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::common::sc_ids::{EntityRef, user_id_variants};
 use crate::error::{AppError, AppResult};
 
-pub const MAX_BLOCKED: i64 = 500;
+pub const MAX_BLOCKED: i64 = 5000;
 const MAX_LINKED_ACCOUNTS: usize = 16;
 const MAX_NAME_LEN: usize = 200;
 
