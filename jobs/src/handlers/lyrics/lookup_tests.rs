@@ -16,6 +16,8 @@ use crate::queue::{ClaimOrder, JobRepository, LeasedJob};
 
 #[path = "lookup_upgrade_tests.rs"]
 mod upgrade_tests;
+#[path = "lookup_words_tests.rs"]
+mod words_tests;
 
 async fn insert_track(pool: &PgPool, id: &str, title: &str) -> anyhow::Result<()> {
     sqlx::query(
@@ -943,6 +945,7 @@ fn candidate(source: &str, synced: Option<&str>, plain: &str) -> LyricsCandidate
     LyricsCandidate {
         source: source.to_owned(),
         synced_lrc: synced.map(str::to_owned),
+        synced_words: None,
         plain_text: Some(plain.to_owned()),
         artist: None,
         title: None,
@@ -1350,7 +1353,8 @@ async fn settle_found_in(
         synced,
         PLAIN_BODY,
         recheck,
-        super::RECHECK_MAX_STREAK
+        super::RECHECK_MAX_STREAK,
+        ""
     )
     .fetch_optional(&mut *connection)
     .await?

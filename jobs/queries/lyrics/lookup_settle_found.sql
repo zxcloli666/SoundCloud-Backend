@@ -32,6 +32,7 @@ WITH owned_state AS MATERIALIZED (
         sc_track_id,
         track_id,
         synced_lrc,
+        synced_words,
         plain_text,
         source,
         plain_source,
@@ -46,6 +47,7 @@ WITH owned_state AS MATERIALIZED (
     SELECT claim.sc_track_id,
            claim.track_id,
            NULLIF($7::text, ''),
+           CASE WHEN NULLIF($7::text, '') IS NULL THEN NULL ELSE NULLIF($11::text, '') END,
            NULLIF(btrim($8::text, E' \t\n\r\f\x0B'), ''),
            $6::varchar(16),
            CASE WHEN NULLIF(btrim($8::text, E' \t\n\r\f\x0B'), '') IS NULL THEN NULL ELSE $6::varchar(16) END,
@@ -61,9 +63,22 @@ WITH owned_state AS MATERIALIZED (
       AND (NULLIF($7::text, '') IS NOT NULL OR NULLIF(btrim($8::text, E' \t\n\r\f\x0B'), '') IS NOT NULL)
     ON CONFLICT (sc_track_id) DO UPDATE
     SET track_id = EXCLUDED.track_id,
-        synced_lrc = COALESCE(lyrics_cache.synced_lrc, EXCLUDED.synced_lrc),
+        synced_lrc = CASE
+            WHEN lyrics_cache.synced_lrc IS NULL
+                 OR (COALESCE(lyrics_cache.synced_source, lyrics_cache.source) = 'lrclib'
+                 AND lyrics_cache.synced_words IS NULL
+                 AND EXCLUDED.synced_words IS NOT NULL
+                 AND EXCLUDED.synced_source = 'lrclib')
+                THEN EXCLUDED.synced_lrc
+            ELSE lyrics_cache.synced_lrc
+        END,
         synced_words = CASE
-            WHEN lyrics_cache.synced_lrc IS NULL THEN NULL
+            WHEN lyrics_cache.synced_lrc IS NULL
+                 OR (COALESCE(lyrics_cache.synced_source, lyrics_cache.source) = 'lrclib'
+                 AND lyrics_cache.synced_words IS NULL
+                 AND EXCLUDED.synced_words IS NOT NULL
+                 AND EXCLUDED.synced_source = 'lrclib')
+                THEN EXCLUDED.synced_words
             ELSE lyrics_cache.synced_words
         END,
         plain_text = CASE
@@ -102,6 +117,11 @@ WITH owned_state AS MATERIALIZED (
     WHERE lyrics_cache.plain_text IS NULL
        OR lyrics_cache.source NOT IN ('lrclib', 'musixmatch', 'genius', 'netease')
        OR (lyrics_cache.synced_lrc IS NULL AND EXCLUDED.synced_lrc IS NOT NULL)
+       OR (COALESCE(lyrics_cache.synced_source, lyrics_cache.source) = 'lrclib'
+                 AND lyrics_cache.synced_words IS NULL
+                 AND EXCLUDED.synced_words IS NOT NULL
+                 AND EXCLUDED.synced_source = 'lrclib'
+           AND lyrics_cache.synced_lrc IS NOT NULL)
     RETURNING lyrics_cache.sc_track_id,
               lyrics_cache.synced_lrc,
               lyrics_cache.plain_text,

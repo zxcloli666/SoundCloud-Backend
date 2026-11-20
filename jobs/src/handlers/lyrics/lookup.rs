@@ -28,6 +28,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use self::refetch::RefetchClaim;
+use super::synced_words::accepted_synced_words;
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
 use crate::metrics::LookupPath;
@@ -266,6 +267,9 @@ impl LyricsLookupHandler {
         recheck: bool,
     ) -> JobResult {
         let synced_lrc = candidate.synced_lrc.unwrap_or_default();
+        let synced_words =
+            accepted_synced_words(&claim.sc_track_id, &synced_lrc, candidate.synced_words)
+                .unwrap_or_default();
         let plain_text = candidate.plain_text.unwrap_or_default();
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         let settled = sqlx::query_file!(
@@ -279,7 +283,8 @@ impl LyricsLookupHandler {
             &synced_lrc,
             &plain_text,
             recheck,
-            RECHECK_MAX_STREAK
+            RECHECK_MAX_STREAK,
+            &synced_words
         )
         .fetch_optional(&mut *transaction)
         .await
