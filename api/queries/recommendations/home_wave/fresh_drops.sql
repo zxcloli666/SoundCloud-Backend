@@ -19,12 +19,16 @@ ON it.sc_track_id = rl.sc_track_id
 GROUP BY ta.artist_id
 HAVING COUNT (*) >= 2
     )
-SELECT p.sc_track_id AS "sc_track_id!"
-FROM artist_playable_tracks p
-         JOIN track_sync_stamps stamp ON stamp.track_id = p.track_id
-WHERE p.artist_id IN (SELECT artist_id FROM user_artists)
-  AND p.ready_home
-  AND stamp.sc_synced_at > NOW() - INTERVAL '30 days'
-  AND NOT (p.sc_track_id = ANY ($2))
-ORDER BY stamp.sc_synced_at DESC
+SELECT fresh.sc_track_id AS "sc_track_id!"
+FROM user_artists ua
+         CROSS JOIN LATERAL (SELECT p.sc_track_id, p.sc_created_at
+                             FROM artist_playable_tracks p
+                             WHERE p.artist_id = ua.artist_id
+                               AND p.ready_home
+                               AND p.sc_created_at > NOW() - INTERVAL '90 days'
+                               AND NOT (p.sc_track_id = ANY ($2))
+                             ORDER BY p.sc_created_at DESC
+                             LIMIT $3) fresh
+GROUP BY fresh.sc_track_id
+ORDER BY MAX(fresh.sc_created_at) DESC, fresh.sc_track_id DESC
     LIMIT $3

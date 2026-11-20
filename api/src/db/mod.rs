@@ -49,9 +49,9 @@ pub(crate) async fn replicate_track_search(pool: &PgPool) -> anyhow::Result<()> 
 pub(crate) async fn replicate_artist_playable_tracks(pool: &PgPool) -> anyhow::Result<()> {
     insert_replicated(
         pool,
-        "INSERT INTO artist_playable_tracks (artist_id, track_id, sc_track_id, ready_home, ready_wave)
+        "INSERT INTO artist_playable_tracks (artist_id, track_id, sc_track_id, ready_home, ready_wave, sc_created_at)
          SELECT ta.artist_id, t.id, t.sc_track_id,
-                t.needs_duration_resolve = false, t.index_state = 'indexed'
+                t.needs_duration_resolve = false, t.index_state = 'indexed', t.sc_created_at
          FROM tracks t
          JOIN track_artists ta ON ta.track_id = t.id AND ta.role = 'primary'
          WHERE t.sharing = 'public'
@@ -66,8 +66,8 @@ pub(crate) async fn replicate_artist_playable_tracks(pool: &PgPool) -> anyhow::R
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA: Required = Required {
-    version: 466,
-    description: "scd install",
+    version: 480,
+    description: "artist playable tracks fresh idx",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
     version: 329,

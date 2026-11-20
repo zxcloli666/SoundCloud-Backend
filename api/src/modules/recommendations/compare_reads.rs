@@ -20,7 +20,6 @@ const TOP_LIMIT: i64 = 16;
 const ADJACENT_LIMIT: i64 = 20;
 const FRONTIER: usize = 320;
 const TIE_EPS: f32 = 1e-6;
-const FRESH_LIMIT: i64 = 24;
 const SAMPLE_START_PERCENT: f32 = 0.02;
 const SAMPLE_MAX_PERCENT: f32 = 100.0;
 
@@ -259,34 +258,6 @@ async fn legacy_shelf(
     }
 }
 
-async fn fresh_rows(
-    pg: &PgPool,
-    legacy: bool,
-    variants: &[String],
-    limit: i64,
-    exclude: &[String],
-) -> Result<Vec<String>, sqlx::Error> {
-    if legacy {
-        sqlx::query_file_scalar!(
-            "queries/recommendations/home_wave/fresh_drops_legacy.sql",
-            variants,
-            exclude,
-            limit
-        )
-        .fetch_all(pg)
-        .await
-    } else {
-        sqlx::query_file_scalar!(
-            "queries/recommendations/home_wave/fresh_drops.sql",
-            variants,
-            exclude,
-            limit
-        )
-        .fetch_all(pg)
-        .await
-    }
-}
-
 async fn plays(pg: &PgPool, ids: &[String]) -> HashMap<String, i64> {
     sqlx::query_as::<_, (String, i64)>(
         "SELECT sc_track_id, COALESCE(play_count, 0) FROM sc_track_counters WHERE sc_track_id = ANY($1)",
@@ -436,34 +407,6 @@ async fn compare_user(
             tracks: [pairs, differing.len(), ties],
         });
     }
-    let started = Instant::now();
-    let old_fresh = fresh_rows(pg, true, &variants, FRESH_LIMIT, &[]).await?;
-    let old_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let again = fresh_rows(pg, true, &variants, FRESH_LIMIT, &[]).await?;
-    let started = Instant::now();
-    let new_fresh = fresh_rows(pg, false, &variants, FRESH_LIMIT, &[]).await?;
-    let new_ms = started.elapsed().as_secs_f64() * 1000.0;
-    shelves.push(ShelfReport {
-        name: "home fresh_drops",
-        artists: Sample {
-            user: user.to_owned(),
-            agreement: agreement(&old_fresh, &new_fresh),
-            value_gap: 0.0,
-            real: 0,
-            real_gap: 0.0,
-        },
-        noise: Sample {
-            user: user.to_owned(),
-            agreement: agreement(&old_fresh, &again),
-            value_gap: 0.0,
-            real: 0,
-            real_gap: 0.0,
-        },
-        old_ms,
-        new_ms,
-        tracks: [0, 0, 0],
-    });
-
     Ok(Some(UserReport {
         affinity,
         probes,
@@ -956,33 +899,6 @@ mod tests {
             "{plan}"
         );
         assert!(plan.matches("Sort Key").count() <= 1, "{plan}");
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-    async fn fresh_drops_return_what_the_legacy_query_returned(pool: PgPool) -> anyhow::Result<()> {
-        fixture(&pool).await?;
-        sqlx::query(
-            "UPDATE tracks SET sc_synced_at = now() - (sc_track_id::int % 1000) * interval '1 minute'",
-        )
-        .execute(&pool)
-        .await?;
-        sqlx::query(
-            "INSERT INTO track_sync_stamps (track_id, sc_synced_at) SELECT id, sc_synced_at FROM tracks",
-        )
-        .execute(&pool)
-        .await?;
-        let variants = vec!["u1".to_owned()];
-        for (limit, exclude) in [
-            (24, Vec::new()),
-            (5, Vec::new()),
-            (24, vec!["1301".to_owned(), "1402".to_owned()]),
-        ] {
-            let old = fresh_rows(&pool, true, &variants, limit, &exclude).await?;
-            let new = fresh_rows(&pool, false, &variants, limit, &exclude).await?;
-            assert!(!old.is_empty());
-            assert_eq!(new, old, "{limit} {}", exclude.len());
-        }
         Ok(())
     }
 

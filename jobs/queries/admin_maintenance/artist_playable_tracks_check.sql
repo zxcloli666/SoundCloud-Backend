@@ -3,6 +3,7 @@ WITH batch AS MATERIALIZED (
            track.sc_track_id,
            track.needs_duration_resolve = false AS ready_home,
            track.index_state = 'indexed' AS ready_wave,
+           track.sc_created_at,
            track.sharing = 'public'
                AND track.superseded_by IS NULL
                AND track.storage_state = 'ok'
@@ -24,7 +25,8 @@ WITH batch AS MATERIALIZED (
            batch.id AS track_id,
            batch.sc_track_id,
            batch.ready_home,
-           batch.ready_wave
+           batch.ready_wave,
+           batch.sc_created_at
     FROM batch
     JOIN track_artists AS credit ON credit.track_id = batch.id AND credit.role = 'primary'
     WHERE batch.playable
@@ -33,7 +35,8 @@ WITH batch AS MATERIALIZED (
            playable.track_id,
            playable.sc_track_id,
            playable.ready_home,
-           playable.ready_wave
+           playable.ready_wave,
+           playable.sc_created_at
     FROM bounds
     JOIN artist_playable_tracks AS playable ON playable.track_id > $1 AND playable.track_id <= bounds.upper
 )
@@ -45,9 +48,9 @@ SELECT bounds.last AS "last?",
            FULL JOIN stored ON stored.artist_id = expected.artist_id AND stored.track_id = expected.track_id
            WHERE expected.track_id IS NULL
               OR stored.track_id IS NULL
-              OR (expected.sc_track_id, expected.ready_home, expected.ready_wave)
+              OR (expected.sc_track_id, expected.ready_home, expected.ready_wave, expected.sc_created_at)
                  IS DISTINCT FROM
-                 (stored.sc_track_id, stored.ready_home, stored.ready_wave)
+                 (stored.sc_track_id, stored.ready_home, stored.ready_wave, stored.sc_created_at)
            ORDER BY 1
        ) AS "mismatched!"
 FROM bounds

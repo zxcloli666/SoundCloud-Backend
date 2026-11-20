@@ -6,6 +6,8 @@ pub mod clusters;
 pub mod cold_start;
 pub mod compare_reads;
 pub mod debias;
+#[cfg(test)]
+mod fresh_drops_tests;
 pub mod handlers;
 pub mod home_artists;
 pub mod home_wave;
