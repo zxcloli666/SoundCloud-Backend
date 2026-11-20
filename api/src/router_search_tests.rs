@@ -277,6 +277,7 @@ pub(super) async fn state_with(
             tokens,
             redis: redis_pool.clone(),
             miss: miss.clone(),
+            artwork: None,
         },
     );
     let users = crate::modules::users::UsersService::new(

@@ -223,7 +223,8 @@ fn canonical_target(action_type: &str, target: &str) -> String {
         "like_track" | "unlike_track" | "track_update" | "track_delete" | "comment" => {
             format!("soundcloud:tracks:{entity}")
         }
-        "like_playlist" | "unlike_playlist" | "playlist_delete" | "playlist_update" => {
+        "like_playlist" | "unlike_playlist" | "playlist_delete" | "playlist_update"
+        | "playlist_artwork" => {
             format!("soundcloud:playlists:{entity}")
         }
         "follow_user" | "unfollow_user" => format!("soundcloud:users:{entity}"),
