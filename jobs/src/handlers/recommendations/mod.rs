@@ -2,12 +2,14 @@ mod colike;
 pub(super) mod quality;
 mod wave_priority;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
 use tracing::info;
 
-use crate::queue::JobResult;
+use crate::queue::{JobError, JobResult};
+
+const COLIKE_RESUME_DELAY: Duration = Duration::from_secs(1);
 
 pub(super) struct RecommendationHandler {
     pool: PgPool,
@@ -25,6 +27,19 @@ impl RecommendationHandler {
     pub async fn rebuild_colike(&self) -> JobResult {
         let started = Instant::now();
         let rebuilt = colike::rebuild(&self.pool).await?;
+        if !rebuilt.finished {
+            info!(
+                batches = rebuilt.batches,
+                upserted = rebuilt.upserted,
+                removed = rebuilt.removed,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "recommendation colike paused at its cursor"
+            );
+            return Err(JobError::postponed(
+                COLIKE_RESUME_DELAY,
+                anyhow::anyhow!("recommendation colike continues from its cursor"),
+            ));
+        }
         info!(
             fresh = rebuilt.fresh,
             batches = rebuilt.batches,

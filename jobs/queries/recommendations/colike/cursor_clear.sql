@@ -1,0 +1,1 @@
+DELETE FROM recommendation_colike_cursor

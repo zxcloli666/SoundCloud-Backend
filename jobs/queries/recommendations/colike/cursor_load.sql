@@ -1,0 +1,1 @@
+SELECT next_a_id FROM recommendation_colike_cursor WHERE singleton

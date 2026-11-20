@@ -1934,6 +1934,20 @@
     {"cols": ["sc_playlist_id"], "expr": false, "keys": ["sc_playlist_id"], "name": "playlists_sc_playlist_id_key", "primary": false, "where": null}
    ]
   },
+  "recommendation_colike_cursor": {
+   "columns": [
+    {"default": null, "generated": false, "name": "next_a_id", "notnull": true, "type": "uuid"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "recommendation_colike_cursor_pkey", "primary": true, "where": null}
+   ]
+  },
   "recommendation_quality_models": {
    "columns": [
     {"default": null, "generated": false, "name": "examples", "notnull": true, "type": "integer"},
