@@ -1,0 +1,604 @@
+{
+ "seeds": [
+  {
+   "artist": "Michael Jackson",
+   "title": "Billie Jean",
+   "language": "en"
+  },
+  {
+   "artist": "Queen",
+   "title": "Bohemian Rhapsody",
+   "language": "en"
+  },
+  {
+   "artist": "Adele",
+   "title": "Someone Like You",
+   "language": "en"
+  },
+  {
+   "artist": "Ed Sheeran",
+   "title": "Shape of You",
+   "language": "en"
+  },
+  {
+   "artist": "The Weeknd",
+   "title": "Blinding Lights",
+   "language": "en"
+  },
+  {
+   "artist": "Taylor Swift",
+   "title": "Blank Space",
+   "language": "en"
+  },
+  {
+   "artist": "Billie Eilish",
+   "title": "bad guy",
+   "language": "en"
+  },
+  {
+   "artist": "Coldplay",
+   "title": "Yellow",
+   "language": "en"
+  },
+  {
+   "artist": "Eminem",
+   "title": "Lose Yourself",
+   "language": "en"
+  },
+  {
+   "artist": "Nirvana",
+   "title": "Smells Like Teen Spirit",
+   "language": "en"
+  },
+  {
+   "artist": "Oasis",
+   "title": "Wonderwall",
+   "language": "en"
+  },
+  {
+   "artist": "Imagine Dragons",
+   "title": "Radioactive",
+   "language": "en"
+  },
+  {
+   "artist": "Dua Lipa",
+   "title": "Levitating",
+   "language": "en"
+  },
+  {
+   "artist": "Bruno Mars",
+   "title": "Uptown Funk",
+   "language": "en"
+  },
+  {
+   "artist": "Rihanna",
+   "title": "Umbrella",
+   "language": "en"
+  },
+  {
+   "artist": "Maroon 5",
+   "title": "Sugar",
+   "language": "en"
+  },
+  {
+   "artist": "Linkin Park",
+   "title": "In the End",
+   "language": "en"
+  },
+  {
+   "artist": "Radiohead",
+   "title": "Creep",
+   "language": "en"
+  },
+  {
+   "artist": "Lady Gaga",
+   "title": "Poker Face",
+   "language": "en"
+  },
+  {
+   "artist": "Post Malone",
+   "title": "Circles",
+   "language": "en"
+  },
+  {
+   "artist": "Harry Styles",
+   "title": "As It Was",
+   "language": "en"
+  },
+  {
+   "artist": "Olivia Rodrigo",
+   "title": "drivers license",
+   "language": "en"
+  },
+  {
+   "artist": "Lana Del Rey",
+   "title": "Summertime Sadness",
+   "language": "en"
+  },
+  {
+   "artist": "Arctic Monkeys",
+   "title": "Do I Wanna Know",
+   "language": "en"
+  },
+  {
+   "artist": "The Beatles",
+   "title": "Let It Be",
+   "language": "en"
+  },
+  {
+   "artist": "Elton John",
+   "title": "Your Song",
+   "language": "en"
+  },
+  {
+   "artist": "Sia",
+   "title": "Chandelier",
+   "language": "en"
+  },
+  {
+   "artist": "Justin Bieber",
+   "title": "Sorry",
+   "language": "en"
+  },
+  {
+   "artist": "Katy Perry",
+   "title": "Roar",
+   "language": "en"
+  },
+  {
+   "artist": "Green Day",
+   "title": "Boulevard of Broken Dreams",
+   "language": "en"
+  },
+  {
+   "artist": "Земфира",
+   "title": "Хочешь",
+   "language": "ru"
+  },
+  {
+   "artist": "Баста",
+   "title": "Сансара",
+   "language": "ru"
+  },
+  {
+   "artist": "Скриптонит",
+   "title": "Положение",
+   "language": "ru"
+  },
+  {
+   "artist": "Кино",
+   "title": "Группа крови",
+   "language": "ru"
+  },
+  {
+   "artist": "Ленинград",
+   "title": "Экспонат",
+   "language": "ru"
+  },
+  {
+   "artist": "Тима Белорусских",
+   "title": "Мокрые кроссы",
+   "language": "ru"
+  },
+  {
+   "artist": "Мумий Тролль",
+   "title": "Владивосток 2000",
+   "language": "ru"
+  },
+  {
+   "artist": "Сплин",
+   "title": "Выхода нет",
+   "language": "ru"
+  },
+  {
+   "artist": "Максим",
+   "title": "Знаешь ли ты",
+   "language": "ru"
+  },
+  {
+   "artist": "Нервы",
+   "title": "Самый дорогой человек",
+   "language": "ru"
+  },
+  {
+   "artist": "Монеточка",
+   "title": "Каждый раз",
+   "language": "ru"
+  },
+  {
+   "artist": "Баста",
+   "title": "Выпускной",
+   "language": "ru"
+  },
+  {
+   "artist": "Zivert",
+   "title": "Life",
+   "language": "ru"
+  },
+  {
+   "artist": "Макс Корж",
+   "title": "Малый повзрослел",
+   "language": "ru"
+  },
+  {
+   "artist": "Ляпис Трубецкой",
+   "title": "Капитал",
+   "language": "ru"
+  },
+  {
+   "artist": "Luis Fonsi",
+   "title": "Despacito",
+   "language": "es"
+  },
+  {
+   "artist": "Shakira",
+   "title": "Hips Don't Lie",
+   "language": "es"
+  },
+  {
+   "artist": "Enrique Iglesias",
+   "title": "Bailando",
+   "language": "es"
+  },
+  {
+   "artist": "Bad Bunny",
+   "title": "Dakiti",
+   "language": "es"
+  },
+  {
+   "artist": "J Balvin",
+   "title": "Mi Gente",
+   "language": "es"
+  },
+  {
+   "artist": "Rosalia",
+   "title": "Malamente",
+   "language": "es"
+  },
+  {
+   "artist": "Maluma",
+   "title": "Felices los 4",
+   "language": "es"
+  },
+  {
+   "artist": "Juanes",
+   "title": "La Camisa Negra",
+   "language": "es"
+  },
+  {
+   "artist": "Manu Chao",
+   "title": "Me gustas tu",
+   "language": "es"
+  },
+  {
+   "artist": "Ricky Martin",
+   "title": "Vida",
+   "language": "es"
+  },
+  {
+   "artist": "Daddy Yankee",
+   "title": "Gasolina",
+   "language": "es"
+  },
+  {
+   "artist": "Camila",
+   "title": "Todo Cambio",
+   "language": "es"
+  },
+  {
+   "artist": "Alejandro Sanz",
+   "title": "Corazon Partio",
+   "language": "es"
+  },
+  {
+   "artist": "Jesse & Joy",
+   "title": "Espacio Sideral",
+   "language": "es"
+  },
+  {
+   "artist": "Karol G",
+   "title": "Tusa",
+   "language": "es"
+  },
+  {
+   "artist": "Rammstein",
+   "title": "Du hast",
+   "language": "de"
+  },
+  {
+   "artist": "Nena",
+   "title": "99 Luftballons",
+   "language": "de"
+  },
+  {
+   "artist": "Tokio Hotel",
+   "title": "Durch den Monsun",
+   "language": "de"
+  },
+  {
+   "artist": "Peter Fox",
+   "title": "Alles neu",
+   "language": "de"
+  },
+  {
+   "artist": "Sido",
+   "title": "Mein Block",
+   "language": "de"
+  },
+  {
+   "artist": "Helene Fischer",
+   "title": "Atemlos durch die Nacht",
+   "language": "de"
+  },
+  {
+   "artist": "Mark Forster",
+   "title": "Au revoir",
+   "language": "de"
+  },
+  {
+   "artist": "Cro",
+   "title": "Easy",
+   "language": "de"
+  },
+  {
+   "artist": "Silbermond",
+   "title": "Das Beste",
+   "language": "de"
+  },
+  {
+   "artist": "Herbert Gronemeyer",
+   "title": "Mensch",
+   "language": "de"
+  },
+  {
+   "artist": "Stromae",
+   "title": "Papaoutai",
+   "language": "fr"
+  },
+  {
+   "artist": "Edith Piaf",
+   "title": "La Vie en rose",
+   "language": "fr"
+  },
+  {
+   "artist": "Daft Punk",
+   "title": "Get Lucky",
+   "language": "fr"
+  },
+  {
+   "artist": "Indila",
+   "title": "Derniere danse",
+   "language": "fr"
+  },
+  {
+   "artist": "Zaz",
+   "title": "Je veux",
+   "language": "fr"
+  },
+  {
+   "artist": "Christine and the Queens",
+   "title": "Tilted",
+   "language": "fr"
+  },
+  {
+   "artist": "Angele",
+   "title": "Balance ton quoi",
+   "language": "fr"
+  },
+  {
+   "artist": "Maitre Gims",
+   "title": "Bella",
+   "language": "fr"
+  },
+  {
+   "artist": "Louane",
+   "title": "Je vole",
+   "language": "fr"
+  },
+  {
+   "artist": "Aya Nakamura",
+   "title": "Djadja",
+   "language": "fr"
+  },
+  {
+   "artist": "Michel Telo",
+   "title": "Ai se eu te pego",
+   "language": "pt"
+  },
+  {
+   "artist": "Anitta",
+   "title": "Envolver",
+   "language": "pt"
+  },
+  {
+   "artist": "Luan Santana",
+   "title": "Meteoro",
+   "language": "pt"
+  },
+  {
+   "artist": "Marilia Mendonca",
+   "title": "Infiel",
+   "language": "pt"
+  },
+  {
+   "artist": "Jorge e Mateus",
+   "title": "Pode Chorar",
+   "language": "pt"
+  },
+  {
+   "artist": "Gusttavo Lima",
+   "title": "Balada",
+   "language": "pt"
+  },
+  {
+   "artist": "Ivete Sangalo",
+   "title": "Sorte Grande",
+   "language": "pt"
+  },
+  {
+   "artist": "Tim Maia",
+   "title": "Ate Que Enfim",
+   "language": "pt"
+  },
+  {
+   "artist": "Caetano Veloso",
+   "title": "Sozinho",
+   "language": "pt"
+  },
+  {
+   "artist": "Henrique e Juliano",
+   "title": "Flutuando",
+   "language": "pt"
+  },
+  {
+   "artist": "Maneskin",
+   "title": "Zitti e buoni",
+   "language": "it"
+  },
+  {
+   "artist": "Eros Ramazzotti",
+   "title": "Piu bella cosa",
+   "language": "it"
+  },
+  {
+   "artist": "Laura Pausini",
+   "title": "La solitudine",
+   "language": "it"
+  },
+  {
+   "artist": "Tiziano Ferro",
+   "title": "Perdono",
+   "language": "it"
+  },
+  {
+   "artist": "Andrea Bocelli",
+   "title": "Con te partiro",
+   "language": "it"
+  },
+  {
+   "artist": "Vasco Rossi",
+   "title": "Albachiara",
+   "language": "it"
+  },
+  {
+   "artist": "Mahmood",
+   "title": "Soldi",
+   "language": "it"
+  },
+  {
+   "artist": "Jovanotti",
+   "title": "Il più grande spettacolo dopo il Big Bang",
+   "language": "it"
+  },
+  {
+   "artist": "Elisa",
+   "title": "Luce",
+   "language": "it"
+  },
+  {
+   "artist": "Giorgia",
+   "title": "Di sole e d'azzurro",
+   "language": "it"
+  },
+  {
+   "artist": "YOASOBI",
+   "title": "Yoru ni Kakeru",
+   "language": "ja"
+  },
+  {
+   "artist": "Kenshi Yonezu",
+   "title": "Lemon",
+   "language": "ja"
+  },
+  {
+   "artist": "Official HIGE DANdism",
+   "title": "Pretender",
+   "language": "ja"
+  },
+  {
+   "artist": "Ado",
+   "title": "Usseewa",
+   "language": "ja"
+  },
+  {
+   "artist": "Fujii Kaze",
+   "title": "Shinunoga E-Wa",
+   "language": "ja"
+  },
+  {
+   "artist": "LiSA",
+   "title": "Gurenge",
+   "language": "ja"
+  },
+  {
+   "artist": "King Gnu",
+   "title": "Hakujitsu",
+   "language": "ja"
+  },
+  {
+   "artist": "Aimer",
+   "title": "Zankyosanka",
+   "language": "ja"
+  },
+  {
+   "artist": "Eve",
+   "title": "Kaikai Kitan",
+   "language": "ja"
+  },
+  {
+   "artist": "Yuuri",
+   "title": "Dried Flower",
+   "language": "ja"
+  },
+  {
+   "artist": "BTS",
+   "title": "Dynamite",
+   "language": "ko"
+  },
+  {
+   "artist": "BLACKPINK",
+   "title": "How You Like That",
+   "language": "ko"
+  },
+  {
+   "artist": "PSY",
+   "title": "Gangnam Style",
+   "language": "ko"
+  },
+  {
+   "artist": "IU",
+   "title": "Blueming",
+   "language": "ko"
+  },
+  {
+   "artist": "NewJeans",
+   "title": "Ditto",
+   "language": "ko"
+  },
+  {
+   "artist": "Stray Kids",
+   "title": "God's Menu",
+   "language": "ko"
+  },
+  {
+   "artist": "TWICE",
+   "title": "Feel Special",
+   "language": "ko"
+  },
+  {
+   "artist": "EXO",
+   "title": "Growl",
+   "language": "ko"
+  },
+  {
+   "artist": "Big Bang",
+   "title": "Fantastic Baby",
+   "language": "ko"
+  },
+  {
+   "artist": "aespa",
+   "title": "Next Level",
+   "language": "ko"
+  }
+ ]
+}

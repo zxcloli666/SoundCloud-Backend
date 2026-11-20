@@ -31,6 +31,7 @@ class Track:
     path: str = "qwen"
     note: str = ""
     tags: tuple[str, ...] = field(default_factory=tuple)
+    reference_words: str | None = None
 
     @property
     def positive(self) -> bool:
