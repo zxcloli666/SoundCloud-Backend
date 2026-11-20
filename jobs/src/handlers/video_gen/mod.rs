@@ -26,8 +26,8 @@ use crate::objects::{Blobs, Objects, ObjectsError};
 use crate::queue::JobResult;
 
 pub use self::director::Director;
-use self::lanes::{Nodes, STAGE_LANES};
 pub use self::lanes::{Fleet, Lanes};
+use self::lanes::{Nodes, STAGE_LANES};
 use self::parts::Parts;
 use self::state::{DIRECTOR_STAGES, LANE_STAGES};
 
