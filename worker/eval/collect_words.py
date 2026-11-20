@@ -28,6 +28,7 @@ from eval.manifest import Manifest, Track, plain_lines
 PER_QUERY = 2
 MIN_WORD_LINES = 8
 MIN_WORDS = 60
+DUPLICATE_DURATION_S = 2.0
 
 log = logging.getLogger("eval.collect")
 
@@ -46,10 +47,10 @@ def run(seeds_path: Path, data: Path, manifest_path: Path, skip_download: bool) 
     (data / "texts").mkdir(parents=True, exist_ok=True)
     tracks: list[Track] = []
     skips: Counter[str] = Counter()
-    seen: set[str] = set()
+    taken: dict[str, list[float]] = {}
     for index, query in enumerate(queries, start=1):
         log.info("query %d/%d: %s - %s (%s)", index, len(queries), *query_fields(query))
-        for record in word_synced(query, seen):
+        for record in word_synced(query, taken):
             try:
                 track = collect_record(record, query, data, skip_download)
             except (CollectError, lrclib.LrclibError, lyricsfile.LyricsfileError) as error:
@@ -76,19 +77,21 @@ def query_fields(query: Query) -> tuple[str, str, str]:
     return query.artist, query.title, query.language
 
 
-def word_synced(query: Query, seen: set[str]) -> list[Mapping[str, object]]:
+def word_synced(query: Query, taken: dict[str, list[float]]) -> list[Mapping[str, object]]:
     chosen: list[Mapping[str, object]] = []
     for record in search(f"{query.artist} {query.title}"):
         if not record.get("hasWordSync") or record.get("instrumental"):
             continue
-        pair = pair_key(str(record.get("artistName")), str(record.get("trackName")))
-        if pair in seen:
-            log.info("skip %s: duplicate %s", record.get("id"), pair)
+        title = title_key(str(record.get("trackName")))
+        duration = record.get("duration")
+        if is_duplicate(taken.get(title, []), duration):
+            log.info("skip %s: duplicate of %s", record.get("id"), title)
             continue
         if len(chosen) == PER_QUERY:
             log.info("skip %s: more than %d per query", record.get("id"), PER_QUERY)
             continue
-        seen.add(pair)
+        if isinstance(duration, int | float):
+            taken.setdefault(title, []).append(float(duration))
         chosen.append(record)
     if not chosen:
         log.warning("skip query: no word-synced records")
@@ -107,8 +110,14 @@ def search(text: str) -> list[Mapping[str, object]]:
     return [item for item in payload if isinstance(item, dict)]
 
 
-def pair_key(artist: str, title: str) -> str:
-    return UNSAFE.sub(" ", unidecode(f"{artist} {title}").lower()).strip()
+def title_key(title: str) -> str:
+    return UNSAFE.sub(" ", unidecode(title).lower()).strip()
+
+
+def is_duplicate(durations: Sequence[float], duration: object) -> bool:
+    if not isinstance(duration, int | float):
+        return False
+    return any(abs(duration - known) <= DUPLICATE_DURATION_S for known in durations)
 
 
 def collect_record(
@@ -151,7 +160,7 @@ def collect_record(
         input_source="provider_plain",
         reference_lrc=f"texts/{audio_id}.lrc",
         expected="ok",
-        cluster=audio_id,
+        cluster=title_key(str(full["trackName"])) or audio_id,
         path=expected_path(language),
         note=(
             f"{full['artistName']} - {full['trackName']} {language}"

@@ -17,6 +17,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
+from eval import onsets as onsets_module
 from eval import reference as reference_tools
 from eval import stats
 from eval import words as words_module
@@ -31,7 +32,7 @@ from worker.domain.lyrics.tokens import is_cjk, tempo_units, tokenize
 from worker.domain.lyrics.transcribe import TranscribeLane
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
-from worker.settings import Settings
+from worker.settings import AudioSection, Settings
 
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 LANE_LOGGER = "worker.domain.lyrics.transcribe"
@@ -86,6 +87,7 @@ class TrackResult:
     lines_total: int | None
     lines_unplaced: int | None
     words: words_module.WordResult | None = None
+    onsets: onsets_module.OnsetResult | None = None
 
     @property
     def accepted(self) -> bool:
@@ -150,6 +152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ids", default="")
     parser.add_argument("--kinds", default="")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--onsets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--config", type=Path, default=WORKER_ROOT / "config")
     args = parser.parse_args(argv)
     if not args.data or not args.data.is_dir():
@@ -164,7 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     journal = Journal(out.with_suffix(".partial.jsonl"))
     report = asyncio.run(
-        run(settings, manifest, tracks, args.data, args.strategy, args.device, journal)
+        run(settings, manifest, tracks, args.data, args.strategy, args.device, journal, args.onsets)
     )
     out.write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     journal.remove()
@@ -227,6 +230,7 @@ async def run(
     strategy: str,
     device: str,
     journal: Journal,
+    judge_onsets: bool,
 ) -> dict[str, object]:
     sync = settings.sync
     if strategy == "global_ctc":
@@ -257,7 +261,16 @@ async def run(
                 result = crashed_result(track, data)
             else:
                 journal.starting(track.id)
-                result = await evaluate(lane, engines, counters, capture, track, data, words_gate)
+                result = await evaluate(
+                    lane,
+                    engines,
+                    counters,
+                    capture,
+                    track,
+                    data,
+                    words_gate,
+                    settings.audio if judge_onsets else None,
+                )
             journal.finished(result)
             results.append(result)
             log.info(
@@ -295,6 +308,7 @@ async def evaluate(
     track: Track,
     data: Path,
     words_gate: float,
+    onset_audio: AudioSection | None,
 ) -> TrackResult:
     audio = data / track.audio
     text = (data / track.input_text).read_text(encoding="utf-8")
@@ -321,6 +335,12 @@ async def evaluate(
     wall = time.perf_counter() - started
     fields = dict(outcome.fields)
     times, coverage = compare(str(fields.get("synced_lrc", "")), reference)
+    words = score_words(track, fields, capture.last, words_gate, data)
+    onsets = None
+    if words is not None and onset_audio is not None:
+        onsets = await onsets_module.judge(
+            engines, onset_audio, audio, words, Deadline.after(DEADLINE_S)
+        )
     return TrackResult(
         id=track.id,
         kind=track.kind,
@@ -349,7 +369,8 @@ async def evaluate(
         wall_s=wall,
         lines_total=int(fields["lines_total"]) if "lines_total" in fields else None,
         lines_unplaced=int(fields["lines_unplaced"]) if "lines_unplaced" in fields else None,
-        words=score_words(track, fields, capture.last, words_gate, data),
+        words=words,
+        onsets=onsets,
     )
 
 
@@ -401,6 +422,7 @@ def result_to_json(result: TrackResult) -> dict[str, object]:
     payload["line_times"] = {str(line): list(pair) for line, pair in result.line_times.items()}
     payload["line_features"] = {str(line): list(row) for line, row in result.line_features.items()}
     payload["words"] = words_module.to_json(result.words) if result.words else None
+    payload["onsets"] = onsets_module.to_json(result.onsets) if result.onsets else None
     return payload
 
 
@@ -408,9 +430,10 @@ def result_from_json(entry: Mapping[str, object]) -> TrackResult:
     values = {
         field.name: entry[field.name]
         for field in dataclasses.fields(TrackResult)
-        if field.name != "words"
+        if field.name not in ("words", "onsets")
     }
     values["words"] = words_module.from_json(entry.get("words"))
+    values["onsets"] = onsets_module.from_json(entry.get("onsets"))
     values["line_times"] = {
         int(line): (float(pair[0]), float(pair[1]))
         for line, pair in dict(values["line_times"]).items()
@@ -522,6 +545,9 @@ def with_word_metrics(summary: dict[str, object], positives: Sequence[TrackResul
     scored = [result.words for result in positives if result.words]
     if scored:
         summary["word_metrics"] = words_module.metrics(scored)
+    judged = [result.onsets for result in positives if result.onsets]
+    if judged:
+        summary["onset_judge"] = onsets_module.metrics(judged)
 
 
 def grouped(
@@ -654,6 +680,7 @@ def track_payload(result: TrackResult) -> dict[str, object]:
             for line, row in result.line_features.items()
         },
         "word_metrics": words_module.track_metrics(result.words) if result.words else None,
+        "onset_judge": onsets_module.track_summary(result.onsets) if result.onsets else None,
     }
 
 
