@@ -55,6 +55,7 @@ SELECT v.cls FROM (VALUES
     ('artist_playable_tracks', 'C'),
     ('artist_sc_accounts', 'C'),
     ('artist_socials', 'C'),
+    ('artist_track_titles', 'P'),
     ('artists', 'C'),
     ('audio_index_wire_state', 'P'),
     ('background_job_enqueues', 'P'),

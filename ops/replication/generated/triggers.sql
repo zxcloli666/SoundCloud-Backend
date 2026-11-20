@@ -20,6 +20,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_interest;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_playable_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_sc_accounts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_socials;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artist_track_titles;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_audio_index_wire_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_background_job_enqueues;
@@ -1301,6 +1302,8 @@ ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_track_titles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_track_titles', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_core_col_artists()
 RETURNS trigger
@@ -9933,6 +9936,7 @@ FROM (VALUES
     ('guard', 'artist_playable_tracks', 'scd_guard_artist_playable_tracks'),
     ('guard', 'artist_sc_accounts', 'scd_guard_artist_sc_accounts'),
     ('guard', 'artist_socials', 'scd_guard_artist_socials'),
+    ('guard', 'artist_track_titles', 'scd_guard_artist_track_titles'),
     ('guard', 'artists', 'scd_guard_artists'),
     ('guard', 'audio_index_wire_state', 'scd_guard_audio_index_wire_state'),
     ('guard', 'background_job_enqueues', 'scd_guard_background_job_enqueues'),
@@ -10106,6 +10110,7 @@ BEGIN
             ('artist_socials', 'zz_owner'),
             ('artist_socials', 'zz_owner_copy'),
             ('artist_socials', 'zzz_suppress'),
+            ('artist_track_titles', 'zz_guard'),
             ('artists', 'zz_core_col'),
             ('artists', 'zz_guard'),
             ('artists', 'zz_owner'),
