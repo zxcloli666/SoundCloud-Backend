@@ -442,7 +442,8 @@ fn clean_hints(hints: &LyricsHints) -> LyricsHints {
         && !title_forms(&format!("x - {}", parsed.cleaned_title))
             .markers
             .is_empty();
-    if parsed.cleaned_title.is_empty() || version_tail {
+    let lost_remix = is_remix_title(&hints.title) && !is_remix_title(&parsed.cleaned_title);
+    if parsed.cleaned_title.is_empty() || version_tail || lost_remix {
         return hints.clone();
     }
     let mut cleaned = hints.clone();
@@ -2451,5 +2452,20 @@ mod tests {
         );
         let candidates = vec![named("Another Song", "Someone", 200, true)];
         assert!(select_candidate(&hints, candidates).is_none());
+    }
+
+    #[test]
+    fn a_glued_remix_suffix_survives_cleaning() {
+        let title = "\u{6d77}\u{9614}\u{5929}\u{7a7a} (DJ\u{6728}\u{6708}Remix)\u{ff5c}Tr\u{1edd}i cao bi\u{1ec3}n r\u{1ed9}ng";
+        let cleaned = clean_hints(&uploaded(title, "Zxuan", 104_306));
+        assert_eq!(cleaned.title, title);
+        let original = "\u{6d77}\u{9614}\u{5929}\u{7a7a}";
+        let candidates = vec![
+            named(original, "Beyond", 325, true),
+            named(original, "BEYOND", 320, true),
+            named(original, "BEYOND", 322, true),
+        ];
+        let selected = select_candidate(&cleaned, candidates).unwrap();
+        assert!(selected.synced_lrc.is_none());
     }
 }
