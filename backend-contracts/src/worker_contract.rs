@@ -8,21 +8,21 @@ use crate::pipeline::{
     COLLAB_VECTORS_OBJECT_TEMPLATE, COMPLETE_WINDOW_SECONDS, CollabTrainRequest, CollabTrainResult,
     CompleteData, CompleteRequest, DEADLINE_HEADER, DONE_EMBED_LYRICS, DONE_ENCODE, DONE_HIGHLIGHT,
     DONE_INDEX_AUDIO, DONE_TRAIN_COLLAB, DONE_TRAIN_TASTE, DONE_TRANSCRIBE, DONE_VIDEO_ASSEMBLE,
-    DONE_VIDEO_FIND, DONE_VIDEO_KEYFRAME, DONE_VIDEO_SHOT, DONE_VIDEO_VLM, EMBED_LYRICS,
-    EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest, EncodeResult,
-    HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult, INDEX_AUDIO,
-    INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult, MAX_COMPLETE_MESSAGE_BYTES,
-    MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES,
-    MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES, MAX_SAY_TEXT_CHARS,
-    MAX_VIDEO_PARTS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError, SAY_WINDOW_SECONDS,
-    SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB, TRAIN_COLLAB_STREAM,
-    TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM, TasteTrainRequest,
-    TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_ASSEMBLE,
+    DONE_VIDEO_FIND, DONE_VIDEO_KEYFRAME, DONE_VIDEO_SHOT, DONE_VIDEO_VLM, DONE_VIDEO_VLM_GPU,
+    EMBED_LYRICS, EMBED_LYRICS_STREAM, ENCODE_STREAM, ENCODE_TEXT_NEW, EncodeModel, EncodeRequest,
+    EncodeResult, HEADERS, HIGHLIGHT_STREAM, HIGHLIGHT_TRACK, HighlightRequest, HighlightResult,
+    INDEX_AUDIO, INDEX_AUDIO_STREAM, LyricsEmbeddingRequest, LyricsEmbeddingResult,
+    MAX_COMPLETE_MESSAGE_BYTES, MAX_COMPLETE_MESSAGES, MAX_COMPLETE_SCHEMA_BYTES,
+    MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS, MAX_COMPLETE_TOKENS, MAX_MESSAGE_BYTES,
+    MAX_SAY_TEXT_CHARS, MAX_VIDEO_PARTS, PipelineStreamSpec, REPLY_TO_HEADER, RpcError,
+    SAY_WINDOW_SECONDS, SPEAK_RPC_STREAM, SPEAK_SAY, SayData, SayRequest, TRAIN_COLLAB,
+    TRAIN_COLLAB_STREAM, TRAIN_TASTE, TRAIN_TASTE_STREAM, TRANSCRIBE_AUDIO, TRANSCRIBE_STREAM,
+    TasteTrainRequest, TasteTrainResult, TranscriptionRequest, TranscriptionResult, VIDEO_ASSEMBLE,
     VIDEO_ASSEMBLE_STREAM, VIDEO_FIND, VIDEO_FIND_STREAM, VIDEO_KEYFRAME, VIDEO_KEYFRAME_STREAM,
-    VIDEO_PART_BYTES, VIDEO_SHOT, VIDEO_SHOT_STREAM, VIDEO_VLM, VIDEO_VLM_STREAM, VideoFindRequest,
-    VideoFindResult, VideoVlmRequest, VideoVlmResult, WORKER_HEALTH_SUBJECT,
-    WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES, WORKER_STATUS_SUBJECT, WORKER_STREAMS,
-    collab_vectors_suffix,
+    VIDEO_PART_BYTES, VIDEO_SHOT, VIDEO_SHOT_STREAM, VIDEO_VLM, VIDEO_VLM_GPU,
+    VIDEO_VLM_GPU_STREAM, VIDEO_VLM_STREAM, VideoFindRequest, VideoFindResult, VideoVlmRequest,
+    VideoVlmResult, WORKER_HEALTH_SUBJECT, WORKER_INVALID_SUBJECT, WORKER_OBJECT_STORES,
+    WORKER_STATUS_SUBJECT, WORKER_STREAMS, collab_vectors_suffix,
 };
 use crate::reasons::{FailureClass, WorkerStatus, reasons_in, reasons_of};
 use crate::vector_store::{
@@ -65,13 +65,14 @@ pub enum WorkerLane {
     Highlight,
     VideoFind,
     VideoVlm,
+    VideoVlmGpu,
     VideoKeyframe,
     VideoShot,
     VideoAssemble,
 }
 
 impl WorkerLane {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Audio,
         Self::Lyrics,
         Self::Transcribe,
@@ -83,6 +84,7 @@ impl WorkerLane {
         Self::Highlight,
         Self::VideoFind,
         Self::VideoVlm,
+        Self::VideoVlmGpu,
         Self::VideoKeyframe,
         Self::VideoShot,
         Self::VideoAssemble,
@@ -101,6 +103,7 @@ impl WorkerLane {
             Self::Highlight => "highlight",
             Self::VideoFind => "video-find",
             Self::VideoVlm => "video-vlm",
+            Self::VideoVlmGpu => "video-vlm-gpu",
             Self::VideoKeyframe => "video-keyframe",
             Self::VideoShot => "video-shot",
             Self::VideoAssemble => "video-assemble",
@@ -120,6 +123,7 @@ impl WorkerLane {
             Self::Highlight => &HIGHLIGHT_LANE,
             Self::VideoFind => &VIDEO_FIND_LANE,
             Self::VideoVlm => &VIDEO_VLM_LANE,
+            Self::VideoVlmGpu => &VIDEO_VLM_GPU_LANE,
             Self::VideoKeyframe => &VIDEO_KEYFRAME_LANE,
             Self::VideoShot => &VIDEO_SHOT_LANE,
             Self::VideoAssemble => &VIDEO_ASSEMBLE_LANE,
@@ -479,6 +483,28 @@ pub const VIDEO_VLM_LANE: WorkerLaneSpec = WorkerLaneSpec {
     priority_group: None,
 };
 
+pub const VIDEO_VLM_GPU_LANE: WorkerLaneSpec = WorkerLaneSpec {
+    lane: WorkerLane::VideoVlmGpu,
+    stream: VIDEO_VLM_GPU_STREAM,
+    durable: "video-vlm-gpu-workers",
+    filter_subject: VIDEO_VLM_GPU,
+    done_subject: Some(DONE_VIDEO_VLM_GPU),
+    correlation_prefix: "video_vlm_gpu",
+    correlation: &["sc_track_id", "attempt"],
+    echo: &[("sc_track_id", "sc_track_id"), ("attempt", "attempt")],
+    deadline_s: 600,
+    ack_wait_s: 60,
+    max_deliver: WORKER_MAX_DELIVER,
+    max_ack_pending: 4,
+    nak: Some(NakBackoff {
+        base_s: 60,
+        cap_s: 1800,
+    }),
+    result_max_bytes: 800_000,
+    public: true,
+    priority_group: None,
+};
+
 pub const VIDEO_KEYFRAME_LANE: WorkerLaneSpec = WorkerLaneSpec {
     lane: WorkerLane::VideoKeyframe,
     stream: VIDEO_KEYFRAME_STREAM,
@@ -557,7 +583,7 @@ pub const VIDEO_ASSEMBLE_LANE: WorkerLaneSpec = WorkerLaneSpec {
     priority_group: None,
 };
 
-pub const WORKER_LANES: [WorkerLaneSpec; 14] = [
+pub const WORKER_LANES: [WorkerLaneSpec; 15] = [
     AUDIO_LANE,
     LYRICS_LANE,
     TRANSCRIBE_LANE,
@@ -569,6 +595,7 @@ pub const WORKER_LANES: [WorkerLaneSpec; 14] = [
     HIGHLIGHT_LANE,
     VIDEO_FIND_LANE,
     VIDEO_VLM_LANE,
+    VIDEO_VLM_GPU_LANE,
     VIDEO_KEYFRAME_LANE,
     VIDEO_SHOT_LANE,
     VIDEO_ASSEMBLE_LANE,
@@ -818,6 +845,8 @@ pub fn schemas() -> BTreeMap<String, Value> {
         done::<VideoFindResult>(WorkerLane::VideoFind),
         request::<VideoVlmRequest>(VIDEO_VLM),
         done::<VideoVlmResult>(WorkerLane::VideoVlm),
+        request::<VideoVlmRequest>(VIDEO_VLM_GPU),
+        done::<VideoVlmResult>(WorkerLane::VideoVlmGpu),
         request::<VideoKeyframeRequest>(VIDEO_KEYFRAME),
         done::<VideoGenResult>(WorkerLane::VideoKeyframe),
         request::<VideoShotRequest>(VIDEO_SHOT),
@@ -944,7 +973,9 @@ fn required_on(lane: WorkerLane, status: WorkerStatus) -> Vec<&'static str> {
             "loop",
             "scores",
         ],
-        (WorkerLane::VideoVlm, WorkerStatus::Ok) => vec!["label", "model", "scores"],
+        (WorkerLane::VideoVlm | WorkerLane::VideoVlmGpu, WorkerStatus::Ok) => {
+            vec!["label", "model", "scores"]
+        }
         (
             WorkerLane::VideoKeyframe | WorkerLane::VideoShot | WorkerLane::VideoAssemble,
             WorkerStatus::Ok,
@@ -1025,6 +1056,7 @@ mod tests {
             (WorkerLane::Highlight, 12, 1050, 87_450, None),
             (WorkerLane::VideoFind, 12, 3900, 90_300, None),
             (WorkerLane::VideoVlm, 12, 3900, 90_300, None),
+            (WorkerLane::VideoVlmGpu, 12, 4200, 90_600, Some(660)),
             (WorkerLane::VideoKeyframe, 12, 5700, 92_100, Some(960)),
             (WorkerLane::VideoShot, 12, 10_200, 96_600, Some(1860)),
             (WorkerLane::VideoAssemble, 12, 3900, 90_300, None),
@@ -1139,6 +1171,7 @@ mod tests {
                 "lyrics",
                 "transcribe",
                 "speak",
+                "video-vlm-gpu",
                 "video-keyframe",
                 "video-shot"
             ]
@@ -1738,6 +1771,38 @@ mod tests {
             WorkerLane::VideoVlm
                 .reasons()
                 .contains(&WorkerReason::InputsGone)
+        );
+    }
+
+    #[test]
+    fn the_gpu_video_vlm_lane_reaches_public_nodes_with_the_same_request_and_answer() {
+        let schemas = schemas();
+        let exported = contract();
+        let lane = &exported["lanes"]["video-vlm-gpu"];
+
+        assert_eq!(lane["stream"], "VIDEO_VLM_GPU");
+        assert_eq!(lane["durable"], "video-vlm-gpu-workers");
+        assert_eq!(lane["filter_subject"], VIDEO_VLM_GPU);
+        assert_eq!(lane["done_subject"], DONE_VIDEO_VLM_GPU);
+        assert_eq!(lane["public"], true);
+        assert_eq!(
+            schemas[VIDEO_VLM_GPU]["properties"],
+            schemas[VIDEO_VLM]["properties"]
+        );
+        assert_eq!(
+            rule_of(&schemas, DONE_VIDEO_VLM_GPU, "ok"),
+            rule_of(&schemas, DONE_VIDEO_VLM, "ok")
+        );
+        assert!(
+            WorkerLane::VideoVlmGpu
+                .reopenable()
+                .contains(&WorkerReason::PublicNodeTimeout)
+        );
+        assert!(
+            !VIDEO_VLM_STREAM
+                .subjects
+                .iter()
+                .any(|subject| VIDEO_VLM_GPU.starts_with(subject.trim_end_matches('>')))
         );
     }
 
