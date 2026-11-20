@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use catalog_normalize::{name_similarity, normalize_title, title_forms, works_match};
+use catalog_normalize::{
+    name_similarity, normalize_title, split_artist_list, title_forms, works_match,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -565,6 +567,18 @@ fn duration_gap(hints: &LyricsHints, candidate: &LyricsCandidate) -> i64 {
     }
 }
 
+fn artist_similarity(left: &str, right: &str) -> f32 {
+    let left_parts = split_artist_list(left);
+    let right_parts = split_artist_list(right);
+    let mut best = name_similarity(left, right);
+    for l in &left_parts {
+        for r in &right_parts {
+            best = best.max(name_similarity(l, r));
+        }
+    }
+    best
+}
+
 fn matches_hints(hints: &LyricsHints, candidate: &LyricsCandidate) -> bool {
     if candidate.exact {
         return true;
@@ -582,7 +596,7 @@ fn matches_hints(hints: &LyricsHints, candidate: &LyricsCandidate) -> bool {
     }
     if let Some(artist) = candidate.artist.as_deref()
         && !hints.artist.trim().is_empty()
-        && name_similarity(&hints.artist, artist) < 0.72
+        && artist_similarity(&hints.artist, artist) < 0.72
     {
         return false;
     }
@@ -611,7 +625,7 @@ fn candidate_rank(
     let artist_score = candidate
         .artist
         .as_deref()
-        .map(|artist| (name_similarity(&hints.artist, artist) * 1000.0) as u16)
+        .map(|artist| (artist_similarity(&hints.artist, artist) * 1000.0) as u16)
         .unwrap_or(0);
     (
         u8::from(candidate.exact),
@@ -1808,6 +1822,63 @@ mod tests {
         };
 
         assert!(!matches_hints(&hints(), &candidate));
+    }
+
+    fn artist_candidate(artist: &str) -> LyricsCandidate {
+        LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: None,
+            plain_text: Some(
+                "A sufficiently long lyrics line for deterministic matching".to_owned(),
+            ),
+            artist: Some(artist.to_owned()),
+            title: Some("Lose Yourself".to_owned()),
+            duration_sec: Some(326),
+            exact: false,
+            query_index: 1,
+        }
+    }
+
+    fn artist_hints(artist: &str) -> LyricsHints {
+        LyricsHints {
+            artist: artist.to_owned(),
+            ..hints()
+        }
+    }
+
+    #[test]
+    fn compound_artist_names_match_by_any_part() {
+        let cases = [
+            ("Eminem", "Eminem, Dr. Dre, 50 Cent"),
+            ("Eminem, Dr. Dre", "Eminem"),
+            ("Eminem", "Eminem feat. Rihanna"),
+            ("Eminem ft. Rihanna", "Eminem"),
+            ("Dr. Dre", "Eminem & Dr. Dre"),
+            ("Eminem & Dr. Dre", "Dr Dre"),
+            ("Eminem", "EMINEM x Dr. Dre"),
+            ("Eminem", "Dr. Dre / Eminem"),
+        ];
+        for (hint, candidate) in cases {
+            assert!(
+                matches_hints(&artist_hints(hint), &artist_candidate(candidate)),
+                "{hint} vs {candidate}"
+            );
+        }
+    }
+
+    #[test]
+    fn compound_artist_names_without_a_shared_part_are_rejected() {
+        let cases = [
+            ("Eminem", "Dr. Dre, 50 Cent"),
+            ("Eminem, Dr. Dre", "Snoop Dogg & Ice Cube"),
+            ("Eminem", "Someone Else feat. Another One"),
+        ];
+        for (hint, candidate) in cases {
+            assert!(
+                !matches_hints(&artist_hints(hint), &artist_candidate(candidate)),
+                "{hint} vs {candidate}"
+            );
+        }
     }
 
     #[test]
