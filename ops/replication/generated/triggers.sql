@@ -133,6 +133,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_followings;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_like_ranks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_likes_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_likes_tracks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_lyrics;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_superlike_ranks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_superlikes;
 CREATE SEQUENCE IF NOT EXISTS public.scd_restrict_oauth_apps;
@@ -5418,6 +5419,8 @@ BEGIN
             PERFORM 1 FROM public.user_blocked_artists t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text AND t.kind = (k ->> 'kind')::text AND t.target_id = (k ->> 'target_id')::text FOR UPDATE;
         WHEN 'user_like_ranks' THEN
             PERFORM 1 FROM public.user_like_ranks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
+        WHEN 'user_lyrics' THEN
+            PERFORM 1 FROM public.user_lyrics t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
         WHEN 'user_superlike_ranks' THEN
             PERFORM 1 FROM public.user_superlike_ranks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
         WHEN 'user_superlikes' THEN
@@ -5461,6 +5464,8 @@ BEGIN
             PERFORM public.scd_erase_user_blocked_artists(k, upto);
         WHEN 'user_like_ranks' THEN
             PERFORM public.scd_erase_user_like_ranks(k, upto);
+        WHEN 'user_lyrics' THEN
+            PERFORM public.scd_erase_user_lyrics(k, upto);
         WHEN 'user_superlike_ranks' THEN
             PERFORM public.scd_erase_user_superlike_ranks(k, upto);
         WHEN 'user_superlikes' THEN
@@ -8650,6 +8655,162 @@ CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_tr
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_likes_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_merge_user_lyrics()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.lrclib_id := OLD.lrclib_id;
+            NEW.origin := OLD.origin;
+            NEW.plain_text := OLD.plain_text;
+            NEW.synced_lrc := OLD.synced_lrc;
+            NEW.updated_at := OLD.updated_at;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.user_lyrics t WHERE (t.soundcloud_user_id, t.sc_track_id) = (NEW.soundcloud_user_id, NEW.sc_track_id);
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.user_lyrics t SET
+                    lrclib_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.lrclib_id ELSE o.lrclib_id END,
+                    origin = CASE WHEN NEW.row_v > o.row_v THEN NEW.origin ELSE o.origin END,
+                    plain_text = CASE WHEN NEW.row_v > o.row_v THEN NEW.plain_text ELSE o.plain_text END,
+                    synced_lrc = CASE WHEN NEW.row_v > o.row_v THEN NEW.synced_lrc ELSE o.synced_lrc END,
+                    updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE (t.soundcloud_user_id, t.sc_track_id) = (o.soundcloud_user_id, o.sc_track_id);
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_lyrics' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id, 'sc_track_id', NEW.sc_track_id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_lyrics', 'pk', jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
+            PERFORM nextval('public.scd_resend_user_lyrics'::regclass);
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.user_lyrics (lrclib_id, origin, plain_text, row_v, sc_track_id, soundcloud_user_id, synced_lrc, updated_at)
+        VALUES (NEW.lrclib_id, NEW.origin, NEW.plain_text, NEW.row_v, NEW.sc_track_id, NEW.soundcloud_user_id, NEW.synced_lrc, NEW.updated_at)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.user_lyrics still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_lyrics FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_lyrics();
+ALTER TABLE public.user_lyrics ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_user_lyrics()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('user_lyrics', jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_lyrics FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_lyrics();
+CREATE OR REPLACE FUNCTION public.scd_erase_user_lyrics(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.user_lyrics t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text AND t.row_v <= upto;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    IF EXISTS (SELECT 1 FROM public.user_lyrics t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text) THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_lyrics', k) ON CONFLICT DO NOTHING;
+        PERFORM nextval('public.scd_resend_user_lyrics'::regclass);
+    END IF;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_user_lyrics()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_lyrics' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id, 'sc_track_id', NEW.sc_track_id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_lyrics', 'pk', jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
+        PERFORM nextval('public.scd_resend_user_lyrics'::regclass);
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_lyrics FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_lyrics();
+ALTER TABLE public.user_lyrics ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_guard_user_lyrics()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN OLD;
+    END IF;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_lyrics' AND x.pk = jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id, 'sc_track_id', OLD.sc_track_id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
+        RETURN OLD;
+    END IF;
+    INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_lyrics', jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id, 'sc_track_id', OLD.sc_track_id)) ON CONFLICT DO NOTHING;
+    PERFORM nextval('public.scd_resend_user_lyrics'::regclass);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_lyrics FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_lyrics();
+ALTER TABLE public.user_lyrics ENABLE REPLICA TRIGGER zz_tomb_guard;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_user_lyrics()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_lyrics' AND x.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id, 'sc_track_id', NEW.sc_track_id))));
+        RETURN NEW;
+    END IF;
+    IF (NEW.lrclib_id, NEW.origin, NEW.plain_text, NEW.synced_lrc, NEW.updated_at) IS DISTINCT FROM (OLD.lrclib_id, OLD.origin, OLD.plain_text, OLD.synced_lrc, OLD.updated_at) THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_lyrics FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_lyrics();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_lyrics FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.user_lyrics ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_playlists', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_owned_playlists()
@@ -10124,6 +10285,7 @@ FROM (VALUES
     ('resend', 'user_like_ranks', 'scd_resend_user_like_ranks'),
     ('resend', 'user_likes_playlists', 'scd_resend_user_likes_playlists'),
     ('resend', 'user_likes_tracks', 'scd_resend_user_likes_tracks'),
+    ('resend', 'user_lyrics', 'scd_resend_user_lyrics'),
     ('resend', 'user_superlike_ranks', 'scd_resend_user_superlike_ranks'),
     ('resend', 'user_superlikes', 'scd_resend_user_superlikes'),
     ('restrict', 'oauth_apps', 'scd_restrict_oauth_apps')
@@ -10489,6 +10651,12 @@ BEGIN
             ('user_likes_tracks', 'zz_purge_guard'),
             ('user_likes_tracks', 'zz_ver'),
             ('user_likes_tracks', 'zzz_suppress'),
+            ('user_lyrics', 'zz_merge'),
+            ('user_lyrics', 'zz_tomb'),
+            ('user_lyrics', 'zz_tomb_check'),
+            ('user_lyrics', 'zz_tomb_guard'),
+            ('user_lyrics', 'zz_ver'),
+            ('user_lyrics', 'zzz_suppress'),
             ('user_owned_playlists', 'zz_guard'),
             ('user_owned_playlists', 'zz_owner'),
             ('user_owned_playlists', 'zz_owner_copy'),

@@ -1390,6 +1390,18 @@ AS $f$
 SELECT md5(ROW(t.created_at, t.liked_at, t.progress, t.sc_track_id, t.synced_at, t.synced_for_v, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_likes_tracks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_user_lyrics(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.lrclib_id, t.origin, t.plain_text, t.row_v, t.sc_track_id, t.soundcloud_user_id, t.synced_lrc, t.updated_at)::text) FROM public.user_lyrics t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_user_owned_playlists(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1796,6 +1808,8 @@ BEGIN
             RETURN public.scd_row_hash_user_likes_playlists(k);
         WHEN 'user_likes_tracks' THEN
             RETURN public.scd_row_hash_user_likes_tracks(k);
+        WHEN 'user_lyrics' THEN
+            RETURN public.scd_row_hash_user_lyrics(k);
         WHEN 'user_owned_playlists' THEN
             RETURN public.scd_row_hash_user_owned_playlists(k);
         WHEN 'user_owned_tracks' THEN

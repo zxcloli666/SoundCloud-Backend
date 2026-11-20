@@ -3073,6 +3073,31 @@
     {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_likes_tracks_pkey", "primary": true, "where": null}
    ]
   },
+  "user_lyrics": {
+   "columns": [
+    {"default": null, "generated": false, "name": "lrclib_id", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "origin", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "plain_text", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_lrc", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_merge_user_lyrics", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_user_lyrics", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_user_lyrics", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_guard_user_lyrics", "gated": false, "name": "zz_tomb_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_lyrics", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["soundcloud_user_id", "sc_track_id"], "expr": false, "keys": ["soundcloud_user_id", "sc_track_id"], "name": "user_lyrics_pkey", "primary": true, "where": null}
+   ]
+  },
   "user_owned_playlists": {
    "columns": [
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},

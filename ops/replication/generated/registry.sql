@@ -170,6 +170,7 @@ SELECT v.cls FROM (VALUES
     ('user_like_ranks', 'A'),
     ('user_likes_playlists', 'M'),
     ('user_likes_tracks', 'M'),
+    ('user_lyrics', 'A'),
     ('user_owned_playlists', 'C'),
     ('user_owned_tracks', 'C'),
     ('user_profiles', 'C'),
@@ -354,6 +355,8 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'user_likes_playlists', jsonb_build_object('user_id', t.user_id, 'playlist_urn', t.playlist_urn) FROM public.user_likes_playlists t ON CONFLICT DO NOTHING;
         WHEN 'user_likes_tracks' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'user_likes_tracks', jsonb_build_object('user_id', t.user_id, 'sc_track_id', t.sc_track_id) FROM public.user_likes_tracks t ON CONFLICT DO NOTHING;
+        WHEN 'user_lyrics' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'user_lyrics', jsonb_build_object('soundcloud_user_id', t.soundcloud_user_id, 'sc_track_id', t.sc_track_id) FROM public.user_lyrics t ON CONFLICT DO NOTHING;
         WHEN 'user_owned_playlists' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'user_owned_playlists', jsonb_build_object('user_id', t.user_id, 'playlist_urn', t.playlist_urn) FROM public.user_owned_playlists t ON CONFLICT DO NOTHING;
         WHEN 'user_owned_tracks' THEN
@@ -462,6 +465,7 @@ BEGIN
         ('user_like_ranks', 'A'),
         ('user_likes_playlists', 'M'),
         ('user_likes_tracks', 'M'),
+        ('user_lyrics', 'A'),
         ('user_owned_playlists', 'C'),
         ('user_owned_tracks', 'C'),
         ('user_profiles', 'C'),

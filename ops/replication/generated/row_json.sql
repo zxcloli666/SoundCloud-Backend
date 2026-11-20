@@ -1390,6 +1390,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) - ARRAY['last_read_at']::text[] FROM public.user_likes_tracks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_user_lyrics(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.user_lyrics t WHERE t.soundcloud_user_id = (k ->> 'soundcloud_user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_user_owned_playlists(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1796,6 +1808,8 @@ BEGIN
             RETURN public.scd_row_json_user_likes_playlists(k);
         WHEN 'user_likes_tracks' THEN
             RETURN public.scd_row_json_user_likes_tracks(k);
+        WHEN 'user_lyrics' THEN
+            RETURN public.scd_row_json_user_lyrics(k);
         WHEN 'user_owned_playlists' THEN
             RETURN public.scd_row_json_user_owned_playlists(k);
         WHEN 'user_owned_tracks' THEN
