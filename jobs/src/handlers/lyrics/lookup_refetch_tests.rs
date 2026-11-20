@@ -53,6 +53,8 @@ fn handler(pool: &PgPool) -> anyhow::Result<LyricsLookupHandler> {
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            upgrade_batch: 0,
+            upgrade_age_days: 60,
             refetch_share_percent: 100,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },

@@ -14,6 +14,9 @@ use sqlx::PgPool;
 use crate::config::{LyricsConfig, WorkerDispatchConfig};
 use crate::queue::{ClaimOrder, JobRepository, LeasedJob};
 
+#[path = "lookup_upgrade_tests.rs"]
+mod upgrade_tests;
+
 async fn insert_track(pool: &PgPool, id: &str, title: &str) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (
@@ -257,6 +260,8 @@ async fn clean_source_empty_persists_negative_without_worker_jobs(
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            upgrade_batch: 0,
+            upgrade_age_days: 60,
             refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
@@ -331,6 +336,8 @@ async fn source_outage_persists_retry_without_worker_jobs(pool: PgPool) -> anyho
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            upgrade_batch: 0,
+            upgrade_age_days: 60,
             refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
@@ -414,6 +421,8 @@ async fn lookup_through_proxy(pool: &PgPool, lrclib: &'static str) -> anyhow::Re
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            upgrade_batch: 0,
+            upgrade_age_days: 60,
             refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },
@@ -875,6 +884,8 @@ fn offline_handler(pool: &PgPool) -> anyhow::Result<super::LyricsLookupHandler> 
             concurrency: 4,
             claim_seconds: 900,
             backfill_batch: 100,
+            upgrade_batch: 0,
+            upgrade_age_days: 60,
             refetch_share_percent: 0,
             musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         },

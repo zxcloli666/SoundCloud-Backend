@@ -11,6 +11,8 @@ mod refetch_tests;
 mod sweep_tests;
 #[path = "lookup_tiered.rs"]
 mod tiered;
+#[path = "lookup_upgrade.rs"]
+mod upgrade;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,6 +148,7 @@ impl LyricsLookupHandler {
         self.backfill().await?;
 
         super::wake::enqueue_due(&self.pool, &self.queue, DUE_WAKE_BATCH).await?;
+        self.enqueue_synced_upgrades().await?;
 
         let claims = tiered::claim(
             &self.pool,
