@@ -8,6 +8,7 @@ use sqlx::{FromRow, PgPool};
 use crate::error::{AppError, AppResult};
 
 const MAX_OPERATIONAL_FAILURES: i32 = 8;
+const DEFAULT_RECHECK_DAYS: i32 = 7;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LyricsResponse {
@@ -37,6 +38,7 @@ struct LyricsStatusRow {
     plain_text: Option<String>,
     source: Option<String>,
     language: Option<String>,
+    recheck_due: Option<bool>,
     language_confidence: Option<f32>,
     lookup_status: Option<String>,
     next_run_at: Option<DateTime<Utc>>,
@@ -59,11 +61,21 @@ struct LyricsSearchRow {
 pub struct LyricsService {
     pg: PgPool,
     reserve: bool,
+    recheck_days: i32,
 }
 
 impl LyricsService {
     pub fn new(pg: PgPool, reserve: bool) -> Arc<Self> {
-        Arc::new(Self { pg, reserve })
+        let recheck_days = std::env::var("LYRICS_RECHECK_DAYS")
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|days| (1..=3650).contains(days))
+            .unwrap_or(DEFAULT_RECHECK_DAYS);
+        Arc::new(Self {
+            pg,
+            reserve,
+            recheck_days,
+        })
     }
 
     pub async fn ensure_lyrics(&self, sc_track_id: &str) -> AppResult<LyricsResponse> {
@@ -73,6 +85,9 @@ impl LyricsService {
             return Err(AppError::not_found("track not found"));
         };
         if status.source.is_some() {
+            if status.recheck_due == Some(true) && !self.reserve {
+                let _ = self.wake(&sc_track_id).await;
+            }
             return Ok(found_response(&sc_track_id, status));
         }
         if is_fresh_negative(&status) {
@@ -167,6 +182,7 @@ impl LyricsService {
         let command = wt::LyricsWake {
             sc_track_id: sc_track_id.to_owned(),
             at: wt::now(),
+            recheck_days: self.recheck_days,
         };
         Ok(wt::retry(|| async {
             let mut transaction = self.pg.begin().await?;
@@ -180,7 +196,8 @@ impl LyricsService {
         Ok(sqlx::query_file_as!(
             LyricsStatusRow,
             "queries/lyrics/service/lyrics_status.sql",
-            sc_track_id
+            sc_track_id,
+            self.recheck_days
         )
         .fetch_optional(&self.pg)
         .await?)
@@ -284,7 +301,8 @@ mod tests {
         let row = sqlx::query_file_as!(
             LyricsStatusRow,
             "queries/lyrics/service/lyrics_status.sql",
-            "42"
+            "42",
+            7
         )
         .fetch_optional(&pool)
         .await?
@@ -298,6 +316,57 @@ mod tests {
                 && row.language_confidence.is_none(),
             "an unjoined lyrics cache must decode as absent, not fail: {row:?}"
         );
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+    async fn opening_a_stale_plain_lrclib_text_answers_it_and_wakes_a_lookup(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        sqlx::query("DELETE FROM lyrics_lookup_state")
+            .execute(&pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, plain_text, source, plain_source, updated_at)
+             VALUES ('42', 'A sufficiently long plain lyrics body', 'lrclib', 'lrclib', now() - interval '10 days')",
+        )
+        .execute(&pool)
+        .await?;
+
+        let answer = service(&pool, false).await?.ensure_lyrics("42").await?;
+
+        assert_eq!(answer.status, "found");
+        let woken: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM lyrics_lookup_state WHERE sc_track_id = '42' AND priority = 0",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(woken, 1);
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+    async fn a_recently_checked_or_synced_text_wakes_nothing(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        sqlx::query("DELETE FROM lyrics_lookup_state")
+            .execute(&pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, plain_text, source, plain_source, updated_at)
+             VALUES ('42', 'A sufficiently long plain lyrics body', 'lrclib', 'lrclib', now() - interval '2 days')",
+        )
+        .execute(&pool)
+        .await?;
+
+        service(&pool, false).await?.ensure_lyrics("42").await?;
+
+        let states: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_state")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(states, 0);
         Ok(())
     }
 

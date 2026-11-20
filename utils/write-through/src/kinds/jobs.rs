@@ -46,6 +46,7 @@ impl Kind for JobEnqueue {
 pub struct LyricsWake {
     pub sc_track_id: String,
     pub at: DateTime<Utc>,
+    pub recheck_days: i32,
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]

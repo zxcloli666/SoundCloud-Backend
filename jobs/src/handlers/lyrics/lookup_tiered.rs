@@ -11,6 +11,7 @@ pub(super) async fn claim(
     job: &LeasedJob,
     total: i64,
     refetch_share_percent: i64,
+    upgrade_room: i64,
     claim_seconds: i64,
     turn: Turn,
 ) -> Result<Vec<Work>, sqlx::Error> {
@@ -25,6 +26,10 @@ pub(super) async fn claim(
     };
     let total = total - i64::try_from(refetches.len()).unwrap_or(i64::MAX);
     let mut works: Vec<Work> = refetches.into_iter().map(Work::Refetch).collect();
+    let upgrades = claim_upgrades(pool, job, upgrade_room.min(total), claim_seconds).await?;
+    round.record("upgrade", upgrades.len(), None);
+    let total = total - i64::try_from(upgrades.len()).unwrap_or(i64::MAX);
+    works.extend(upgrades.into_iter().map(Work::Lookup));
     if total == 0 {
         round.report();
         return Ok(works);
@@ -67,6 +72,28 @@ pub(super) async fn claim(
     claims.extend(oldest_claims);
     works.extend(claims.into_iter().map(Work::Lookup));
     Ok(works)
+}
+
+async fn claim_upgrades(
+    pool: &PgPool,
+    job: &LeasedJob,
+    room: i64,
+    claim_seconds: i64,
+) -> Result<Vec<LookupClaim>, sqlx::Error> {
+    if room <= 0 {
+        return Ok(Vec::new());
+    }
+    sqlx::query_file_as!(
+        LookupClaim,
+        "queries/lyrics/lookup_claim_upgrade.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        room,
+        claim_seconds
+    )
+    .fetch_all(pool)
+    .await
 }
 
 async fn claim_refetches(

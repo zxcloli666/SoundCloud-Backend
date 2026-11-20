@@ -27,7 +27,7 @@ WITH owned AS MATERIALIZED (
         next_run_at = now() + $6::bigint * interval '1 second',
         miss_streak = state.miss_streak + 1,
         failure_streak = 0,
-        last_outcome = $7,
+        last_outcome = CASE WHEN state.last_outcome = 'upgrade' THEN state.last_outcome ELSE $7 END,
         last_error = NULL,
         retry_after_at = NULL,
         wake_message_id = NULL,

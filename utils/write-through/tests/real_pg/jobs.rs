@@ -350,6 +350,7 @@ fn wake(stamp: &str) -> LyricsWake {
     LyricsWake {
         sc_track_id: "1874620031".to_owned(),
         at: at(stamp),
+        recheck_days: 7,
     }
 }
 
