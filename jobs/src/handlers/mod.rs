@@ -686,9 +686,7 @@ impl JobHandlers {
             }
             JobKind::AdminLyricsFtsInline => {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
-                self.admin_maintenance
-                    .inline_lyrics_fts(job, payload)
-                    .await
+                self.admin_maintenance.inline_lyrics_fts(job, payload).await
             }
             JobKind::AdminWantedAliases => {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
