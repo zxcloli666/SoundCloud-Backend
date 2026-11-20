@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use catalog_normalize::{
-    name_similarity, normalize_title, split_artist_list, title_forms, works_match,
+    name_similarity, normalize_title, parse_sc_title, split_artist_list, title_forms, works_match,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -148,6 +148,8 @@ impl LyricsSources {
     }
 
     pub async fn lookup(&self, hints: &LyricsHints) -> LyricsLookupOutcome {
+        let cleaned = clean_hints(hints);
+        let hints = &cleaned;
         let title = hints.title.trim();
         if title.is_empty() {
             return LyricsLookupOutcome::InsufficientMetadata;
@@ -413,6 +415,24 @@ impl LyricsSources {
             })
             .collect())
     }
+}
+
+fn clean_hints(hints: &LyricsHints) -> LyricsHints {
+    let artist = hints.artist.trim();
+    let parsed = parse_sc_title(hints.title.trim(), (!artist.is_empty()).then_some(artist));
+    let version_tail = parsed.primary_from_title
+        && !title_forms(&format!("x - {}", parsed.cleaned_title))
+            .markers
+            .is_empty();
+    if parsed.cleaned_title.is_empty() || version_tail {
+        return hints.clone();
+    }
+    let mut cleaned = hints.clone();
+    cleaned.title = parsed.cleaned_title;
+    if parsed.primary_from_title {
+        cleaned.artist = parsed.primary_artists.join(", ");
+    }
+    cleaned
 }
 
 fn found(candidate: LyricsCandidate, lrclib_failed: bool) -> LyricsLookupOutcome {
@@ -1979,5 +1999,122 @@ mod tests {
 
         assert_eq!(queries.len(), unique.len());
         assert!(queries.len() <= MAX_QUERIES);
+    }
+
+    fn titled(title: &str, artist: &str) -> LyricsHints {
+        LyricsHints {
+            title: title.to_owned(),
+            artist: artist.to_owned(),
+            ..hints()
+        }
+    }
+
+    #[test]
+    fn title_prefixes_become_artist_hints() {
+        let cases = [
+            (
+                "lxmka, eary - snow x opium",
+                "lxmka",
+                "snow x opium",
+                "lxmka, eary",
+            ),
+            (
+                "Eminem - Lose Yourself",
+                "Eminem",
+                "Lose Yourself",
+                "Eminem",
+            ),
+            (
+                "Eminem - Lose Yourself",
+                "Some Label",
+                "Lose Yourself",
+                "Eminem",
+            ),
+            (
+                "Eminem x Dr. Dre - Lose Yourself",
+                "Eminem",
+                "Lose Yourself",
+                "Eminem, Dr. Dre",
+            ),
+            (
+                "Lose Yourself (feat. Dr. Dre)",
+                "Eminem",
+                "Lose Yourself",
+                "Eminem",
+            ),
+            (
+                "Lose Yourself feat. Dr. Dre",
+                "Eminem",
+                "Lose Yourself",
+                "Eminem",
+            ),
+            ("[free] Lose Yourself", "Eminem", "Lose Yourself", "Eminem"),
+            (
+                "Lose Yourself prod. Dr. Dre",
+                "Eminem",
+                "Lose Yourself",
+                "Eminem",
+            ),
+            ("Lose Yourself", "Eminem", "Lose Yourself", "Eminem"),
+        ];
+        for (title, artist, want_title, want_artist) in cases {
+            let cleaned = clean_hints(&titled(title, artist));
+            assert_eq!(cleaned.title, want_title, "{title}");
+            assert_eq!(cleaned.artist, want_artist, "{title}");
+        }
+    }
+
+    #[test]
+    fn version_tails_are_not_taken_for_a_title() {
+        for title in ["Lose Yourself - Remix", "Lose Yourself - Radio Edit"] {
+            assert_eq!(clean_hints(&titled(title, "Eminem")).title, title);
+        }
+    }
+
+    #[test]
+    fn the_reported_track_is_accepted_after_cleaning() {
+        let cleaned = clean_hints(&LyricsHints {
+            duration_sec: Some(140),
+            ..titled("lxmka, eary - snow x opium", "lxmka")
+        });
+        let candidate = LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: None,
+            plain_text: Some(
+                "A sufficiently long lyrics line for deterministic matching".to_owned(),
+            ),
+            artist: Some("lxmka, eary".to_owned()),
+            title: Some("snow x opium".to_owned()),
+            duration_sec: Some(141),
+            exact: false,
+            query_index: 1,
+        };
+
+        assert!(matches_hints(&cleaned, &candidate));
+        assert!(!matches_hints(
+            &LyricsHints {
+                duration_sec: Some(140),
+                ..titled("lxmka, eary - snow x opium", "lxmka")
+            },
+            &candidate
+        ));
+    }
+
+    #[test]
+    fn cleaned_shapes_still_reject_other_tracks_and_artists() {
+        let cleaned = clean_hints(&titled("Eminem x Dr. Dre - Lose Yourself", "Eminem"));
+        let other_title = LyricsCandidate {
+            title: Some("Without Me".to_owned()),
+            ..artist_candidate("Eminem")
+        };
+        let other_artist = artist_candidate("Snoop Dogg");
+
+        assert!(matches_hints(&cleaned, &artist_candidate("Dr. Dre")));
+        assert!(!matches_hints(&cleaned, &other_title));
+        assert!(!matches_hints(&cleaned, &other_artist));
+        assert!(!matches_hints(
+            &clean_hints(&titled("Lose Yourself prod. Dr. Dre", "Eminem")),
+            &other_title
+        ));
     }
 }
