@@ -1,6 +1,7 @@
 mod error;
 mod genius;
 mod http;
+mod lrclib;
 mod lyrics;
 mod lyrics_refetch;
 mod musicbrainz;
@@ -12,6 +13,7 @@ pub use genius::{
     GeniusCfg, GeniusService, GeniusSongMeta,
 };
 pub use http::ExternalFetcher;
+pub use lrclib::{LrclibRecord, LrclibSearch};
 pub use lyrics::{
     LyricsCandidate, LyricsFailure, LyricsHints, LyricsLookupOutcome, LyricsSources,
     strip_lrc_timestamps,

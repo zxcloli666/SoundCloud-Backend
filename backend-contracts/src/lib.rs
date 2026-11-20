@@ -7,6 +7,7 @@ pub mod diag;
 pub mod diag_fingerprint;
 pub mod diag_report;
 mod job;
+pub mod lyrics_search;
 pub mod pipeline;
 pub mod reasons;
 mod taste;

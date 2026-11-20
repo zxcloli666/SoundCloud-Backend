@@ -251,6 +251,12 @@ pub async fn run() -> anyhow::Result<()> {
         video_accounts.daily(cancellation.clone()),
     );
     supervisor.spawn(
+        "lyrics search RPC",
+        handlers
+            .lyrics_search()
+            .serve(bus.clone(), cancellation.clone()),
+    );
+    supervisor.spawn(
         "dependency health monitor",
         crate::health::monitor_dependencies(
             databases.clone(),

@@ -6,6 +6,7 @@ use serde::Serialize;
 use sqlx::{FromRow, PgPool};
 
 use crate::error::{AppError, AppResult};
+use crate::modules::lyrics::own;
 
 const MAX_OPERATIONAL_FAILURES: i32 = 8;
 const DEFAULT_RECHECK_DAYS: i32 = 7;
@@ -23,6 +24,9 @@ pub struct LyricsResponse {
     #[serde(rename = "languageConfidence")]
     pub language_confidence: Option<f32>,
     pub status: String,
+    pub own: bool,
+    #[serde(rename = "lrclibId", skip_serializing_if = "Option::is_none")]
+    pub lrclib_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -78,8 +82,15 @@ impl LyricsService {
         })
     }
 
-    pub async fn ensure_lyrics(&self, sc_track_id: &str) -> AppResult<LyricsResponse> {
+    pub async fn ensure_lyrics(
+        &self,
+        sc_user_id: &str,
+        sc_track_id: &str,
+    ) -> AppResult<LyricsResponse> {
         let sc_track_id = canonical_track_id(sc_track_id)?;
+        if let Some(own) = own::read(&self.pg, sc_user_id, &sc_track_id).await? {
+            return Ok(own);
+        }
         let status = self.status(&sc_track_id).await?;
         let Some(status) = status else {
             return Err(AppError::not_found("track not found"));
@@ -175,6 +186,8 @@ impl LyricsService {
             language: candidate.language,
             language_confidence: candidate.language_confidence,
             status: "found".to_owned(),
+            own: false,
+            lrclib_id: None,
         })
     }
 
@@ -204,7 +217,7 @@ impl LyricsService {
     }
 }
 
-fn canonical_track_id(value: &str) -> AppResult<String> {
+pub fn canonical_track_id(value: &str) -> AppResult<String> {
     crate::common::sc_ids::normalize_sc_track_id(value)
         .ok_or_else(|| AppError::bad_request("invalid SoundCloud track id"))
 }
@@ -240,6 +253,8 @@ fn found_response(sc_track_id: &str, row: LyricsStatusRow) -> LyricsResponse {
         language: row.language,
         language_confidence: row.language_confidence,
         status: "found".to_owned(),
+        own: false,
+        lrclib_id: None,
     }
 }
 
@@ -252,6 +267,8 @@ fn pending_response(sc_track_id: Option<&str>) -> LyricsResponse {
         language: None,
         language_confidence: None,
         status: "pending".to_owned(),
+        own: false,
+        lrclib_id: None,
     }
 }
 
@@ -264,6 +281,8 @@ fn none_response(sc_track_id: Option<&str>) -> LyricsResponse {
         language: None,
         language_confidence: None,
         status: "none".to_owned(),
+        own: false,
+        lrclib_id: None,
     }
 }
 
@@ -334,7 +353,10 @@ mod tests {
         .execute(&pool)
         .await?;
 
-        let answer = service(&pool, false).await?.ensure_lyrics("42").await?;
+        let answer = service(&pool, false)
+            .await?
+            .ensure_lyrics("17", "42")
+            .await?;
 
         assert_eq!(answer.status, "found");
         let woken: i64 = sqlx::query_scalar(
@@ -361,7 +383,10 @@ mod tests {
         .execute(&pool)
         .await?;
 
-        service(&pool, false).await?.ensure_lyrics("42").await?;
+        service(&pool, false)
+            .await?
+            .ensure_lyrics("17", "42")
+            .await?;
 
         let states: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_state")
             .fetch_one(&pool)
@@ -527,7 +552,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         let lyrics = service(&pool, false).await?;
 
-        let error = lyrics.ensure_lyrics("42").await.unwrap_err();
+        let error = lyrics.ensure_lyrics("17", "42").await.unwrap_err();
 
         assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
         Ok(())
@@ -546,7 +571,7 @@ mod tests {
         .await?;
         let lyrics = service(&pool, false).await?;
 
-        let response = lyrics.ensure_lyrics("soundcloud:tracks:42").await?;
+        let response = lyrics.ensure_lyrics("17", "soundcloud:tracks:42").await?;
 
         assert_eq!(response.status, "found");
         assert_eq!(response.source, "lrclib");
@@ -570,7 +595,7 @@ mod tests {
                 .await?;
         let lyrics = service(&pool, true).await?;
 
-        let response = lyrics.ensure_lyrics("42").await?;
+        let response = lyrics.ensure_lyrics("17", "42").await?;
 
         assert_eq!(response.status, "pending");
         let after: Option<chrono::DateTime<chrono::Utc>> =
@@ -594,7 +619,7 @@ mod tests {
             .await?;
         let lyrics = service(&pool, true).await?;
 
-        let error = lyrics.ensure_lyrics("42").await.unwrap_err();
+        let error = lyrics.ensure_lyrics("17", "42").await.unwrap_err();
 
         assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
         Ok(())
@@ -607,7 +632,7 @@ mod tests {
         seed_track(&pool).await?;
         let lyrics = service(&pool, false).await?;
 
-        let response = lyrics.ensure_lyrics("42").await?;
+        let response = lyrics.ensure_lyrics("17", "42").await?;
 
         assert_eq!(response.status, "pending");
         assert_eq!(response.sc_track_id.as_deref(), Some("42"));

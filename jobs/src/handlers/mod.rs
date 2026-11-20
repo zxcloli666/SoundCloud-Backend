@@ -27,6 +27,7 @@ mod external;
 pub(crate) mod highlights;
 mod indexing;
 mod lyrics;
+pub(crate) mod lyrics_search_rpc;
 mod maintenance;
 mod metadata;
 mod mobile_refresh;
@@ -62,6 +63,7 @@ use backend_contracts::{
     IndexTrackPayload, JobKind, PlaylistObservePayload, ReplReplayPayload,
     StoredAudioDispatchPayload, SyncQueueFlushPayload, Versioned,
 };
+use catalog_sources::LrclibSearch;
 use serde::de::DeserializeOwned;
 
 use crate::bus::Bus;
@@ -85,6 +87,7 @@ use self::enrich::{AiResolverClient, EnrichHandler};
 use self::external::ExternalSources;
 use self::indexing::IndexingHandler;
 use self::lyrics::LyricsHandler;
+use self::lyrics_search_rpc::LyricsSearchRpc;
 use self::maintenance::MaintenanceHandler;
 use self::metadata::Normalizer;
 use self::oauth_apps::OAuthAppsRefreshHandler;
@@ -252,6 +255,7 @@ pub struct JobHandlers {
     telemetry: TelemetryHandler,
     wanted: Arc<WantedHandler>,
     video_accounts: Arc<VideoAccounts<Proxied, Telegram>>,
+    lyrics_search: Arc<LyricsSearchRpc>,
 }
 
 impl JobHandlers {
@@ -418,7 +422,14 @@ impl JobHandlers {
                 Seal::new(config.video_accounts.key.expose()),
                 config.video_accounts.check_every,
             )),
+            lyrics_search: Arc::new(LyricsSearchRpc::new(LrclibSearch::new(
+                sources.fetcher.clone(),
+            ))),
         })
+    }
+
+    pub fn lyrics_search(&self) -> Arc<LyricsSearchRpc> {
+        self.lyrics_search.clone()
     }
 
     pub fn video_accounts(&self) -> Arc<VideoAccounts<Proxied, Telegram>> {

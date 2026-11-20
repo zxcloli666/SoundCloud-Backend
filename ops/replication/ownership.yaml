@@ -314,6 +314,7 @@ tables:
   user_blocked_artists: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_events: {class: A, delete: none, insert_only: true, least: [created_at], note: "playlist adds carry the operation's id on every node"}
   user_like_ranks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  user_lyrics: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}, note: "lyrics a user attached to a track (pasted or an LRCLIB record), seen only by that user on every device; the api writes and deletes the owner's row"}
   user_superlike_ranks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_superlikes: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
 
