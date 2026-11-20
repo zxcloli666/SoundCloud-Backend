@@ -346,6 +346,7 @@ tables:
     pk: [tbl, pk, id]
     columns: {tbl: text, pk: jsonb, node: "text NOT NULL", id: uuid}
   oauth_app_tokens_local: {class: L, planned: B8, note: "fallback app tokens of this node: B11 issues them, streaming and the api read them with oauth_app_tokens"}
+  recommendation_colike_cursor: {class: L, note: "one row on core while a colike pass is unfinished: the next a_id; a resumed run starts there, the end of a pass deletes it"}
   star_due_marks: {class: L, note: "tracks whose star flags the refresh rechecks next, written by the star_due_mark triggers on core, read and deleted by the jobs refresh"}
   star_due_watch: {class: L, note: "one row, the last refresh of this node; without a fresh row the triggers write no marks"}
   repl_resend:

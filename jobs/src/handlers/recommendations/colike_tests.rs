@@ -184,12 +184,22 @@ async fn rebuild_in_shards(
     batch_edges: i64,
     shards: i32,
 ) -> anyhow::Result<Rebuild> {
+    rebuild_sliced(pool, batch_edges, shards, Duration::from_secs(24 * 60 * 60)).await
+}
+
+async fn rebuild_sliced(
+    pool: &PgPool,
+    batch_edges: i64,
+    shards: i32,
+    slice: Duration,
+) -> anyhow::Result<Rebuild> {
     let mut connection = pool.acquire().await?;
     connection.close_on_drop();
     let pacing = Pacing {
         shards,
         batch_edges,
         pause: Duration::ZERO,
+        slice,
     };
     Ok(rebuild_on(&mut connection, pacing).await?)
 }
@@ -275,6 +285,36 @@ async fn a_rebuild_bigger_than_one_batch_commits_batch_by_batch(
         transactions.len() > 1,
         "the written edges must come from more than one transaction: {transactions:?}"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_paused_rebuild_resumes_from_its_cursor(pool: PgPool) -> anyhow::Result<()> {
+    seed_listening_windows(&pool).await?;
+    rebuild_in_one_statement(&pool).await?;
+    shift_listening_windows(&pool).await?;
+    keep_as_previous_run(&pool).await?;
+    rebuild_in_one_statement(&pool).await?;
+    let expected = edges(&pool).await?;
+    restore_previous_run(&pool).await?;
+
+    let mut slices = 0;
+    loop {
+        let rebuild = rebuild_sliced(&pool, 4, 3, Duration::ZERO).await?;
+        slices += 1;
+        if rebuild.finished {
+            break;
+        }
+        assert_eq!(rebuild.batches, 1, "a spent slice stops after one batch");
+        assert!(slices < 100, "the rebuild must reach the end");
+    }
+
+    assert!(slices > 3, "the fixture must take several slices: {slices}");
+    assert_eq!(edges(&pool).await?, expected);
+    let cursors: i64 = sqlx::query_scalar("SELECT count(*) FROM recommendation_colike_cursor")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(cursors, 0, "a finished pass leaves no cursor");
     Ok(())
 }
 

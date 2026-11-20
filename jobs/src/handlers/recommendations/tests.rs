@@ -37,6 +37,11 @@ pub(super) async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              updated_at timestamptz NOT NULL DEFAULT now(),
              PRIMARY KEY (a_id, b_id)
          );
+         CREATE TABLE recommendation_colike_cursor (
+             singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+             next_a_id uuid NOT NULL,
+             updated_at timestamptz NOT NULL DEFAULT now()
+         );
          CREATE TABLE user_events (
              id uuid PRIMARY KEY,
              sc_user_id text NOT NULL,

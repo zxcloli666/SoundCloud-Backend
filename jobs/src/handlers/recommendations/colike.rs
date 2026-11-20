@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use sqlx::{Connection, PgConnection, PgPool, Postgres, Transaction};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::queue::{JobError, JobResult};
@@ -25,10 +26,14 @@ const PREPARE_FRESH: [&str; 4] = [
 ];
 const PAIRS_BY_A: &str = include_str!("../../../queries/recommendations/colike/pairs_by_a.sql");
 const PAIRS_BY_B: &str = include_str!("../../../queries/recommendations/colike/pairs_by_b.sql");
+const CURSOR_LOAD: &str = include_str!("../../../queries/recommendations/colike/cursor_load.sql");
+const CURSOR_SAVE: &str = include_str!("../../../queries/recommendations/colike/cursor_save.sql");
+const CURSOR_CLEAR: &str = include_str!("../../../queries/recommendations/colike/cursor_clear.sql");
 const PACING: Pacing = Pacing {
     shards: 64,
-    batch_edges: 500,
+    batch_edges: 2000,
     pause: Duration::from_millis(150),
+    slice: Duration::from_secs(90 * 60),
 };
 
 #[derive(Clone, Copy)]
@@ -36,6 +41,7 @@ struct Pacing {
     shards: i32,
     batch_edges: i64,
     pause: Duration,
+    slice: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -44,6 +50,7 @@ pub(super) struct Rebuild {
     pub(super) batches: u64,
     pub(super) upserted: i64,
     pub(super) removed: i64,
+    pub(super) finished: bool,
 }
 
 pub(super) async fn rebuild(pool: &PgPool) -> JobResult<Rebuild> {
@@ -55,26 +62,54 @@ pub(super) async fn rebuild(pool: &PgPool) -> JobResult<Rebuild> {
 }
 
 async fn rebuild_on(connection: &mut PgConnection, pacing: Pacing) -> Result<Rebuild, sqlx::Error> {
+    let deadline = Instant::now() + pacing.slice;
     let (fresh, started_at) = build_fresh(connection, pacing).await?;
     let mut rebuild = Rebuild {
         fresh,
         ..Rebuild::default()
     };
-    let mut lower = Uuid::nil();
+    let mut lower = saved_lower(connection).await?;
     loop {
         let Some(upper) = batch_upper(connection, lower, pacing.batch_edges).await? else {
-            return Ok(rebuild);
+            return finish(connection, rebuild).await;
         };
         let (upserted, removed) = apply_batch(connection, lower, upper, started_at).await?;
         rebuild.batches += 1;
         rebuild.upserted += upserted;
         rebuild.removed += removed;
         let Some(next) = upper.as_u128().checked_add(1) else {
-            return Ok(rebuild);
+            return finish(connection, rebuild).await;
         };
         lower = Uuid::from_u128(next);
+        save_lower(connection, lower).await?;
+        if Instant::now() >= deadline {
+            return Ok(rebuild);
+        }
         tokio::time::sleep(pacing.pause).await;
     }
+}
+
+async fn saved_lower(connection: &mut PgConnection) -> Result<Uuid, sqlx::Error> {
+    let saved: Option<Uuid> = sqlx::query_scalar(CURSOR_LOAD)
+        .fetch_optional(connection)
+        .await?;
+    Ok(saved.unwrap_or(Uuid::nil()))
+}
+
+async fn save_lower(connection: &mut PgConnection, lower: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(CURSOR_SAVE)
+        .bind(lower)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+async fn finish(connection: &mut PgConnection, rebuild: Rebuild) -> Result<Rebuild, sqlx::Error> {
+    sqlx::query(CURSOR_CLEAR).execute(connection).await?;
+    Ok(Rebuild {
+        finished: true,
+        ..rebuild
+    })
 }
 
 async fn build_fresh(
