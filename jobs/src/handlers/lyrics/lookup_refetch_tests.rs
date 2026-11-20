@@ -129,7 +129,7 @@ async fn seed(pool: &PgPool, id: &str, title: &str, priority: i16) -> anyhow::Re
 
 async fn claim_one(pool: &PgPool, job: &LeasedJob) -> anyhow::Result<RefetchClaim> {
     let works =
-        super::tiered::claim(pool, job, 10, 100, 900, Turn::led_by(Tier::StarLiked)).await?;
+        super::tiered::claim(pool, job, 10, 100, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
     works
         .into_iter()
         .find_map(|work| match work {
@@ -179,7 +179,7 @@ async fn ledger(pool: &PgPool, id: &str) -> anyhow::Result<Ledger> {
 
 async fn due_refetches(pool: &PgPool, job: &LeasedJob) -> anyhow::Result<usize> {
     let works =
-        super::tiered::claim(pool, job, 10, 100, 900, Turn::led_by(Tier::StarLiked)).await?;
+        super::tiered::claim(pool, job, 10, 100, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
     Ok(works
         .iter()
         .filter(|work| matches!(work, Work::Refetch(_)))
@@ -734,7 +734,7 @@ async fn expired_claims_return_to_pending_or_are_abandoned_at_the_cap(
     let job = sweep_job(&pool).await?;
     let handler = handler(&pool)?;
     let claimed =
-        super::tiered::claim(&pool, &job, 10, 100, 900, Turn::led_by(Tier::StarLiked)).await?;
+        super::tiered::claim(&pool, &job, 10, 100, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
     assert_eq!(claimed.len(), 2);
     sqlx::query("UPDATE lyrics_repair SET claim_expires_at = now() - interval '1 second'")
         .execute(&pool)
@@ -783,8 +783,16 @@ async fn split(
     total: i64,
     share: i64,
 ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    let works =
-        super::tiered::claim(pool, job, total, share, 900, Turn::led_by(Tier::StarLiked)).await?;
+    let works = super::tiered::claim(
+        pool,
+        job,
+        total,
+        share,
+        0,
+        900,
+        Turn::led_by(Tier::StarLiked),
+    )
+    .await?;
     let mut refetches = Vec::new();
     let mut lookups = Vec::new();
     for work in &works {

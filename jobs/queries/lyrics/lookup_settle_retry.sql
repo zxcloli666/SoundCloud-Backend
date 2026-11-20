@@ -26,7 +26,7 @@ WITH owned AS MATERIALIZED (
     SET status = 'retry',
         next_run_at = now() + $6::bigint * interval '1 second',
         failure_streak = state.failure_streak + 1,
-        last_outcome = $7,
+        last_outcome = CASE WHEN state.last_outcome = 'upgrade' THEN state.last_outcome ELSE $7 END,
         last_error = left($8, 512),
         retry_after_at = CASE
             WHEN $9::bigint > 0 THEN now() + $9::bigint * interval '1 second'

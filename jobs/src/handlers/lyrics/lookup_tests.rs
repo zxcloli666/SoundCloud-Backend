@@ -734,6 +734,7 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
         &job,
         5,
         0,
+        0,
         900,
         crate::handlers::star_priority::Turn::led_by(
             crate::handlers::star_priority::Tier::StarLiked,

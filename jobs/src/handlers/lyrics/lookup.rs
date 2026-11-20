@@ -159,6 +159,7 @@ impl LyricsLookupHandler {
                 lane.sweep_slots(),
             ),
             self.config.refetch_share_percent,
+            self.config.upgrade_batch,
             self.config.claim_seconds,
             self.turns.next(),
         )

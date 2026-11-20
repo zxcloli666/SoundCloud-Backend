@@ -1,10 +1,11 @@
-WITH idle AS MATERIALIZED (
-    SELECT NOT EXISTS (
+WITH room AS MATERIALIZED (
+    SELECT count(*) < $1::bigint * 2 AS yes
+    FROM (
         SELECT 1
-        FROM lyrics_lookup_queue AS queue
-        WHERE queue.next_run_at <= now()
-          AND queue.claim_job_id IS NULL
-    ) AS yes
+        FROM lyrics_lookup_state AS state
+        WHERE state.last_outcome = 'upgrade'
+        LIMIT $1::bigint * 2
+    ) AS waiting
 ), stale AS MATERIALIZED (
     SELECT track.id,
            track.sc_track_id,
@@ -22,7 +23,7 @@ WITH idle AS MATERIALIZED (
            track.created_at
     FROM lyrics_cache AS cache
     JOIN tracks AS track ON track.sc_track_id = cache.sc_track_id
-    WHERE (SELECT yes FROM idle)
+    WHERE (SELECT yes FROM room)
       AND cache.source = 'lrclib'
       AND cache.synced_lrc IS NULL
       AND cache.updated_at < now() - $2::integer * interval '1 day'
@@ -40,6 +41,7 @@ INSERT INTO lyrics_lookup_state (
     track_id,
     sc_track_id,
     priority,
+    last_outcome,
     input_title,
     input_artist,
     input_duration_ms,
@@ -52,6 +54,7 @@ INSERT INTO lyrics_lookup_state (
 SELECT stale.id,
        stale.sc_track_id,
        5,
+       'upgrade',
        stale.input_title,
        stale.input_artist,
        stale.duration_ms,

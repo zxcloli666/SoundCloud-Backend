@@ -323,7 +323,7 @@ async fn waiting_targeted_lookups_cut_the_sweep_to_a_quarter_and_the_bulk_lane_k
     due_tracks(&pool).await?;
     let job = sweep_job(&pool).await?;
     let claims =
-        super::tiered::claim(&pool, &job, 12, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
+        super::tiered::claim(&pool, &job, 12, 0, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
     assert_eq!(claims.len(), 12);
     let swept = super::refetch_tests::track_ids(&claims);
     let targeted: Vec<String> = (1..=TRACKS)
@@ -393,7 +393,7 @@ async fn a_sweep_dropped_mid_batch_hands_its_slots_and_its_reserve_back(
     due_tracks(&pool).await?;
     let job = sweep_job(&pool).await?;
     let claims =
-        super::tiered::claim(&pool, &job, 12, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
+        super::tiered::claim(&pool, &job, 12, 0, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
     let gate = Gate::new();
     let (handler, server) = gated_handler(&pool, gate.clone()).await?;
     let (_governor, lane) = lane_at(32);
@@ -423,7 +423,7 @@ async fn a_failed_lookup_lets_the_rest_of_the_sweep_batch_finish_and_returns_its
     due_tracks(&pool).await?;
     let job = sweep_job(&pool).await?;
     let mut claims =
-        super::tiered::claim(&pool, &job, 12, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
+        super::tiered::claim(&pool, &job, 12, 0, 0, 900, Turn::led_by(Tier::StarLiked)).await?;
     claims.insert(
         0,
         super::Work::Lookup(super::LookupClaim {
