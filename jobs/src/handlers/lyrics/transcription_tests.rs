@@ -354,6 +354,30 @@ async fn missing_audio_is_quarantined_with_its_reason(pool: PgPool) -> anyhow::R
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_deadline_on_the_last_delivery_is_reopened_not_quarantined(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_pending(&pool).await?;
+    seed_existing_lyrics(&pool).await?;
+
+    TranscriptionResultHandler::new(pool.clone())
+        .finish(
+            outcome(WorkerStatus::Failed, Some(WorkerReason::DeadlineExceeded)),
+            delivery(1),
+        )
+        .await?;
+
+    let (status, reason, _, attempt) = wire(&pool).await?;
+    assert_eq!(
+        (status.as_str(), reason.as_deref(), attempt),
+        ("reopenable", Some("deadline_exceeded"), 1)
+    );
+    assert_eq!(track_state(&pool).await?.as_deref(), Some("pending"));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_late_alignment_outranks_a_reopenable_failure_of_the_same_attempt(
     pool: PgPool,
 ) -> anyhow::Result<()> {
