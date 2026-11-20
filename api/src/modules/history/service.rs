@@ -150,9 +150,12 @@ impl HistoryService {
     pub async fn clear(&self, sc_user_id: &str) -> AppResult<()> {
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
         let mut tx = self.pg.begin().await?;
-        sqlx::query_file!("queries/history/service/clear_listened_by_user.sql", &variants)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query_file!(
+            "queries/history/service/clear_listened_by_user.sql",
+            &variants
+        )
+        .execute(&mut *tx)
+        .await?;
         sqlx::query_file!("queries/history/service/clear_by_user.sql", &variants)
             .execute(&mut *tx)
             .await?;

@@ -149,9 +149,7 @@ async fn listened(pool: &PgPool, track: &str, ms: &[i32]) -> anyhow::Result<()> 
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn stats_count_plays_over_30s_and_time_over_all_rows(
-    pool: PgPool,
-) -> anyhow::Result<()> {
+async fn stats_count_plays_over_30s_and_time_over_all_rows(pool: PgPool) -> anyhow::Result<()> {
     let a = ("Alpha", Some("soundcloud:users:1"));
     play(&pool, "1", a, 200_000, "2026-10-07 10:00").await?;
     play(&pool, "2", a, 200_000, "2026-10-07 10:10").await?;
@@ -170,7 +168,11 @@ async fn stats_count_plays_over_30s_and_time_over_all_rows(
     assert_eq!(stats.totals.tracks, 3);
     assert_eq!(stats.top_artists[0].plays, 3);
     assert_eq!(stats.top_artists[0].listened_ms, 280_000);
-    let tracks: Vec<&str> = stats.top_tracks.iter().map(|t| t.track_urn.as_str()).collect();
+    let tracks: Vec<&str> = stats
+        .top_tracks
+        .iter()
+        .map(|t| t.track_urn.as_str())
+        .collect();
     assert!(!tracks.contains(&"soundcloud:tracks:2"));
     assert_eq!(stats.timeline.iter().map(|p| p.plays).sum::<i64>(), 3);
     assert_eq!(stats.rhythm.iter().map(|c| c.plays).sum::<i64>(), 3);

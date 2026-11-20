@@ -391,7 +391,8 @@ async fn a_listened_report_belongs_to_the_owner_of_the_history_row(
     .await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let play = json!({"scTrackId": "62", "title": "Mine", "artistName": "Artist", "duration": 200000});
+    let play =
+        json!({"scTrackId": "62", "title": "Mine", "artistName": "Artist", "duration": 200000});
     let (status, _, body) = send(&app, session, "POST", "/history", Some(play.clone())).await?;
     assert_eq!(status, StatusCode::OK);
     let mine = body["id"].as_str().expect("the history row id").to_owned();

@@ -1085,6 +1085,10 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_skip_listening_history_listened", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_listening_history_listened", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_listening_history_listened", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "listening_history_listened_pkey", "primary": true, "where": null}
