@@ -133,3 +133,48 @@ async fn an_empty_history_returns_zeroes(pool: PgPool) -> anyhow::Result<()> {
     assert!(stats.top_tracks.is_empty() && stats.timeline.is_empty());
     Ok(())
 }
+
+async fn listened(pool: &PgPool, track: &str, ms: &[i32]) -> anyhow::Result<()> {
+    for ms in ms {
+        sqlx::query(
+            "INSERT INTO listening_history_listened (history_id, soundcloud_user_id, listened_ms)
+             SELECT id, soundcloud_user_id, $2 FROM listening_history WHERE sc_track_id = $1",
+        )
+        .bind(format!("soundcloud:tracks:{track}"))
+        .bind(ms)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn stats_count_plays_over_30s_and_time_over_all_rows(pool: PgPool) -> anyhow::Result<()> {
+    let a = ("Alpha", Some("soundcloud:users:1"));
+    play(&pool, "1", a, 200_000, "2026-10-07 10:00").await?;
+    play(&pool, "2", a, 200_000, "2026-10-07 10:10").await?;
+    play(&pool, "3", a, 200_000, "2026-10-07 10:20").await?;
+    play(&pool, "4", a, 200_000, "2026-10-07 10:30").await?;
+    listened(&pool, "2", &[5_000]).await?;
+    listened(&pool, "3", &[8_000, 45_000]).await?;
+    listened(&pool, "4", &[30_000]).await?;
+
+    let stats = HistoryService::new(pool)
+        .stats(USER, StatsPeriod::Week, 0, at("2026-10-07 12:00"))
+        .await?;
+
+    assert_eq!(stats.totals.plays, 3);
+    assert_eq!(stats.totals.listened_ms, 200_000 + 5_000 + 45_000 + 30_000);
+    assert_eq!(stats.totals.tracks, 3);
+    assert_eq!(stats.top_artists[0].plays, 3);
+    assert_eq!(stats.top_artists[0].listened_ms, 280_000);
+    let tracks: Vec<&str> = stats
+        .top_tracks
+        .iter()
+        .map(|t| t.track_urn.as_str())
+        .collect();
+    assert!(!tracks.contains(&"soundcloud:tracks:2"));
+    assert_eq!(stats.timeline.iter().map(|p| p.plays).sum::<i64>(), 3);
+    assert_eq!(stats.rhythm.iter().map(|c| c.plays).sum::<i64>(), 3);
+    Ok(())
+}

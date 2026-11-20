@@ -367,3 +367,61 @@ async fn history_stats_are_cached_until_the_next_play(pool: PgPool) -> anyhow::R
     assert_eq!(plays(body), Some(3));
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_listened_report_belongs_to_the_owner_of_the_history_row(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, NO_REDIS).await?;
+    let session = session(&pool).await?;
+    let stranger: Uuid = sqlx::query_scalar(
+        "INSERT INTO listening_history (soundcloud_user_id, sc_track_id, title, artist_name, duration)
+         VALUES ('99', 'soundcloud:tracks:61', 'Theirs', 'Artist', 200000) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let report = |ms: i64| Some(json!({"listenedMs": ms}));
+    let (status, _, _) = send(
+        &app,
+        session,
+        "POST",
+        &format!("/history/{stranger}/listened"),
+        report(90_000),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let play =
+        json!({"scTrackId": "62", "title": "Mine", "artistName": "Artist", "duration": 200000});
+    let (status, _, body) = send(&app, session, "POST", "/history", Some(play.clone())).await?;
+    assert_eq!(status, StatusCode::OK);
+    let mine = body["id"].as_str().expect("the history row id").to_owned();
+    let (_, _, again) = send(&app, session, "POST", "/history", Some(play)).await?;
+    assert_eq!(again["id"].as_str(), Some(mine.as_str()));
+
+    for ms in [12_000, 95_000] {
+        let (status, _, _) = send(
+            &app,
+            session,
+            "POST",
+            &format!("/history/{mine}/listened"),
+            report(ms),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let stored: Vec<i32> = sqlx::query_scalar(
+        "SELECT listened_ms FROM listening_history_listened ORDER BY listened_ms",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(stored, vec![12_000, 95_000]);
+
+    let (status, _, _) = send(&app, session, "DELETE", "/history", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM listening_history_listened")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
+    Ok(())
+}

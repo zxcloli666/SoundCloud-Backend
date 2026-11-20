@@ -272,6 +272,7 @@ tables:
     unique: {link_requests_claim_token_uq: random}
     groups: {row: {version: row_v, cols: rest}, bind: {version: bind_v, cols: [chat_bind]}}
   listening_history: {class: A, delete: tombstone, insert_only: true, note: "random id, so the tombstone blocks unconditionally"}
+  listening_history_listened: {class: A, delete: tombstone, insert_only: true, note: "one row per listened report of a history row, stats take the max per history_id; cleared with the history rows; random id, so the tombstone blocks unconditionally"}
   login_requests:
     class: A
     delete: tombstone

@@ -1,15 +1,18 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
+use sqlx::types::Uuid;
 
 use crate::cache::cache_service::CacheScope;
 use crate::common::response::json_response;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
-use crate::modules::history::service::{HistoryPage, RecordHistoryDto};
+use crate::modules::history::service::{
+    HistoryPage, ListenedDto, RecordHistoryDto, RecordedHistory,
+};
 use crate::modules::history::stats::{StatsPeriod, clamp_utc_offset};
 use crate::state::AppState;
 
@@ -20,6 +23,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/history", get(find_all).post(record).delete(clear))
         .route("/history/stats", get(stats))
+        .route("/history/{id}/listened", post(listened))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,8 +47,22 @@ async fn record(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Json(body): Json<RecordHistoryDto>,
+) -> AppResult<Json<RecordedHistory>> {
+    let id = st.history.record(&ctx.sc_user_id, &body).await?;
+    forget_stats(&st, &ctx.sc_user_id).await;
+    Ok(Json(RecordedHistory { id }))
+}
+
+async fn listened(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ListenedDto>,
 ) -> AppResult<StatusCode> {
-    st.history.record(&ctx.sc_user_id, &body).await?;
+    let listened_ms = i32::try_from(body.listened_ms.max(0)).unwrap_or(i32::MAX);
+    st.history
+        .report_listened(&ctx.sc_user_id, id, listened_ms)
+        .await?;
     forget_stats(&st, &ctx.sc_user_id).await;
     Ok(StatusCode::OK)
 }

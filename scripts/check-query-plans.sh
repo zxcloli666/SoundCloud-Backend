@@ -10,7 +10,7 @@ fi
 PSQL_CMD+=(-tAqX)
 
 QDIR="${QUERIES_DIR:-api/queries}"
-BIG="${BIG_TABLES:-tracks track_artists user_events albums album_tracks sc_track_counters artists wanted_tracks user_likes_tracks playlist_track_projection playlist_membership_operations playlist_remote_snapshot_tracks listening_history lyrics_cache lyrics_lookup_state}"
+BIG="${BIG_TABLES:-tracks track_artists user_events albums album_tracks sc_track_counters artists wanted_tracks user_likes_tracks playlist_track_projection playlist_membership_operations playlist_remote_snapshot_tracks listening_history listening_history_listened lyrics_cache lyrics_lookup_state}"
 
 cd "$(git rev-parse --show-toplevel)"
 
