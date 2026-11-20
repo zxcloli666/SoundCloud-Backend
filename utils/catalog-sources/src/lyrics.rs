@@ -156,10 +156,16 @@ impl LyricsSources {
         }
         let artist = hints.artist.trim();
         let queries = heuristic_queries(artist, title);
-        match self.lookup_lua(hints, &queries).await {
+        tracing::debug!(%title, %artist, ?queries, "lyrics lookup started");
+        let outcome = match self.lookup_lua(hints, &queries).await {
             Ok(outcome) => outcome,
-            Err(lua_error) => self.lookup_raw(hints, &queries, lua_error).await,
-        }
+            Err(lua_error) => {
+                tracing::debug!(error = %lua_error, "lyrics lua failed, trying the raw relay");
+                self.lookup_raw(hints, &queries, lua_error).await
+            }
+        };
+        tracing::debug!(outcome = outcome_name(&outcome), "lyrics lookup finished");
+        outcome
     }
 
     pub(crate) async fn lua_envelope(
@@ -207,6 +213,12 @@ impl LyricsSources {
             .failed
             .iter()
             .any(|failure| failure.starts_with("lrclib: "));
+        tracing::debug!(
+            kind = %envelope.kind,
+            failed = ?envelope.failed,
+            candidates = envelope.candidates.len(),
+            "lyrics lua replied"
+        );
         match envelope.kind.as_str() {
             "empty" if envelope.candidates.is_empty() && clean => {
                 Ok(LyricsLookupOutcome::CleanMiss)
@@ -220,7 +232,8 @@ impl LyricsSources {
                     .into_iter()
                     .take(MAX_CANDIDATES)
                     .filter_map(lua_candidate)
-                    .collect();
+                    .collect::<Vec<_>>();
+                tracing::debug!(verdicts = ?candidate_verdicts(hints, &candidates), "lyrics candidates judged");
                 match select_candidate(hints, candidates) {
                     Some(candidate) => Ok(found(candidate, lrclib_failed)),
                     None if clean => Ok(LyricsLookupOutcome::CleanMiss),
@@ -617,6 +630,58 @@ fn bar_segments(title: &str) -> Vec<String> {
     }
 }
 
+fn outcome_name(outcome: &LyricsLookupOutcome) -> &'static str {
+    match outcome {
+        LyricsLookupOutcome::Found(_) => "found",
+        LyricsLookupOutcome::FoundWithoutSync(_) => "found_without_sync",
+        LyricsLookupOutcome::CleanMiss => "clean_miss",
+        LyricsLookupOutcome::InsufficientMetadata => "insufficient_metadata",
+        LyricsLookupOutcome::Retry(_) => "retry",
+    }
+}
+
+fn candidate_verdicts(hints: &LyricsHints, candidates: &[LyricsCandidate]) -> Vec<String> {
+    let variants = variants(hints);
+    candidates
+        .iter()
+        .map(|candidate| {
+            let accepted = variants
+                .iter()
+                .any(|variant| matches_hints(&variant.hints, candidate));
+            let verdict = if accepted {
+                "match"
+            } else {
+                rejection(hints, candidate)
+            };
+            format!(
+                "{} {} | {} {}s: {verdict}",
+                candidate.source,
+                candidate.artist.as_deref().unwrap_or("-"),
+                candidate.title.as_deref().unwrap_or("-"),
+                candidate.duration_sec.unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+fn rejection(hints: &LyricsHints, candidate: &LyricsCandidate) -> &'static str {
+    let Some(title) = candidate.title.as_deref() else {
+        return "no title";
+    };
+    let target = title_forms(&hints.title);
+    let other = title_forms(title);
+    if !(target.is_same_recording(&other) || works_match(&target, &other)) {
+        return "title differs";
+    }
+    if let Some(artist) = candidate.artist.as_deref()
+        && !hints.artist.trim().is_empty()
+        && artist_similarity(&hints.artist, artist) < 0.72
+    {
+        return "artist differs";
+    }
+    "duration differs"
+}
+
 fn select_candidate(
     hints: &LyricsHints,
     candidates: Vec<LyricsCandidate>,
@@ -909,38 +974,23 @@ fn normalize_query(value: &str) -> String {
 pub(crate) fn heuristic_queries(artist: &str, title: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut queries = Vec::new();
-    for value in [format!("{artist} {title}"), title.to_owned()] {
+    let mut push = |value: String| {
         let value = normalize_query(&value);
         let key = value.to_lowercase();
         if value.chars().count() >= 2 && seen.insert(key) {
             queries.push(value);
         }
-    }
-    if let Some((embedded_artist, embedded_title)) = split_artist_title(title) {
-        for value in [
-            format!("{embedded_artist} {embedded_title}"),
-            embedded_title,
-        ] {
-            let value = normalize_query(&value);
-            let key = value.to_lowercase();
-            if value.chars().count() >= 2 && seen.insert(key) {
-                queries.push(value);
-            }
-        }
-    }
+    };
     for segment in bar_segments(title) {
-        let bare = segment
-            .split(['(', '['])
-            .next()
-            .unwrap_or_default()
-            .to_owned();
-        for value in [segment, bare] {
-            let value = normalize_query(&value);
-            let key = value.to_lowercase();
-            if value.chars().count() >= 2 && seen.insert(key) {
-                queries.push(value);
-            }
-        }
+        let bare = segment.split(['(', '[']).next().unwrap_or_default();
+        push(bare.to_owned());
+        push(segment.clone());
+    }
+    push(format!("{artist} {title}"));
+    push(title.to_owned());
+    if let Some((embedded_artist, embedded_title)) = split_artist_title(title) {
+        push(format!("{embedded_artist} {embedded_title}"));
+        push(embedded_title);
     }
     queries.into_iter().take(MAX_QUERIES).collect()
 }
@@ -1364,6 +1414,7 @@ mod tests {
         GeniusSearched,
         LrclibOnly,
         LrclibPlainBesideSynced,
+        LrclibWithinRequestBudget,
         LinkedGeniusBesideSynced,
         EmptyGeniusFailed,
         Fail,
@@ -1455,9 +1506,33 @@ mod tests {
             inputs: Bytes,
         ) -> RelayFuture<'_, Bytes> {
             self.method_calls.fetch_add(1, Ordering::Relaxed);
+            let affordable = affordable_queries(&inputs);
             *self.last_inputs.lock().unwrap() = Some(inputs);
             Box::pin(async move {
                 match self.method_mode {
+                    MethodMode::LrclibWithinRequestBudget => {
+                        let hit = affordable.iter().any(|query| query == "\u{6d77}\u{9614}\u{5929}\u{7a7a}");
+                        if !hit {
+                            return Ok(Bytes::from_static(br#"{"kind":"empty"}"#));
+                        }
+                        let body = "A sufficiently long synced lyrics body";
+                        let record = |artist: &str, seconds: f64| {
+                            serde_json::json!({
+                                "source": "lrclib",
+                                "synced_lrc": format!("[00:01.00] {body}"),
+                                "plain_text": body,
+                                "artist": artist,
+                                "title": "\u{6d77}\u{9614}\u{5929}\u{7a7a}",
+                                "duration_sec": seconds,
+                                "query_index": 1
+                            })
+                        };
+                        let reply = serde_json::json!({
+                            "kind": "found",
+                            "candidates": [record("Beyond", 325.0), record("BEYOND", 320.0), record("BEYOND", 322.56)]
+                        });
+                        Ok(Bytes::from(reply.to_string()))
+                    }
                     MethodMode::Found => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"genius","plain_text":"A sufficiently long exact lyrics body returned by relay Lua","exact":true,"query_index":0}]}"#,
                     )),
@@ -1606,6 +1681,20 @@ mod tests {
             "{}"
         };
         (StatusCode::OK, body.to_owned())
+    }
+
+    fn affordable_queries(inputs: &Bytes) -> Vec<String> {
+        let parsed: serde_json::Value = serde_json::from_slice(inputs).unwrap_or_default();
+        parsed["queries"]
+            .as_array()
+            .map(|queries| {
+                queries
+                    .iter()
+                    .filter_map(|query| query.as_str().map(str::to_owned))
+                    .take(2)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn hints() -> LyricsHints {
@@ -2467,5 +2556,20 @@ mod tests {
         ];
         let selected = select_candidate(&cleaned, candidates).unwrap();
         assert!(selected.synced_lrc.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_remix_bar_title_reaches_the_original_within_the_lua_request_budget() {
+        let relay = MockRelay::new(MethodMode::LrclibWithinRequestBudget, RawMode::Fail);
+        let service = sources(relay, String::new());
+        let title = "\u{6d77}\u{9614}\u{5929}\u{7a7a} (DJ\u{6728}\u{6708}Remix)\u{ff5c}Tr\u{1edd}i cao bi\u{1ec3}n r\u{1ed9}ng";
+
+        let outcome = service.lookup(&uploaded(title, "Zxuan", 104_306)).await;
+
+        let LyricsLookupOutcome::Found(found) = outcome else {
+            panic!("the original lyrics were not found");
+        };
+        assert!(found.synced_lrc.is_none());
+        assert!(found.plain_text.is_some());
     }
 }
