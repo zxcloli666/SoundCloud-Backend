@@ -112,6 +112,7 @@ async fn page(
         SmartWaveRequest {
             sc_user_id: LISTENER,
             languages: None,
+            genres: None,
             limit: PAGE,
             cursor_token: cursor,
             seed,

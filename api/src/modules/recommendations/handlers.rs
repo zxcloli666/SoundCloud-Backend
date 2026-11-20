@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::common::query::parse_languages;
+use crate::common::query::{parse_genres, parse_languages};
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::recommendations::home_wave::HomeRequest;
@@ -214,6 +214,8 @@ struct WaveQuery {
     #[serde(default)]
     languages: Option<String>,
     #[serde(default)]
+    genres: Option<String>,
+    #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
     hide_listened: Option<String>,
@@ -245,6 +247,7 @@ async fn wave_user(
 ) -> AppResult<Json<WavePayload>> {
     let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
+    let genres = parse_genres(q.genres.as_deref());
     if ctx.sc_user_id.is_empty() {
         return Ok(Json(WavePayload {
             tracks: Vec::new(),
@@ -254,6 +257,7 @@ async fn wave_user(
     let req = SmartWaveRequest {
         sc_user_id: &ctx.sc_user_id,
         languages: languages.as_deref(),
+        genres: genres.as_deref(),
         limit,
         cursor_token: q.cursor.as_deref(),
         seed: SmartWaveSeed::User,
@@ -272,6 +276,7 @@ async fn wave_track(
 ) -> AppResult<Json<WavePayload>> {
     let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
+    let genres = parse_genres(q.genres.as_deref());
     let Some(seed) = crate::common::sc_ids::EntityRef::track(&seed_track_id)
         .map(crate::common::sc_ids::EntityRef::id)
     else {
@@ -283,6 +288,7 @@ async fn wave_track(
     let req = SmartWaveRequest {
         sc_user_id: &ctx.sc_user_id,
         languages: languages.as_deref(),
+        genres: genres.as_deref(),
         limit,
         cursor_token: q.cursor.as_deref(),
         seed: SmartWaveSeed::Track(seed),
@@ -301,6 +307,7 @@ async fn wave_artist(
 ) -> AppResult<Json<WavePayload>> {
     let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
+    let genres = parse_genres(q.genres.as_deref());
     let top_tracks = st
         .recommendations
         .load_artist_top_track_ids(artist_id, 20)
@@ -309,6 +316,7 @@ async fn wave_artist(
     let req = SmartWaveRequest {
         sc_user_id: &ctx.sc_user_id,
         languages: languages.as_deref(),
+        genres: genres.as_deref(),
         limit,
         cursor_token: q.cursor.as_deref(),
         seed: SmartWaveSeed::Artist(artist_id, &top_tracks),

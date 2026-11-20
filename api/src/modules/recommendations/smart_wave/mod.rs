@@ -1,6 +1,7 @@
 pub mod artist_tracks;
 pub mod blocked;
 pub mod cursor;
+pub mod genres;
 pub mod graph;
 pub mod moments;
 pub mod rank;
@@ -69,6 +70,7 @@ pub enum SmartWaveSeed<'a> {
 pub struct SmartWaveRequest<'a> {
     pub sc_user_id: &'a str,
     pub languages: Option<&'a [String]>,
+    pub genres: Option<&'a [String]>,
     pub limit: usize,
     pub cursor_token: Option<&'a str>,
     pub seed: SmartWaveSeed<'a>,
@@ -236,6 +238,7 @@ pub async fn build(
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
     let mut cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
+    genres::weigh(&svc.pg, req.genres, &mut cands).await;
 
     let tail = reach.tail(rest, &cands, &settled);
     if !tail.is_empty() {
@@ -260,7 +263,8 @@ pub async fn build(
             track_vectors(svc, &fresh_ids),
         );
         fresh.retain(|tid, _| !blocked.contains(tid));
-        let fresh = score_candidates(fresh, &taste, &skipped, &sunk_artists, [&fm, &fc, &fl]);
+        let mut fresh = score_candidates(fresh, &taste, &skipped, &sunk_artists, [&fm, &fc, &fl]);
+        genres::weigh(&svc.pg, req.genres, &mut fresh).await;
         cands.extend(fresh);
     }
     let picked = reach.pick(&cands);
@@ -350,6 +354,7 @@ pub async fn cluster_tracks(
     let req = SmartWaveRequest {
         sc_user_id,
         languages,
+        genres: None,
         limit,
         cursor_token: None,
         seed,
