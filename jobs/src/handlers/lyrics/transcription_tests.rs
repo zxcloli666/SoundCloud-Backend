@@ -58,6 +58,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
          CREATE TABLE lyrics_cache (
              sc_track_id text PRIMARY KEY,
              synced_lrc text,
+             synced_words text,
              plain_text text,
              source varchar(16) NOT NULL,
              synced_source varchar(16),
@@ -159,6 +160,7 @@ fn outcome(status: WorkerStatus, reason: Option<WorkerReason>) -> TranscriptionR
         lines_unplaced: Some(1),
         language: Some("en".to_owned()),
         synced_lrc: None,
+        synced_words: None,
         words: None,
     }
 }
@@ -571,6 +573,105 @@ async fn aligned_result_replaces_an_lrclib_sync(pool: PgPool) -> anyhow::Result<
             Some("self_gen".to_owned()),
             Some("s2.aaaa.bbbb.cccc".to_owned())
         )
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn word_timings_follow_the_lrc_that_lands(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_pending(&pool).await?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, synced_words, source)
+         VALUES ('42', 'aggregator lyrics', '[00:02.00]aggregator lyrics',
+                 '[00:02.00]<00:02.00>aggregator <00:02.50>lyrics<00:03.00>', 'lrclib')",
+    )
+    .execute(&pool)
+    .await?;
+    let handler = TranscriptionResultHandler::new(pool.clone());
+    let mut aligned = aligned_result();
+    aligned.synced_words = Some(
+        "[00:01.00]<00:01.00>A <00:01.20>sufficiently <00:01.40>long <00:01.60>generated \
+         <00:01.80>lyrics <00:02.00>line<00:02.20>"
+            .to_owned(),
+    );
+
+    handler.finish(aligned, delivery(1)).await?;
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT synced_words FROM lyrics_cache WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(
+        stored.as_deref(),
+        Some(
+            "[00:01.00]<00:01.00>A <00:01.20>sufficiently <00:01.40>long <00:01.60>generated \
+             <00:01.80>lyrics <00:02.00>line<00:02.20>"
+        )
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn word_timings_that_disagree_with_the_lrc_are_dropped(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_pending(&pool).await?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, synced_words, source)
+         VALUES ('42', 'aggregator lyrics', '[00:02.00]aggregator lyrics',
+                 '[00:02.00]<00:02.00>aggregator <00:02.50>lyrics<00:03.00>', 'lrclib')",
+    )
+    .execute(&pool)
+    .await?;
+    let mut aligned = aligned_result();
+    aligned.synced_words = Some("[00:01.00]<00:01.00>other text<00:02.00>".to_owned());
+
+    TranscriptionResultHandler::new(pool.clone())
+        .finish(aligned, delivery(1))
+        .await?;
+
+    let stored = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT synced_lrc, synced_words FROM lyrics_cache WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        stored,
+        (
+            Some("[00:01.00]A sufficiently long generated lyrics line".to_owned()),
+            None
+        )
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_aggregator_winner_keeps_its_own_word_timings(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_pending(&pool).await?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, synced_words, source, synced_source)
+         VALUES ('42', 'aggregator lyrics', '[00:02.00]aggregator lyrics',
+                 '[00:02.00]<00:02.00>aggregator <00:02.50>lyrics<00:03.00>',
+                 'musixmatch', 'musixmatch')",
+    )
+    .execute(&pool)
+    .await?;
+    let mut aligned = aligned_result();
+    aligned.synced_words =
+        Some("[00:01.00]<00:01.00>A sufficiently long generated lyrics line<00:02.00>".to_owned());
+
+    TranscriptionResultHandler::new(pool.clone())
+        .finish(aligned, delivery(1))
+        .await?;
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT synced_words FROM lyrics_cache WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(
+        stored.as_deref(),
+        Some("[00:02.00]<00:02.00>aggregator <00:02.50>lyrics<00:03.00>")
     );
     Ok(())
 }

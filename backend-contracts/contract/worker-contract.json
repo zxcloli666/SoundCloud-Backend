@@ -3171,6 +3171,9 @@
         "synced_lrc": {
           "type": "string"
         },
+        "synced_words": {
+          "type": "string"
+        },
         "upload_generation": {
           "format": "int64",
           "minimum": 1,

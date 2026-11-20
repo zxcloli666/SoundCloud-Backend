@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
@@ -48,6 +50,9 @@ RESULT_FIELDS = {
 }
 
 
+WORD_TAG = re.compile(r"<\d\d:\d\d\.\d\d>")
+
+
 def lrc_text_lines(outcome_fields: dict[str, object]) -> list[str]:
     lrc = str(outcome_fields["synced_lrc"])
     return [line[10:] for line in lrc.split("\n") if len(line) > 10]
@@ -57,13 +62,15 @@ async def test_a_russian_track_is_synced_and_published(harness: LaneHarness) -> 
     outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
     assert outcome.status is Status.OK, outcome.detail
     fields = dict(outcome.fields)
-    assert RESULT_FIELDS | {"synced_lrc", "words"} <= set(fields)
+    assert RESULT_FIELDS | {"synced_lrc", "synced_words", "words"} <= set(fields)
     assert fields["sync_version"] == "s4.c07281df.49402e95.deadbeef"
     assert fields["language"] == "ru"
     assert fields["lines_total"] == 5 and fields["lines_unplaced"] == 0
     assert fields["placed_share"] == 1.0 and fields["aligned_share"] == 1.0
     assert lrc_text_lines(fields) == RUSSIAN_LINES
     assert str(fields["synced_lrc"]).count("\n") == 6
+    assert WORD_TAG.sub("", str(fields["synced_words"])) == fields["synced_lrc"]
+    assert WORD_TAG.search(str(fields["synced_words"]))
     assert all(not word["unplaced"] for word in fields["words"])
     called = [name for name, _ in harness.engines.calls]
     assert called[:4] == ["detect_language", "separate", "vad", "draft"]
@@ -344,6 +351,7 @@ async def test_words_are_withheld_when_too_many_collapse(harness: LaneHarness) -
     outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
     assert outcome.status is Status.OK, outcome.detail
     assert "words" not in outcome.fields
+    assert "synced_words" not in outcome.fields
     assert "synced_lrc" in outcome.fields
 
 

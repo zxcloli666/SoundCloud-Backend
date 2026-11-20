@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 from worker.domain.lyrics.placement import Placement, Word
@@ -28,6 +28,7 @@ class Stamped:
 @dataclass(frozen=True)
 class Rendered:
     synced_lrc: str
+    synced_words: str
     words: list[dict[str, object]]
 
 
@@ -35,7 +36,11 @@ def render(
     script: Script, lines: Sequence[TokenizedLine], placement: Placement, *, pause_s: float
 ) -> Rendered:
     stamped = stamp(script, placement)
-    return Rendered(synced_lrc(stamped, pause_s), words_payload(stamped, lines))
+    return Rendered(
+        synced_lrc(stamped, pause_s),
+        synced_words(stamped, lines, pause_s),
+        words_payload(stamped, lines),
+    )
 
 
 def stamp(script: Script, placement: Placement) -> list[Stamped]:
@@ -63,6 +68,14 @@ def stamp(script: Script, placement: Placement) -> list[Stamped]:
 
 
 def synced_lrc(stamped: Sequence[Stamped], pause_s: float) -> str:
+    return render_lines(stamped, pause_s, lambda item: item.entry.text)
+
+
+def synced_words(stamped: Sequence[Stamped], lines: Sequence[TokenizedLine], pause_s: float) -> str:
+    return render_lines(stamped, pause_s, lambda item: tagged_text(item, lines))
+
+
+def render_lines(stamped: Sequence[Stamped], pause_s: float, body: Callable[[Stamped], str]) -> str:
     rendered: list[str] = []
     previous: Stamped | None = None
     marker_between = False
@@ -73,10 +86,44 @@ def synced_lrc(stamped: Sequence[Stamped], pause_s: float) -> str:
             continue
         if previous is not None and not marker_between and pause(previous, current, pause_s):
             rendered.append(timestamp(previous.end_s))
-        rendered.append(f"{timestamp(current.start_s)}{current.entry.text}")
+        rendered.append(f"{timestamp(current.start_s)}{body(current)}")
         previous = current
         marker_between = False
     return "\n".join(rendered)
+
+
+def tagged_text(item: Stamped, lines: Sequence[TokenizedLine]) -> str:
+    text = item.entry.text
+    if not item.placed or item.interpolated or item.ordinal is None:
+        return text
+    if len(item.words) == 0 or len(item.words) != len(lines[item.ordinal].tokens):
+        return text
+    offsets = word_offsets(text, item.words)
+    if offsets is None:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    tag_s = item.start_s
+    for offset, word in zip(offsets, item.words, strict=True):
+        tag_s = min(max(word.start_s, tag_s), item.end_s)
+        pieces.append(text[cursor:offset])
+        pieces.append(word_tag(tag_s))
+        cursor = offset
+    pieces.append(text[cursor:])
+    pieces.append(word_tag(item.end_s))
+    return "".join(pieces)
+
+
+def word_offsets(text: str, words: Sequence[Word]) -> list[int] | None:
+    offsets: list[int] = []
+    cursor = 0
+    for word in words:
+        found = text.find(word.text, cursor)
+        if found < 0:
+            return None
+        offsets.append(found)
+        cursor = found + len(word.text)
+    return offsets
 
 
 def words_payload(
@@ -107,9 +154,17 @@ def words_payload(
 
 
 def timestamp(seconds: float) -> str:
+    return f"[{clock(seconds)}]"
+
+
+def word_tag(seconds: float) -> str:
+    return f"<{clock(seconds)}>"
+
+
+def clock(seconds: float) -> str:
     centis = max(0, round(seconds * 100))
     minutes, rest = divmod(centis, 6000)
-    return f"[{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}]"
+    return f"{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}"
 
 
 def backdate_leading(stamped: list[Stamped]) -> list[Stamped]:

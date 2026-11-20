@@ -11,6 +11,7 @@ use sqlx::PgPool;
 use crate::bus::DeliveryContext;
 use crate::queue::{JobError, JobResult};
 
+use super::synced_words::accepted_synced_words;
 use super::text::wire_language;
 
 const MAX_LYRICS_BYTES: usize = 800_000;
@@ -30,6 +31,7 @@ struct ValidatedResult {
     reason: Option<WorkerReason>,
     sync_version: String,
     synced_lrc: Option<String>,
+    synced_words: Option<String>,
     confidence: Option<f64>,
     placed_share: Option<f64>,
     aligned_share: Option<f64>,
@@ -158,7 +160,8 @@ impl TranscriptionResultHandler {
             result.lines_total,
             result.lines_unplaced,
             result.language.as_deref(),
-            is_released_sync_version(&result.sync_version)
+            is_released_sync_version(&result.sync_version),
+            result.synced_words.as_deref()
         )
         .fetch_one(&mut *transaction)
         .await
@@ -228,6 +231,9 @@ fn validate(result: TranscriptionResult) -> anyhow::Result<ValidatedResult> {
         Outcome::Aligned => Some(synced_lyrics(result.synced_lrc)?),
         _ => None,
     };
+    let synced_words = synced_lrc
+        .as_deref()
+        .and_then(|lrc| accepted_synced_words(&sc_track_id, lrc, result.synced_words));
     Ok(ValidatedResult {
         sc_track_id,
         upload_generation: result.upload_generation,
@@ -237,6 +243,7 @@ fn validate(result: TranscriptionResult) -> anyhow::Result<ValidatedResult> {
         reason,
         sync_version: result.sync_version,
         synced_lrc,
+        synced_words,
         confidence: share(result.confidence, "confidence")?,
         placed_share: share(result.placed_share, "placed share")?,
         aligned_share: share(result.aligned_share, "aligned share")?,
@@ -361,6 +368,7 @@ mod tests {
             lines_unplaced: Some(1),
             language: Some("ru".to_owned()),
             synced_lrc: (status == WorkerStatus::Ok).then(|| "[00:01.00]line".to_owned()),
+            synced_words: None,
             words: None,
         }
     }
