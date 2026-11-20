@@ -1,8 +1,14 @@
+use sqlx::PgPool;
+
 use super::HANDLE;
 
 const REQUESTS: &str = "sc_mobile_requests_total";
 const ACTIONS: &str = "jobs_mobile_actions_total";
+const LINKS: &str = "jobs_mobile_links";
 const SERVICE: &str = "jobs";
+
+const LINK_PLANS: [&str; 3] = ["go_plus", "go", "free"];
+const LINK_STATES: [&str; 3] = ["working", "failing", "relink_required"];
 
 pub const ACTION_TYPES: [&str; 11] = [
     "track_reaction_set",
@@ -71,6 +77,27 @@ pub(super) fn register() {
             metrics::counter!(ACTIONS, "action" => action, "outcome" => outcome).increment(0);
         }
     }
+    for plan in LINK_PLANS {
+        for state in LINK_STATES {
+            metrics::gauge!(LINKS, "plan" => plan, "state" => state).set(0.0);
+        }
+    }
+}
+
+pub(super) async fn record_links(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let rows = sqlx::query_file!("queries/mobile/link_counts.sql")
+        .fetch_all(pool)
+        .await?;
+    for plan in LINK_PLANS {
+        for state in LINK_STATES {
+            let links = rows
+                .iter()
+                .find(|row| row.plan == plan && row.state == state)
+                .map_or(0, |row| row.links);
+            metrics::gauge!(LINKS, "plan" => plan, "state" => state).set(links as f64);
+        }
+    }
+    Ok(())
 }
 
 pub fn record_mobile_request(op: &'static str, status_class: &'static str) {

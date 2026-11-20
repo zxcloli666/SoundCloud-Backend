@@ -230,3 +230,90 @@ fn a_state_without_a_pool_cannot_pretend_to_serve_metrics() {
     let state = HealthState::new();
     assert!(state.metrics_pool.is_none());
 }
+
+async fn link(
+    pool: &PgPool,
+    user: &str,
+    plan: Option<&str>,
+    status: &str,
+    expires: &str,
+    failures: i32,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+         SELECT gen_random_uuid(), 'app', 'c', 's', 'https://example.test'
+         WHERE NOT EXISTS (SELECT 1 FROM oauth_apps)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO mobile_credentials (
+             soundcloud_user_id, oauth_app_id, device_id, access_token, refresh_token,
+             expires_at, scope, linked_at, status, plan, refresh_failure_count
+         ) VALUES (
+             $1, (SELECT id FROM oauth_apps LIMIT 1), gen_random_uuid(), 'a', 'r',
+             now() + $2::interval, '', now(), $3, $4, $5
+         )",
+    )
+    .bind(user)
+    .bind(expires)
+    .bind(status)
+    .bind(plan)
+    .bind(failures)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn linked_accounts_are_counted_by_plan_and_whether_the_token_works(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let _alone = RENDERING.lock().await;
+    crate::metrics::init();
+    link(&pool, "1", Some("high_tier"), "active", "1 hour", 0).await?;
+    link(&pool, "2", Some("high_tier"), "active", "-1 day", 0).await?;
+    link(&pool, "3", Some("high_tier"), "active", "-1 minute", 2).await?;
+    link(
+        &pool,
+        "4",
+        Some("high_tier"),
+        "relink_required",
+        "1 hour",
+        1,
+    )
+    .await?;
+    link(&pool, "5", Some("mid_tier"), "active", "1 hour", 0).await?;
+    link(&pool, "6", Some("none"), "active", "1 hour", 0).await?;
+    link(&pool, "7", Some("student_tier"), "active", "-2 days", 0).await?;
+    link(&pool, "8", None, "active", "-2 days", 1).await?;
+    link(
+        &pool,
+        "9",
+        Some("brand_new_tier"),
+        "relink_required",
+        "-2 days",
+        3,
+    )
+    .await?;
+
+    let Some(body) = render_fresh(&pool, &[]).await else {
+        return Ok(());
+    };
+
+    for (plan, state, count) in [
+        ("go_plus", "working", 2),
+        ("go_plus", "failing", 1),
+        ("go_plus", "relink_required", 1),
+        ("go", "working", 1),
+        ("go", "failing", 0),
+        ("go", "relink_required", 0),
+        ("free", "working", 2),
+        ("free", "failing", 1),
+        ("free", "relink_required", 1),
+    ] {
+        let line = format!("jobs_mobile_links{{plan=\"{plan}\",state=\"{state}\"}} {count}");
+        assert!(body.contains(&line), "{line}");
+    }
+    Ok(())
+}

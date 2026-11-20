@@ -95,6 +95,8 @@ static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 static LANE_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 static REPL_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+static MOBILE_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> =
+    tokio::sync::Mutex::const_new(None);
 const SNAPSHOT_TTL: Duration = Duration::from_secs(60);
 const REPL_SNAPSHOT_TTL: Duration = Duration::from_secs(15);
 const RETENTION_TABLES: [&str; 7] = [
@@ -732,6 +734,7 @@ pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     record_lane_depths(pool).await;
     record_kind_depths(pool).await;
     record_repl_ops(pool).await;
+    record_mobile_links(pool).await;
     Some(handle.render())
 }
 
@@ -740,6 +743,18 @@ pub(crate) async fn forget_snapshots() {
     *LANE_SNAPSHOT_AT.lock().await = None;
     *KIND_SNAPSHOT_AT.lock().await = None;
     *REPL_SNAPSHOT_AT.lock().await = None;
+    *MOBILE_SNAPSHOT_AT.lock().await = None;
+}
+
+async fn record_mobile_links(pool: &PgPool) {
+    let mut snapshot_at = MOBILE_SNAPSHOT_AT.lock().await;
+    if snapshot_at.is_some_and(|taken| taken.elapsed() < SNAPSHOT_TTL) {
+        return;
+    }
+    match mobile::record_links(pool).await {
+        Ok(()) => *snapshot_at = Some(Instant::now()),
+        Err(error) => tracing::warn!(%error, "mobile link metrics snapshot failed"),
+    }
 }
 
 async fn record_lane_depths(pool: &PgPool) {
