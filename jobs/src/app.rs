@@ -96,7 +96,10 @@ pub async fn run() -> anyhow::Result<()> {
     let taste_results = bus.taste_results(&config.nats).await?;
     let highlight_results = bus.highlight_results(&config.nats).await?;
     let video_results = bus.video_find_results(&config.nats).await?;
-    let video_vlm_results = bus.video_vlm_results(&config.nats).await?;
+    let video_vlm_results = bus.lane_results(&config.nats, WorkerLane::VideoVlm).await?;
+    let video_vlm_gpu_results = bus
+        .lane_results(&config.nats, WorkerLane::VideoVlmGpu)
+        .await?;
     let highlights = Arc::new(HighlightHandler::new(
         databases.main.bulk.clone(),
         bus.clone(),
@@ -309,17 +312,26 @@ pub async fn run() -> anyhow::Result<()> {
         supervisor.spawn("video temp sweep", video_find.expire(cancellation.clone()));
     }
     if let Some(video_vlm) = handlers
-        .video_vlm(databases.main.bulk.clone(), &config, video_vlm_bus)
+        .video_vlm(
+            databases.main.bulk.clone(),
+            &config,
+            Fleet::new(video_vlm_bus, health.workers(), config.video_vlm.gpu_seen),
+        )
         .await?
     {
-        let vlm_receiver = video_vlm.clone();
-        supervisor.spawn(
-            "video VLM result consumer",
-            video_vlm_results.run_raw(cancellation.clone(), move |result: VideoVlmResult| {
-                let video_vlm = vlm_receiver.clone();
-                async move { video_vlm.finish(result).await }
-            }),
-        );
+        for (lane, results) in [
+            (WorkerLane::VideoVlm, video_vlm_results),
+            (WorkerLane::VideoVlmGpu, video_vlm_gpu_results),
+        ] {
+            let receiver = video_vlm.clone();
+            supervisor.spawn(
+                "video VLM result consumer",
+                results.run_raw(cancellation.clone(), move |result: VideoVlmResult| {
+                    let video_vlm = receiver.clone();
+                    async move { video_vlm.finish(lane, result).await }
+                }),
+            );
+        }
         supervisor.spawn("video VLM sweep", video_vlm.sweep(cancellation.clone()));
     }
     if let Some(video_gen) = handlers
@@ -339,7 +351,7 @@ pub async fn run() -> anyhow::Result<()> {
             WorkerLane::VideoShot,
             WorkerLane::VideoAssemble,
         ] {
-            let results = video_gen_bus.video_gen_results(&config.nats, lane).await?;
+            let results = video_gen_bus.lane_results(&config.nats, lane).await?;
             let receiver = video_gen.clone();
             supervisor.spawn(
                 "video generation result consumer",

@@ -3,12 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use backend_contracts::pipeline::VideoLabel;
+use backend_contracts::worker_contract::WorkerLane;
 use serde_json::Value;
 
 use super::super::haiku::{Judged, Vision};
 use super::super::prompt::Features;
 use crate::handlers::video_accounts::Notify;
-use crate::handlers::video_gen::Lanes;
+use crate::handlers::video_gen::lanes::{Lanes, Nodes};
 use crate::llm::anthropic::{Answer, LlmError, Spend};
 
 pub(super) const HAIKU: &str = "example-haiku";
@@ -18,9 +19,19 @@ pub(super) const CALL_USD: f64 = 0.0004;
 pub(super) struct Wire {
     pub(super) sent: Arc<Mutex<Vec<(String, Value, String)>>>,
     pub(super) down: Arc<AtomicBool>,
+    pub(super) gpu: Arc<AtomicBool>,
 }
 
 impl Wire {
+    pub(super) fn subjects(&self) -> Vec<String> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(subject, _, _)| subject.clone())
+            .collect()
+    }
+
     pub(super) fn requests(&self) -> Vec<(Value, String)> {
         self.sent
             .lock()
@@ -46,6 +57,12 @@ impl Lanes for Wire {
             .unwrap()
             .push((subject.to_owned(), payload, message_id));
         Ok(())
+    }
+}
+
+impl Nodes for Wire {
+    fn serving(&self, lane: WorkerLane) -> bool {
+        lane == WorkerLane::VideoVlmGpu && self.gpu.load(Ordering::SeqCst)
     }
 }
 

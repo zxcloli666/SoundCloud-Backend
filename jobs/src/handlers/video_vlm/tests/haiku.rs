@@ -1,5 +1,6 @@
 use backend_contracts::pipeline::{VideoClip, VideoLabel, VideoPart, VideoVlmResult};
 use backend_contracts::video_gen::VideoFileSlice;
+use backend_contracts::worker_contract::WorkerLane;
 use base64::Engine as _;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -297,17 +298,17 @@ async fn a_cut_without_a_model_needs_a_known_haiku_label(pool: PgPool) {
 #[test]
 fn frames_without_a_label_are_frames_and_a_gap_between_them_is_refused() {
     assert!(matches!(
-        judge(&frames_result("11", 1)).unwrap(),
+        judge(WorkerLane::VideoVlm, &frames_result("11", 1)).unwrap(),
         Verdict::Frames(_)
     ));
     let mut gap = frames_result("11", 1);
     if let Some(files) = gap.files.as_mut() {
         files[1].offset += 1;
     }
-    assert!(judge(&gap).is_err());
+    assert!(judge(WorkerLane::VideoVlm, &gap).is_err());
     let mut bare = frames_result("11", 1);
     bare.files = None;
-    assert!(judge(&bare).is_err());
+    assert!(judge(WorkerLane::VideoVlm, &bare).is_err());
 }
 
 #[test]

@@ -12,7 +12,7 @@ use super::haiku::Vision;
 use super::queue::{self, Held, HeldFile, Known};
 use crate::handlers::video_accounts::Notify;
 use crate::handlers::video_find::{Pacing, final_key};
-use crate::handlers::video_gen::Lanes;
+use crate::handlers::video_gen::Nodes;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
 
@@ -42,12 +42,12 @@ pub(super) enum Verdict {
     Gone,
 }
 
-impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
-    pub async fn finish(&self, result: VideoVlmResult) -> JobResult {
+impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
+    pub async fn finish(&self, lane: WorkerLane, result: VideoVlmResult) -> JobResult {
         let attempt = i32::try_from(result.attempt)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("video attempt is out of range")))?;
         let track = result.sc_track_id.as_str();
-        match judge(&result).map_err(JobError::permanent)? {
+        match judge(lane, &result).map_err(JobError::permanent)? {
             Verdict::Labelled(answer) => self.labelled(track, attempt, &result, &answer).await,
             Verdict::Answered(answer) => self.answered(track, attempt, &answer).await,
             Verdict::Frames(frames) => self.framed(track, attempt, &frames).await,
@@ -396,7 +396,7 @@ fn verify(held: &Held, answer: &Judged) -> Value {
     verify
 }
 
-pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
+pub(super) fn judge(lane: WorkerLane, result: &VideoVlmResult) -> anyhow::Result<Verdict> {
     ensure!(
         catalog_ingest::normalize_sc_track_id(&result.sc_track_id).as_deref()
             == Some(result.sc_track_id.as_str()),
@@ -411,7 +411,7 @@ pub(super) fn judge(result: &VideoVlmResult) -> anyhow::Result<Verdict> {
         (status, None) => bail!("VLM {} result has no reason", status.as_str()),
         (status, Some(reason)) => {
             ensure!(
-                reason.status() == status && reason.is_published_on(WorkerLane::VideoVlm),
+                reason.status() == status && reason.is_published_on(lane),
                 "VLM result carries reason {} its lane never publishes as {}",
                 reason.as_str(),
                 status.as_str()

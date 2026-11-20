@@ -6,11 +6,11 @@ use super::VideoVlm;
 use super::haiku::Vision;
 use super::queue::{self, Held, Known};
 use crate::handlers::video_accounts::Notify;
-use crate::handlers::video_gen::Lanes;
+use crate::handlers::video_gen::Nodes;
 use crate::objects::Blobs;
 use crate::queue::{JobError, JobResult};
 
-impl<B: Blobs + 'static, L: Lanes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
+impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     pub(super) async fn verify_stored(&self) -> JobResult {
         if self.config.verify_stored <= 0 || queue::waiting(&self.pool).await? > 0 {
             return Ok(());

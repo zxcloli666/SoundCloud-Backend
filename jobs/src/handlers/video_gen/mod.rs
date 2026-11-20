@@ -1,6 +1,6 @@
 pub mod director;
 mod flow;
-mod lanes;
+pub(crate) mod lanes;
 pub mod opus;
 mod parts;
 mod prompts;
@@ -28,8 +28,8 @@ use crate::objects::{Blobs, Objects, ObjectsError};
 use crate::queue::JobResult;
 
 pub use self::director::Director;
-pub use self::lanes::{Fleet, Lanes};
-use self::lanes::{Nodes, STAGE_LANES};
+use self::lanes::STAGE_LANES;
+pub use self::lanes::{Fleet, Nodes};
 use self::parts::Parts;
 pub use self::state::REJECTED_PREFIX;
 use self::state::{DIRECTOR_STAGES, LANE_STAGES};
