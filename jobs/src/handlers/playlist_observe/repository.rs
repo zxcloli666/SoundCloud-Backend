@@ -410,9 +410,9 @@ impl PlaylistObserveRepository {
         )
         .fetch_one(&mut *transaction)
         .await?;
-        let is_legacy = has_legacy_intents;
-        let relation = membership_relation(&local_track_ids, &snapshot.track_ids);
+        let mut through = capture.through_operation_sequence;
         if has_legacy_intents {
+            let relation = membership_relation(&local_track_ids, &snapshot.track_ids);
             let local_fingerprint = membership_fingerprint(&local_track_ids);
             let local_snapshot_id = store_snapshot(
                 &mut transaction,
@@ -429,24 +429,29 @@ impl PlaylistObserveRepository {
             )
             .execute(&mut *transaction)
             .await?;
-        }
-        let pending_operations =
-            locked.last_operation_sequence > locked.committed_operation_sequence;
-        let outcome = if pending_operations && catalog_complete && is_legacy {
-            self.adopt_local_over_legacy(
-                &mut transaction,
-                capture,
-                &locked,
-                &local_track_ids,
-                snapshot,
+            let appended = sqlx::query_file_scalar!(
+                "queries/playlist_observe/append_legacy_additions.sql",
+                &capture.playlist_urn,
+                &capture.owner_id,
+                &local_track_ids
             )
-            .await?
-        } else if pending_operations && catalog_complete {
-            self.reduce_pending_operations(&mut transaction, capture, &locked, snapshot)
+            .fetch_all(&mut *transaction)
+            .await?;
+            through = appended.into_iter().fold(through, i64::max);
+            sqlx::query_file!(
+                "queries/playlist_observe/abandon_legacy_intents.sql",
+                &capture.playlist_urn
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        let pending_operations = through > locked.committed_operation_sequence;
+        let outcome = if pending_operations && catalog_complete {
+            self.reduce_pending_operations(&mut transaction, capture, through, &locked, snapshot)
                 .await?
         } else {
             plain_reconciliation(
-                reconciliation_decision(is_legacy, pending_operations, catalog_complete, relation),
+                reconciliation_decision(pending_operations, catalog_complete),
                 snapshot,
                 &fingerprint,
                 locked.committed_operation_sequence,
@@ -577,88 +582,11 @@ impl PlaylistObserveRepository {
         Ok(())
     }
 
-    async fn adopt_local_over_legacy(
-        &self,
-        transaction: &mut Transaction<'_, Postgres>,
-        capture: &ObservationCapture,
-        locked: &LockedRunRow,
-        local_track_ids: &[String],
-        snapshot: &PlaylistSnapshot,
-    ) -> Result<Reconciliation, RepositoryError> {
-        let pending = sqlx::query_file_as!(
-            PendingOperationRow,
-            "queries/playlist_observe/load_pending_operations.sql",
-            &capture.playlist_urn,
-            capture.through_operation_sequence
-        )
-        .fetch_all(&mut **transaction)
-        .await?;
-        let mut settled: HashSet<&str> = local_track_ids.iter().map(String::as_str).collect();
-        settled.extend(
-            pending
-                .iter()
-                .filter(|operation| operation.kind == "remove")
-                .filter_map(|operation| operation.track_id.as_deref()),
-        );
-        let mut candidate = local_track_ids.to_vec();
-        candidate.extend(
-            snapshot
-                .track_ids
-                .iter()
-                .filter(|track_id| !settled.contains(track_id.as_str()))
-                .cloned(),
-        );
-        let candidate_fingerprint = membership_fingerprint(&candidate);
-        if !schedule_missing_tracks(transaction, &candidate).await? {
-            return Ok(Reconciliation {
-                run_decision: "incomplete",
-                state_status: "conflict",
-                conflict_code: Some("catalog_incomplete"),
-                reason: Some(
-                    "the local playlist still contains a track without a durable catalog row"
-                        .to_owned(),
-                ),
-                projection: None,
-                candidate_fingerprint: Some(candidate_fingerprint),
-                committed_through_sequence: locked.committed_operation_sequence,
-                operations: Vec::new(),
-            });
-        }
-        let remote_lacks_local_tracks = sqlx::query_file_scalar!(
-            "queries/playlist_observe/remote_lacks_local_tracks.sql",
-            local_track_ids,
-            &snapshot.track_ids,
-            &capture.owner_id
-        )
-        .fetch_one(&mut **transaction)
-        .await?;
-        let reason = if remote_lacks_local_tracks {
-            "the edited local playlist is kept over its legacy intents until SoundCloud has its tracks"
-        } else {
-            sqlx::query_file!(
-                "queries/playlist_observe/abandon_legacy_intents.sql",
-                &capture.playlist_urn
-            )
-            .execute(&mut **transaction)
-            .await?;
-            "the edited local playlist replaced its unresolved legacy intents"
-        };
-        Ok(Reconciliation {
-            run_decision: "shadow_ready",
-            state_status: "shadow_ready",
-            conflict_code: None,
-            reason: Some(reason.to_owned()),
-            projection: Some(candidate),
-            candidate_fingerprint: Some(candidate_fingerprint),
-            committed_through_sequence: locked.committed_operation_sequence,
-            operations: Vec::new(),
-        })
-    }
-
     async fn reduce_pending_operations(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         capture: &ObservationCapture,
+        through: i64,
         locked: &LockedRunRow,
         snapshot: &PlaylistSnapshot,
     ) -> Result<Reconciliation, RepositoryError> {
@@ -666,7 +594,7 @@ impl PlaylistObserveRepository {
             PendingOperationRow,
             "queries/playlist_observe/load_pending_operations.sql",
             &capture.playlist_urn,
-            capture.through_operation_sequence
+            through
         )
         .fetch_all(&mut **transaction)
         .await?;
@@ -988,10 +916,8 @@ async fn resolve_operations(
 }
 
 fn reconciliation_decision(
-    is_legacy: bool,
     pending_operations: bool,
     catalog_complete: bool,
-    relation: MembershipRelation,
 ) -> ReconciliationDecision {
     if !catalog_complete {
         return ReconciliationDecision {
@@ -999,7 +925,7 @@ fn reconciliation_decision(
             state_status: "conflict",
             conflict_code: Some("catalog_incomplete"),
             reason: Some("not every observed track has a durable catalog row"),
-            replace_projection: !is_legacy && !pending_operations,
+            replace_projection: !pending_operations,
         };
     }
     if pending_operations {
@@ -1011,51 +937,12 @@ fn reconciliation_decision(
             replace_projection: false,
         };
     }
-    if !is_legacy {
-        return ReconciliationDecision {
-            run_decision: "clean",
-            state_status: "clean",
-            conflict_code: None,
-            reason: None,
-            replace_projection: true,
-        };
-    }
-    match relation {
-        MembershipRelation::Equal => ReconciliationDecision {
-            run_decision: "legacy_equal",
-            state_status: "clean",
-            conflict_code: None,
-            reason: None,
-            replace_projection: false,
-        },
-        MembershipRelation::RemoteSuperset => ReconciliationDecision {
-            run_decision: "remote_superset",
-            state_status: "conflict",
-            conflict_code: Some("legacy_remote_superset"),
-            reason: Some("the remote playlist safely extends the local legacy projection"),
-            replace_projection: true,
-        },
-        MembershipRelation::LocalSuperset => ReconciliationDecision {
-            run_decision: "local_superset",
-            state_status: "conflict",
-            conflict_code: Some("legacy_local_superset"),
-            reason: Some("the local legacy projection contains tracks missing remotely"),
-            replace_projection: false,
-        },
-        MembershipRelation::OrderOnly => ReconciliationDecision {
-            run_decision: "order_only",
-            state_status: "conflict",
-            conflict_code: Some("legacy_order_only"),
-            reason: Some("the local and remote playlist orders differ"),
-            replace_projection: false,
-        },
-        MembershipRelation::Diverged => ReconciliationDecision {
-            run_decision: "membership_diverged",
-            state_status: "conflict",
-            conflict_code: Some("legacy_membership_diverged"),
-            reason: Some("the local and remote playlist memberships diverged"),
-            replace_projection: false,
-        },
+    ReconciliationDecision {
+        run_decision: "clean",
+        state_status: "clean",
+        conflict_code: None,
+        reason: None,
+        replace_projection: true,
     }
 }
 
@@ -1306,7 +1193,7 @@ mod tests {
 
     #[test]
     fn clean_observation_replaces_the_projection() {
-        let decision = reconciliation_decision(false, false, true, MembershipRelation::Diverged);
+        let decision = reconciliation_decision(false, true);
 
         assert_eq!(decision.run_decision, "clean");
         assert!(decision.replace_projection);
@@ -1314,30 +1201,15 @@ mod tests {
 
     #[test]
     fn pending_operations_are_never_overwritten() {
-        let decision =
-            reconciliation_decision(true, true, true, MembershipRelation::RemoteSuperset);
+        let decision = reconciliation_decision(true, true);
 
         assert_eq!(decision.state_status, "shadow_ready");
         assert!(!decision.replace_projection);
     }
 
     #[test]
-    fn legacy_remote_superset_is_the_only_non_equal_automatic_repair() {
-        let safe = reconciliation_decision(true, false, true, MembershipRelation::RemoteSuperset);
-        let unsafe_decision =
-            reconciliation_decision(true, false, true, MembershipRelation::LocalSuperset);
-
-        assert!(safe.replace_projection);
-        assert_eq!(safe.state_status, "conflict");
-        assert_eq!(safe.conflict_code, Some("legacy_remote_superset"));
-        assert!(!unsafe_decision.replace_projection);
-        assert_eq!(unsafe_decision.state_status, "conflict");
-    }
-
-    #[test]
     fn incomplete_catalog_still_shows_the_observed_membership() {
-        let decision =
-            reconciliation_decision(false, false, false, MembershipRelation::RemoteSuperset);
+        let decision = reconciliation_decision(false, false);
 
         assert_eq!(decision.conflict_code, Some("catalog_incomplete"));
         assert!(decision.replace_projection);
@@ -1345,10 +1217,8 @@ mod tests {
 
     #[test]
     fn incomplete_catalog_keeps_local_work_in_the_projection() {
-        let legacy = reconciliation_decision(true, false, false, MembershipRelation::Diverged);
-        let pending = reconciliation_decision(false, true, false, MembershipRelation::Diverged);
+        let pending = reconciliation_decision(true, false);
 
-        assert!(!legacy.replace_projection);
         assert!(!pending.replace_projection);
     }
 }
