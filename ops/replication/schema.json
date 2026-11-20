@@ -312,6 +312,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["artist_id", "title_normalized", "track_id"], "expr": false, "keys": ["artist_id", "title_normalized", "track_id"], "name": "artist_track_titles_pkey", "primary": true, "where": null}
