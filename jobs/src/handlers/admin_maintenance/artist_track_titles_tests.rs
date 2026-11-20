@@ -50,9 +50,9 @@ async fn the_triggers_follow_the_title_the_primary_artist_and_superseded_of_a_tr
 ) -> anyhow::Result<()> {
     let first = artist(&pool, "a1").await?;
     let second = artist(&pool, "a2").await?;
-    let one = track(&pool, "s1", Some(first), Some("first song")).await?;
-    let two = track(&pool, "s2", None, Some("second song")).await?;
-    let three = track(&pool, "s3", Some(second), None).await?;
+    let one = track(&pool, "s1", Some(first), "first song").await?;
+    let two = track(&pool, "s2", None, "second song").await?;
+    let three = track(&pool, "s3", None, "third song").await?;
     assert_eq!(titles(&pool).await?, [row("s1", "a1", "first song")]);
 
     execute_for(
@@ -79,10 +79,11 @@ async fn the_triggers_follow_the_title_the_primary_artist_and_superseded_of_a_tr
         "UPDATE tracks SET primary_artist_id = $2 WHERE id = $1",
     )
     .await?;
-    execute_for(
+    execute_pair(
         &pool,
         three,
-        "UPDATE tracks SET title_normalized = 'third song' WHERE id = $1",
+        second,
+        "UPDATE tracks SET primary_artist_id = $2 WHERE id = $1",
     )
     .await?;
     assert_eq!(
@@ -120,7 +121,7 @@ async fn the_triggers_follow_the_title_the_primary_artist_and_superseded_of_a_tr
     execute_for(
         &pool,
         three,
-        "UPDATE tracks SET title_normalized = NULL WHERE id = $1",
+        "UPDATE tracks SET primary_artist_id = NULL WHERE id = $1",
     )
     .await?;
     assert_eq!(titles(&pool).await?.len(), 2);
@@ -147,7 +148,7 @@ async fn the_triggers_follow_primary_credits_and_keep_one_row_per_artist(
     let first = artist(&pool, "a1").await?;
     let second = artist(&pool, "a2").await?;
     let third = artist(&pool, "a3").await?;
-    let one = track(&pool, "s1", Some(first), Some("song")).await?;
+    let one = track(&pool, "s1", Some(first), "song").await?;
 
     credit(&pool, one, first, "primary").await?;
     credit(&pool, one, second, "featured").await?;
@@ -317,15 +318,20 @@ fn job(run_id: Uuid) -> NewJob {
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     let first = artist(pool, "a1").await?;
     let second = artist(pool, "a2").await?;
-    let one = track(pool, "s1", Some(first), Some("one")).await?;
-    let two = track(pool, "s2", None, Some("two")).await?;
-    let three = track(pool, "s3", Some(first), None).await?;
-    let four = track(pool, "s4", Some(first), Some("four")).await?;
+    let one = track(pool, "s1", Some(first), "one").await?;
+    let two = track(pool, "s2", None, "two").await?;
+    let three = track(pool, "s3", Some(first), "three").await?;
+    let four = track(pool, "s4", Some(first), "four").await?;
     credit(pool, one, first, "primary").await?;
     credit(pool, one, second, "featured").await?;
     credit(pool, two, second, "primary").await?;
     credit(pool, three, first, "primary").await?;
     credit(pool, four, second, "primary").await?;
+    sqlx::query("UPDATE tracks SET superseded_by = $2 WHERE id = $1")
+        .bind(three)
+        .bind(one)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -344,7 +350,7 @@ async fn track(
     pool: &PgPool,
     sc_track_id: &str,
     primary_artist_id: Option<Uuid>,
-    title_normalized: Option<&str>,
+    title_normalized: &str,
 ) -> anyhow::Result<Uuid> {
     Ok(sqlx::query_scalar(
         "INSERT INTO tracks (
