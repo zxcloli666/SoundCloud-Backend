@@ -225,6 +225,7 @@ rescue_strategy = "global_ctc"
 unsupported_romanization_share = 0.5
 window_pad_s = 2.0
 lrc_pause_s = 2.5
+word_shift_ms = 40
 vad = { threshold = 0.45, min_speech_ms = 250, min_silence_ms = 400, pad_ms = 200, region_min_s = 1.2, region_max_s = 28.0 }
 asr = { rate_cjk = 12, rate_other = 10, token_margin = 24, loop_ngram = 4, loop_share = 0.3, repetition_penalty = 1.1 }
 

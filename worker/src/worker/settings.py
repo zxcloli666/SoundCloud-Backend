@@ -363,6 +363,7 @@ class SyncSection:
     align: AlignSettings
     anchors: AnchorSettings
     quality: QualitySettings
+    word_shift_ms: int = 0
 
 
 @dataclass(frozen=True)

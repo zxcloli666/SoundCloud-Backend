@@ -26,7 +26,7 @@ from worker.domain.lyrics import (
 from worker.domain.lyrics import regions as region_tools
 from worker.domain.lyrics.align import RegionAligner
 from worker.domain.lyrics.pace import Pace
-from worker.domain.lyrics.placement import LineTiming, timings_from_words
+from worker.domain.lyrics.placement import LineTiming, shifted, timings_from_words
 from worker.domain.lyrics.regions import Region
 from worker.domain.lyrics.tokens import TokenizedLine
 from worker.domain.outcome import (
@@ -143,7 +143,7 @@ class TranscribeLane:
             candidate = await self._rescued(
                 candidate, vocals, regions, lines, lines_total, separated, deadline
             )
-        return self._publish(script, lines, candidate, track)
+        return self._publish(script, lines, candidate, track, vocals.shape[-1] / SPEECH_SAMPLE_RATE)
 
     async def _anchored(
         self,
@@ -369,6 +369,7 @@ class TranscribeLane:
         lines: Sequence[TokenizedLine],
         candidate: Candidate,
         track: str | None,
+        duration_s: float,
     ) -> Outcome:
         verdict = candidate.verdict
         log.info(
@@ -401,7 +402,8 @@ class TranscribeLane:
                 verdict.confidence,
                 track,
             )
-        rendered = lrc.render(script, lines, candidate.placement, pause_s=self._sync.lrc_pause_s)
+        placement = shifted(candidate.placement, self._sync.word_shift_ms / 1000.0, duration_s)
+        rendered = lrc.render(script, lines, placement, pause_s=self._sync.lrc_pause_s)
         fields = self._metric_fields(verdict.metrics, verdict.confidence, track)
         fields["synced_lrc"] = rendered.synced_lrc
         if quality.words_publishable(verdict.metrics, self._sync.quality):

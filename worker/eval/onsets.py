@@ -27,11 +27,14 @@ WINDOW_BEFORE_S = 0.02
 WINDOW_AFTER_S = 0.04
 SHIFTS_MS = tuple(range(-200, 201, 10))
 CONTROL_MS = 100
+CONTROL_STEPS = CONTROL_MS // (SHIFTS_MS[1] - SHIFTS_MS[0])
 NEAR_MS = (30, 50)
 TIE_MS = 10.0
 DISAGREE_MS = 80.0
 TIMELINES = ("ours", "lrclib")
-INVALID_NOTE = "unshifted timelines do not beat their shifted controls, the judge is meaningless"
+INVALID_NOTE = (
+    "best-shift timelines do not beat their controls 100 ms either side, the judge is meaningless"
+)
 
 log = logging.getLogger("eval.onsets")
 
@@ -246,6 +249,22 @@ def sweep_summary(curve: Curve) -> dict[str, object]:
     }
 
 
+def best_with_controls(curve: Curve) -> dict[str, Any]:
+    best = best_index(curve.strength, maximize=True)
+    return {
+        "shift_ms": SHIFTS_MS[best],
+        "at_best": index_scores(curve, best),
+        "minus": index_scores(curve, best - CONTROL_STEPS),
+        "plus": index_scores(curve, best + CONTROL_STEPS),
+    }
+
+
+def index_scores(curve: Curve, index: int) -> dict[str, object]:
+    if not 0 <= index < len(SHIFTS_MS):
+        return {"n": 0}
+    return scores(curve.distances_ms[index], curve.strength[index])
+
+
 def shift_distribution(results: Sequence[OnsetResult]) -> dict[str, object]:
     per_track = [best_shifts(pooled_curve([result], "ours")) for result in results]
     return {
@@ -269,15 +288,17 @@ def metrics(results: Sequence[OnsetResult]) -> dict[str, object]:
         for name in TIMELINES
         for label, shift in (("", 0), ("/minus", -CONTROL_MS), ("/plus", CONTROL_MS))
     }
+    around = {name: best_with_controls(curves[name]) for name in TIMELINES}
     verdicts = {
-        name: discriminates(at[name], [at[f"{name}/minus"], at[f"{name}/plus"]])
-        for name in TIMELINES
+        name: discriminates(found["at_best"], [found["minus"], found["plus"]])
+        for name, found in around.items()
     }
     valid = all(verdicts.values())
     return {
         "tracks": len(results),
         "onsets": sum(len(r.onsets_s) for r in results),
         "scores": at,
+        "best_scores": around,
         "discriminates": verdicts,
         "judge_valid": valid,
         "note": None if valid else INVALID_NOTE,

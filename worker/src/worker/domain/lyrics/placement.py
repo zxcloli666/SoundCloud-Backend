@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 Engine = Literal["qwen", "mms", "gapfill", "global"]
@@ -70,6 +70,29 @@ def timings_from_words(
             anchor_similarity=anchor_similarity,
         )
     return timings
+
+
+def shifted(placement: Placement, shift_s: float, limit_s: float) -> dict[int, LineTiming]:
+    return {
+        line: replace(
+            timing,
+            start_s=moved(timing.start_s, shift_s, limit_s),
+            end_s=moved(timing.end_s, shift_s, limit_s),
+            words=tuple(
+                replace(
+                    word,
+                    start_s=moved(word.start_s, shift_s, limit_s),
+                    end_s=moved(word.end_s, shift_s, limit_s),
+                )
+                for word in timing.words
+            ),
+        )
+        for line, timing in placement.items()
+    }
+
+
+def moved(seconds: float, shift_s: float, limit_s: float) -> float:
+    return min(max(seconds + shift_s, 0.0), limit_s)
 
 
 def ordered(placement: Placement) -> list[LineTiming]:

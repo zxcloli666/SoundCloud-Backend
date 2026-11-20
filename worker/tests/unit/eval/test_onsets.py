@@ -112,8 +112,22 @@ def test_judge_discriminates_on_clean_peaks() -> None:
     assert summary["scores"]["ours/plus"]["within_30ms"] == 0.0
 
 
-def test_judge_flags_timelines_that_sit_on_the_controls() -> None:
+def test_judge_accepts_an_offset_timeline() -> None:
     summary = onsets.metrics([judged(0.1)])
+    assert summary["judge_valid"] is True
+    assert summary["note"] is None
+    assert -100 <= summary["best_scores"]["ours"]["shift_ms"] <= -80
+    assert summary["best_scores"]["ours"]["at_best"]["within_30ms"] == 1.0
+    assert summary["scores"]["ours"]["within_30ms"] == 0.0
+
+
+def test_judge_flags_a_flat_sweep() -> None:
+    peaks = [1.0, 2.0, 3.0]
+    pairs = [(peak + 0.5, peak + 0.5, False) for peak in peaks]
+    flat = {name: tuple(0.5 for _ in onsets.SHIFTS_MS) for name in onsets.TIMELINES}
+    summary = onsets.metrics(
+        [onsets.OnsetResult(tuple(pairs), tuple(peaks), reference.IDENTITY, flat)]
+    )
     assert summary["judge_valid"] is False
     assert summary["note"] == onsets.INVALID_NOTE
 
