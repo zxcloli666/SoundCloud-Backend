@@ -353,7 +353,10 @@ mod tests {
         .execute(&pool)
         .await?;
 
-        let answer = service(&pool, false).await?.ensure_lyrics("42").await?;
+        let answer = service(&pool, false)
+            .await?
+            .ensure_lyrics("17", "42")
+            .await?;
 
         assert_eq!(answer.status, "found");
         let woken: i64 = sqlx::query_scalar(
@@ -380,7 +383,10 @@ mod tests {
         .execute(&pool)
         .await?;
 
-        service(&pool, false).await?.ensure_lyrics("42").await?;
+        service(&pool, false)
+            .await?
+            .ensure_lyrics("17", "42")
+            .await?;
 
         let states: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_state")
             .fetch_one(&pool)

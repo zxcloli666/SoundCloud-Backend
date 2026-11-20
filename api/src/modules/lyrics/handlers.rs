@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
+use crate::modules::lyrics::candidates::{self, CandidatesResponse};
 use crate::modules::lyrics::own::{self, OwnLyricsInput};
 use crate::modules::lyrics::service::{LyricsHints, LyricsResponse, canonical_track_id};
 use crate::state::AppState;
@@ -13,6 +14,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/lyrics/search", get(search))
+        .route("/lyrics/candidates", get(find_candidates))
         .route("/lyrics/{sc_track_id}", get(get_one))
         .route("/lyrics/{sc_track_id}/own", put(put_own).delete(delete_own))
 }
@@ -23,6 +25,14 @@ struct SearchQuery {
     artist: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    duration: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CandidatesQuery {
+    #[serde(default)]
+    q: String,
     #[serde(default)]
     duration: Option<String>,
 }
@@ -51,6 +61,17 @@ async fn search(
         duration_sec: parse_duration(q.duration.as_deref()),
     };
     Ok(Json(st.lyrics.search_lyrics(&hints).await?))
+}
+
+async fn find_candidates(
+    State(st): State<AppState>,
+    _ctx: SessionCtx,
+    Query(q): Query<CandidatesQuery>,
+) -> AppResult<Json<CandidatesResponse>> {
+    let duration_sec = parse_duration(q.duration.as_deref());
+    Ok(Json(
+        candidates::search(&st.core, &q.q, duration_sec).await?,
+    ))
 }
 
 async fn get_one(

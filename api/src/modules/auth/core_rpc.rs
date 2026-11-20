@@ -9,6 +9,9 @@ use backend_contracts::auth::{
     AUTH_APP_TOKEN_SUBJECT, AUTH_REFRESH_SUBJECT, AppTokenReply, AppTokenRequest, RefreshReply,
     RefreshRequest,
 };
+use backend_contracts::lyrics_search::{
+    LYRICS_SEARCH_SUBJECT, LyricsSearchReply, LyricsSearchRequest,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::warn;
@@ -20,6 +23,7 @@ const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const APP_TOKEN_TIMEOUT: Duration = Duration::from_secs(2);
 const ADMIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
 const ADMIN_VIDEO_TIMEOUT: Duration = Duration::from_secs(60);
+const LYRICS_SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct CoreRpc {
     nats: Option<Arc<NatsService>>,
@@ -64,6 +68,14 @@ impl CoreRpc {
         request: &AdminVideoRequest,
     ) -> Result<AdminVideoReply, NatsRequestError> {
         self.request(ADMIN_VIDEO_SUBJECT, request, ADMIN_VIDEO_TIMEOUT)
+            .await
+    }
+
+    pub async fn lyrics_search(
+        &self,
+        request: &LyricsSearchRequest,
+    ) -> Result<LyricsSearchReply, NatsRequestError> {
+        self.request(LYRICS_SEARCH_SUBJECT, request, LYRICS_SEARCH_TIMEOUT)
             .await
     }
 
