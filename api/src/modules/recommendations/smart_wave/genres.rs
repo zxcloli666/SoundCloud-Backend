@@ -93,32 +93,22 @@ pub fn lead(ranked: Vec<RankedTrack>, matched: &HashSet<u64>, limit: usize) -> V
 
 pub fn variants(key: &str) -> Vec<String> {
     let names: &[&str] = match key {
-        "lofi" => &["lofi", "lo-fi", "lofi hip hop", "lo-fi hip hop"],
+        "lofi" => &["lofi", "lo-fi"],
         "house" => &[
             "house",
             "deep house",
-            "tech house",
             "progressive house",
+            "tech house",
+            "afro house",
             "electro house",
-            "tropical house",
+            "bass house",
+            "melodic house & techno",
         ],
-        "phonk" => &["phonk", "drift phonk", "brazilian phonk"],
-        "ambient" => &["ambient", "dark ambient"],
-        "rnb" => &["r&b", "r&b & soul", "rnb", "r&b/soul", "alternative r&b"],
-        "trap" => &["trap", "trap & bass", "latin trap"],
-        "jazz" => &["jazz", "jazz & blues", "nu jazz", "smooth jazz"],
-        "techno" => &["techno", "hard techno", "minimal techno", "melodic techno"],
-        "indie" => &["indie", "indie rock", "indie pop", "indie folk"],
-        "soul" => &["soul", "neo soul", "r&b & soul"],
-        "dnb" => &[
-            "dnb",
-            "drum & bass",
-            "drum and bass",
-            "drum n bass",
-            "drum&bass",
-            "liquid drum & bass",
-            "neurofunk",
-        ],
+        "rnb" => &["r&b & soul", "r&b", "r&b/soul", "r & b"],
+        "jazz" => &["jazz", "jazz & blues"],
+        "techno" => &["techno", "melodic techno", "melodic house & techno"],
+        "soul" => &["soul", "r&b & soul", "r&b/soul"],
+        "dnb" => &["drum & bass", "dnb", "drum and bass", "drum n bass"],
         _ => return vec![key.to_lowercase()],
     };
     names.iter().map(|name| name.to_string()).collect()
