@@ -211,6 +211,16 @@ local function settled(synced_only)
   return false
 end
 
+local MAX_LYRICSFILE_BYTES = 64 * 1024
+
+local function word_synced_lyricsfile(item)
+  if type(item.hasWordSync) == "boolean" and item.hasWordSync
+    and type(item.lyricsfile) == "string" and #item.lyricsfile <= MAX_LYRICSFILE_BYTES then
+    return item.lyricsfile
+  end
+  return nil
+end
+
 local function add_lrclib_item(item, query_index)
   if type(item) ~= "table" or not (nonempty(item.plainLyrics) or nonempty(item.syncedLyrics)) then
     return false
@@ -219,6 +229,7 @@ local function add_lrclib_item(item, query_index)
     source = "lrclib",
     plain_text = item.plainLyrics,
     synced_lrc = item.syncedLyrics,
+    lyricsfile = word_synced_lyricsfile(item),
     artist = item.artistName,
     title = item.trackName,
     duration_sec = item.duration,

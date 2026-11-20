@@ -698,6 +698,7 @@ async fn settle_found(
         .bind(plain)
         .bind(recheck)
         .bind(7_i32)
+        .bind("")
         .fetch_optional(pool)
         .await?;
     Ok(found.is_some_and(|row| row.settled))

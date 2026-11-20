@@ -19,6 +19,7 @@ const LOOKUP_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_CANDIDATES: usize = 24;
 const MAX_QUERIES: usize = 4;
 const MAX_LYRICS_BYTES: usize = 800 * 1024;
+const MAX_SYNCED_WORDS_BYTES: usize = 1_600_000;
 const SYNCED_DURATION_TOLERANCE_SEC: i64 = 5;
 const LRCLIB_API: &str = "https://lrclib.net/api";
 const MUSIXMATCH_APP_ID: &str = "web-desktop-app-v1.0";
@@ -37,6 +38,7 @@ pub struct LyricsHints {
 pub struct LyricsCandidate {
     pub source: String,
     pub synced_lrc: Option<String>,
+    pub synced_words: Option<String>,
     pub plain_text: Option<String>,
     pub artist: Option<String>,
     pub title: Option<String>,
@@ -98,6 +100,8 @@ pub(crate) struct LuaCandidate {
     source: String,
     #[serde(default)]
     synced_lrc: Option<String>,
+    #[serde(default)]
+    lyricsfile: Option<String>,
     #[serde(default)]
     plain_text: Option<String>,
     #[serde(default)]
@@ -264,6 +268,7 @@ impl LyricsSources {
                         if let Some(candidate) = normalize_candidate(LyricsCandidate {
                             source: "genius".to_owned(),
                             synced_lrc: None,
+                            synced_words: None,
                             plain_text: Some(plain_text),
                             artist: None,
                             title: None,
@@ -286,6 +291,7 @@ impl LyricsSources {
                     if let Some(candidate) = normalize_candidate(LyricsCandidate {
                         source: "genius".to_owned(),
                         synced_lrc: None,
+                        synced_words: None,
                         plain_text: Some(plain_text),
                         artist: None,
                         title: None,
@@ -384,6 +390,7 @@ impl LyricsSources {
         Ok(normalize_candidate(LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: entry.synced_lyrics,
+            synced_words: None,
             plain_text: entry.plain_lyrics,
             artist: entry.artist_name,
             title: entry.track_name,
@@ -408,6 +415,7 @@ impl LyricsSources {
                 normalize_candidate(LyricsCandidate {
                     source: "lrclib".to_owned(),
                     synced_lrc: entry.synced_lyrics,
+                    synced_words: None,
                     plain_text: entry.plain_lyrics,
                     artist: entry.artist_name,
                     title: entry.track_name,
@@ -436,6 +444,7 @@ impl LyricsSources {
                 normalize_candidate(LyricsCandidate {
                     source: "genius".to_owned(),
                     synced_lrc: None,
+                    synced_words: None,
                     plain_text: Some(entry.plain_text),
                     artist: entry.artist_guess,
                     title: entry.title_guess,
@@ -467,6 +476,13 @@ fn clean_hints(hints: &LyricsHints) -> LyricsHints {
     cleaned
 }
 
+impl LyricsCandidate {
+    fn drop_sync(&mut self) {
+        self.synced_lrc = None;
+        self.synced_words = None;
+    }
+}
+
 fn found(candidate: LyricsCandidate, lrclib_failed: bool) -> LyricsLookupOutcome {
     if lrclib_failed && candidate.synced_lrc.is_none() {
         LyricsLookupOutcome::FoundWithoutSync(candidate)
@@ -487,9 +503,19 @@ fn collect_source(
 }
 
 pub(crate) fn lua_candidate(candidate: LuaCandidate) -> Option<LyricsCandidate> {
+    let word_synced = candidate
+        .lyricsfile
+        .as_deref()
+        .filter(|_| candidate.source == "lrclib")
+        .and_then(crate::lyricsfile::render);
+    let (synced_lrc, synced_words) = match word_synced {
+        Some(rendered) => (Some(rendered.synced_lrc), Some(rendered.synced_words)),
+        None => (candidate.synced_lrc, None),
+    };
     normalize_candidate(LyricsCandidate {
         source: candidate.source,
-        synced_lrc: candidate.synced_lrc,
+        synced_lrc,
+        synced_words,
         plain_text: candidate.plain_text,
         artist: candidate.artist,
         title: candidate.title,
@@ -509,6 +535,11 @@ fn normalize_candidate(mut candidate: LyricsCandidate) -> Option<LyricsCandidate
         return None;
     }
     candidate.synced_lrc = normalize_synced(candidate.synced_lrc);
+    candidate.synced_words = candidate.synced_words.filter(|words| {
+        candidate.synced_lrc.is_some()
+            && words.len() <= MAX_SYNCED_WORDS_BYTES
+            && !words.contains('\0')
+    });
     candidate.plain_text = normalize_plain(candidate.plain_text);
     if candidate.plain_text.is_none()
         && let Some(synced_lrc) = candidate.synced_lrc.as_deref()
@@ -740,7 +771,7 @@ fn fit_variant_sync(variant: &Variant, mut candidate: LyricsCandidate) -> Option
     if candidate.synced_lrc.is_some()
         && duration_gap(&recording, &candidate) > SYNCED_DURATION_TOLERANCE_SEC
     {
-        candidate.synced_lrc = None;
+        candidate.drop_sync();
     }
     (candidate.synced_lrc.is_some() || candidate.plain_text.is_some()).then_some(candidate)
 }
@@ -759,7 +790,7 @@ fn fit_synced_to_recording(
     mut candidate: LyricsCandidate,
 ) -> Option<LyricsCandidate> {
     if candidate.synced_lrc.is_some() && !synced_fits_recording(hints, &candidate) {
-        candidate.synced_lrc = None;
+        candidate.drop_sync();
     }
     (candidate.synced_lrc.is_some() || candidate.plain_text.is_some()).then_some(candidate)
 }
@@ -1207,6 +1238,7 @@ impl MusixmatchLyrics {
         let candidate = normalize_candidate(LyricsCandidate {
             source: "musixmatch".to_owned(),
             synced_lrc,
+            synced_words: None,
             plain_text,
             artist: track
                 .as_ref()
@@ -1415,6 +1447,8 @@ mod tests {
         LrclibOnly,
         LrclibPlainBesideSynced,
         LrclibWithinRequestBudget,
+        LrclibWordSync,
+        LrclibBrokenLyricsfile,
         LinkedGeniusBesideSynced,
         EmptyGeniusFailed,
         Fail,
@@ -1564,6 +1598,10 @@ mod tests {
                     MethodMode::LrclibPlainBesideSynced => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"A sufficiently long plain lyrics body without timing","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1},{"source":"lrclib","synced_lrc":"[00:01.00] A sufficiently long lyrics body with timing\n[00:05.00] and a second line of it","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1}]}"#,
                     )),
+                    MethodMode::LrclibWordSync => Ok(Bytes::from(word_sync_output(326))),
+                    MethodMode::LrclibBrokenLyricsfile => Ok(Bytes::from(
+                        word_sync_output(326).replace("version: '1.0'", "version: '9'"),
+                    )),
                     MethodMode::LinkedGeniusBesideSynced => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"lrclib","synced_lrc":"[00:01.00] A sufficiently long lyrics body with timing\n[00:05.00] and a second line of it","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1},{"source":"genius","plain_text":"A sufficiently long genius lyrics body from the linked page","exact":true,"query_index":0}]}"#,
                     )),
@@ -1695,6 +1733,25 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    const WORD_SYNC_FILE: &str = "version: '1.0'\nlines:\n- text: first invented line\n  start_ms: 1000\n  end_ms: 2400\n  words:\n  - {text: first, start_ms: 1000}\n  - {text: invented, start_ms: 1500}\n  - {text: line, start_ms: 2000}\n- text: second invented line\n  start_ms: 4000\n  end_ms: 5000\n";
+
+    fn word_sync_output(duration: u32) -> String {
+        serde_json::json!({
+            "kind": "found",
+            "candidates": [{
+                "source": "lrclib",
+                "synced_lrc": "[00:01.00]record line one\n[00:04.00]record line two",
+                "plain_text": "record line one\nrecord line two",
+                "lyricsfile": WORD_SYNC_FILE,
+                "artist": "Eminem",
+                "title": "Lose Yourself",
+                "duration_sec": duration,
+                "query_index": 1
+            }]
+        })
+        .to_string()
     }
 
     fn hints() -> LyricsHints {
@@ -1925,6 +1982,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_lrclib_lyricsfile_gives_both_the_lines_and_the_words() {
+        let relay = MockRelay::new(MethodMode::LrclibWordSync, RawMode::Fail);
+        let service = sources(relay, String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        let LyricsLookupOutcome::Found(candidate) = outcome else {
+            panic!("expected a found outcome");
+        };
+        assert_eq!(
+            candidate.synced_lrc.as_deref(),
+            Some("[00:01.00]first invented line\n[00:02.40]\n[00:04.00]second invented line")
+        );
+        assert_eq!(
+            candidate.synced_words.as_deref(),
+            Some(
+                "[00:01.00]<00:01.00>first <00:01.50>invented <00:02.00>line<00:02.40>\n[00:02.40]\n[00:04.00]second invented line"
+            )
+        );
+        assert_eq!(
+            candidate.plain_text.as_deref(),
+            Some("record line one\nrecord line two")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_lyricsfile_falls_back_to_the_record_lines() {
+        let relay = MockRelay::new(MethodMode::LrclibBrokenLyricsfile, RawMode::Fail);
+        let service = sources(relay, String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        let LyricsLookupOutcome::Found(candidate) = outcome else {
+            panic!("expected a found outcome");
+        };
+        assert_eq!(
+            candidate.synced_lrc.as_deref(),
+            Some("[00:01.00]record line one\n[00:04.00]record line two")
+        );
+        assert_eq!(candidate.synced_words, None);
+    }
+
+    #[test]
+    fn a_sync_that_does_not_fit_the_recording_drops_its_words_too() {
+        let raw = serde_json::from_str(&word_sync_output(200)).unwrap();
+        let envelope: serde_json::Value = raw;
+        let candidate = serde_json::from_value(envelope["candidates"][0].clone()).unwrap();
+        let candidate = lua_candidate(candidate).unwrap();
+        assert!(candidate.synced_words.is_some());
+
+        let fitted = fit_synced_to_recording(&hints(), candidate).unwrap();
+
+        assert_eq!(fitted.synced_lrc, None);
+        assert_eq!(fitted.synced_words, None);
+    }
+
+    #[test]
+    fn a_lyricsfile_from_another_source_is_ignored() {
+        let raw = serde_json::json!({
+            "source": "musixmatch",
+            "synced_lrc": "[00:01.00]record line one",
+            "lyricsfile": WORD_SYNC_FILE,
+        });
+        let candidate = lua_candidate(serde_json::from_value(raw).unwrap()).unwrap();
+        assert_eq!(
+            candidate.synced_lrc.as_deref(),
+            Some("[00:01.00]record line one")
+        );
+        assert_eq!(candidate.synced_words, None);
+    }
+
+    #[tokio::test]
     async fn a_linked_genius_page_loses_to_synced_lrclib_text() {
         let relay = MockRelay::new(MethodMode::LinkedGeniusBesideSynced, RawMode::Fail);
         let service = sources(relay.clone(), String::new());
@@ -1943,6 +2072,7 @@ mod tests {
         let exact = LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: None,
+            synced_words: None,
             plain_text: Some("A sufficiently long plain lyrics body without timing".to_owned()),
             artist: Some("Eminem".to_owned()),
             title: Some("Lose Yourself".to_owned()),
@@ -1966,6 +2096,7 @@ mod tests {
         let exact = LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: None,
+            synced_words: None,
             plain_text: Some("A sufficiently long plain lyrics body without timing".to_owned()),
             artist: Some("Eminem".to_owned()),
             title: Some("Lose Yourself".to_owned()),
@@ -2053,6 +2184,7 @@ mod tests {
             LyricsCandidate {
                 source: "genius".to_owned(),
                 synced_lrc: None,
+                synced_words: None,
                 plain_text: Some(
                     "A sufficiently long lyrics line for deterministic matching".to_owned(),
                 ),
@@ -2068,6 +2200,7 @@ mod tests {
                     "[00:01.00] A sufficiently long lyrics line for deterministic matching"
                         .to_owned(),
                 ),
+                synced_words: None,
                 plain_text: Some(
                     "A sufficiently long lyrics line for deterministic matching".to_owned(),
                 ),
@@ -2089,6 +2222,7 @@ mod tests {
         LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: Some(lrc.to_owned()),
+            synced_words: None,
             plain_text: Some(strip_lrc_timestamps(lrc)),
             artist: Some("Eminem".to_owned()),
             title: Some(title.to_owned()),
@@ -2145,6 +2279,7 @@ mod tests {
         let candidate = normalize_candidate(LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: Some("not synchronized lyrics at all".to_owned()),
+            synced_words: None,
             plain_text: None,
             artist: None,
             title: None,
@@ -2161,6 +2296,7 @@ mod tests {
         let candidate = LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: None,
+            synced_words: None,
             plain_text: Some(
                 "A sufficiently long lyrics line for deterministic matching".to_owned(),
             ),
@@ -2178,6 +2314,7 @@ mod tests {
         LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: None,
+            synced_words: None,
             plain_text: Some(
                 "A sufficiently long lyrics line for deterministic matching".to_owned(),
             ),
@@ -2410,6 +2547,7 @@ mod tests {
         let candidate = LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: None,
+            synced_words: None,
             plain_text: Some(
                 "A sufficiently long lyrics line for deterministic matching".to_owned(),
             ),
@@ -2452,6 +2590,7 @@ mod tests {
         LyricsCandidate {
             source: "lrclib".to_owned(),
             synced_lrc: lrc.then(|| format!("[00:01.00]{title} a long enough synced body line")),
+            synced_words: None,
             plain_text: Some(format!("{title} a long enough synced body line")),
             artist: Some(artist.to_owned()),
             title: Some(title.to_owned()),

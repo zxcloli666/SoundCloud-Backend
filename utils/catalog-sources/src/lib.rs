@@ -4,6 +4,7 @@ mod http;
 mod lrclib;
 mod lyrics;
 mod lyrics_refetch;
+mod lyricsfile;
 mod musicbrainz;
 mod throttle;
 
