@@ -212,6 +212,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_artist_track_titles(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.artist_id, t.title_normalized, t.track_id INTO p FROM public.artist_track_titles t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.title_normalized = (k ->> 'title_normalized')::text AND t.track_id = (k ->> 'track_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.artist_track_titles t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.title_normalized = (k ->> 'title_normalized')::text AND t.track_id = (k ->> 'track_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_artists(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1480,6 +1495,8 @@ BEGIN
             PERFORM public.scd_purge_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN
             PERFORM public.scd_purge_artist_socials(k);
+        WHEN 'artist_track_titles' THEN
+            PERFORM public.scd_purge_artist_track_titles(k);
         WHEN 'artists' THEN
             PERFORM public.scd_purge_artists(k);
         WHEN 'audio_index_wire_state' THEN

@@ -82,7 +82,7 @@ tables:
   discover_tag_counts: {class: C}
   sync_queue_action_pauses: {class: C}
   taste_model_versions: {class: C}
-  track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}, artist_playable_tracks_artist_row: {rows: [artist_playable_tracks]}, artist_playable_tracks_artist_update: {rows: [artist_playable_tracks]}}}
+  track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}, artist_playable_tracks_artist_row: {rows: [artist_playable_tracks]}, artist_playable_tracks_artist_update: {rows: [artist_playable_tracks]}, artist_track_titles_artist_row: {rows: [artist_track_titles]}, artist_track_titles_artist_update: {rows: [artist_track_titles]}}}
   track_comments: {class: C, reassert: always, note: "sc_comment_id filled by core"}
   track_highlights: {class: C, note: "the moment of a track (start_ms, length_ms, score of its catchiest window) by highlight algorithm version; written on core only by the jobs highlight result consumer, read by the api track projection and the moments wave"}
   track_search: {class: C, note: "narrow copy of the searchable tracks rows (public, not deleted, not superseded) for the full-text search, written on core only by the track_search triggers on tracks and the admin track_search backfill"}
@@ -107,6 +107,8 @@ tables:
       track_work_keys_update: {rows: [track_work_keys]}
       artist_playable_tracks_track_row: {rows: [artist_playable_tracks]}
       artist_playable_tracks_track_update: {rows: [artist_playable_tracks]}
+      artist_track_titles_track_row: {rows: [artist_track_titles]}
+      artist_track_titles_track_update: {rows: [artist_track_titles]}
     note: "last_read_at has no writer since B5a, reads go to entity_reads; jobs-private columns go to narrow P tables in A7"
   user_followers: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_owned_playlists: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
@@ -123,6 +125,7 @@ tables:
   ai_resolver_budget: {class: P}
   ai_resolver_cache: {class: P}
   artist_interest: {class: P, note: "core-private interest score of an artist (track_artists plays of the last 30 days), a row only while the score is positive; jobs recomputes one shard an hour and surfaces never-crawled artists from it, so the replicated artists rows are not rewritten"}
+  artist_track_titles: {class: P, note: "core-private normalized titles of the tracks an artist is primary on (primary_artist_id or a primary track_artists row), one row per artist and not superseded track with a title_normalized, kept by the artist_track_titles triggers on tracks and track_artists; catalog-match reads its candidates from it, the admin artist_track_titles run fills the rows of older tracks"}
   audio_index_wire_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   background_job_enqueues: {class: P}
   background_jobs: {class: P, note: "api enqueues only through job.enqueue; api status reads go to job_status"}

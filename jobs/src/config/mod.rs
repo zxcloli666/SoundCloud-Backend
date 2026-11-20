@@ -157,6 +157,7 @@ pub struct AdminMaintenanceConfig {
     pub track_work_keys_batch: i64,
     pub track_enrich_queue_batch: i64,
     pub artist_playable_tracks_batch: i64,
+    pub artist_track_titles_batch: i64,
 }
 
 impl AdminMaintenanceConfig {
@@ -179,6 +180,10 @@ impl AdminMaintenanceConfig {
             )? as i64,
             artist_playable_tracks_batch: env::positive_u64(
                 "ADMIN_MAINTENANCE_ARTIST_PLAYABLE_TRACKS_BATCH",
+                5_000,
+            )? as i64,
+            artist_track_titles_batch: env::positive_u64(
+                "ADMIN_MAINTENANCE_ARTIST_TRACK_TITLES_BATCH",
                 5_000,
             )? as i64,
         })

@@ -166,6 +166,18 @@ AS $f$
 SELECT md5(ROW(t.artist_id, t.created_at, t.kind, t.source, t.updated_at, t.url, t.verified)::text) FROM public.artist_socials t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.url = (k ->> 'url')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_artist_track_titles(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.artist_id, t.title_normalized, t.track_id)::text) FROM public.artist_track_titles t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.title_normalized = (k ->> 'title_normalized')::text AND t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_artists(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1568,6 +1580,8 @@ BEGIN
             RETURN public.scd_row_hash_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN
             RETURN public.scd_row_hash_artist_socials(k);
+        WHEN 'artist_track_titles' THEN
+            RETURN public.scd_row_hash_artist_track_titles(k);
         WHEN 'artists' THEN
             RETURN public.scd_row_hash_artists(k);
         WHEN 'audio_index_wire_state' THEN

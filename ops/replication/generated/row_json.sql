@@ -166,6 +166,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.artist_socials t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.url = (k ->> 'url')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_artist_track_titles(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.artist_track_titles t WHERE t.artist_id = (k ->> 'artist_id')::uuid AND t.title_normalized = (k ->> 'title_normalized')::text AND t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_artists(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1568,6 +1580,8 @@ BEGIN
             RETURN public.scd_row_json_artist_sc_accounts(k);
         WHEN 'artist_socials' THEN
             RETURN public.scd_row_json_artist_socials(k);
+        WHEN 'artist_track_titles' THEN
+            RETURN public.scd_row_json_artist_track_titles(k);
         WHEN 'artists' THEN
             RETURN public.scd_row_json_artists(k);
         WHEN 'audio_index_wire_state' THEN
