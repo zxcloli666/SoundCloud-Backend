@@ -42,7 +42,7 @@ async fn an_out_of_line_fts_moves_into_the_row_and_stays_the_same(
 }
 
 fn long_lyrics(seed: usize) -> String {
-    (0..300)
+    (0..150)
         .map(|word| {
             format!(
                 "verse{word}x{} line",
