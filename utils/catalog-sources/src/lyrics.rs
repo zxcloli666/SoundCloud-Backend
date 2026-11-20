@@ -258,7 +258,7 @@ impl LyricsSources {
                             exact: true,
                             query_index: 0,
                         }) {
-                            return self.with_lrclib_exact(hints, candidate).await;
+                            return self.with_lrclib_exact(hints, queries, candidate).await;
                         }
                     }
                     Ok(None) => {}
@@ -280,7 +280,7 @@ impl LyricsSources {
                         exact: true,
                         query_index: 0,
                     }) {
-                        return self.with_lrclib_exact(hints, candidate).await;
+                        return self.with_lrclib_exact(hints, queries, candidate).await;
                     }
                 }
                 Ok(None) => {}
@@ -318,15 +318,31 @@ impl LyricsSources {
     async fn with_lrclib_exact(
         &self,
         hints: &LyricsHints,
+        queries: &[String],
         linked: LyricsCandidate,
     ) -> LyricsLookupOutcome {
+        let mut lrclib_failed = false;
+        let mut candidates = vec![linked.clone()];
         match self.lrclib_exact(hints).await {
-            Ok(exact) => {
-                let candidates = exact.into_iter().chain([linked.clone()]).collect();
-                found(select_candidate(hints, candidates).unwrap_or(linked), false)
-            }
-            Err(_) => found(linked, true),
+            Ok(exact) => candidates.extend(exact),
+            Err(_) => lrclib_failed = true,
         }
+        let synced = candidates
+            .iter()
+            .any(|candidate| candidate.synced_lrc.is_some() && matches_hints(hints, candidate));
+        if !synced
+            && !lrclib_failed
+            && let Some(query) = queries.first()
+        {
+            match self.search_lrclib(query, 1).await {
+                Ok(found) => candidates.extend(found),
+                Err(_) => lrclib_failed = true,
+            }
+        }
+        found(
+            select_candidate(hints, candidates).unwrap_or(linked),
+            lrclib_failed,
+        )
     }
 
     async fn lrclib_exact(&self, hints: &LyricsHints) -> SourceResult<Option<LyricsCandidate>> {
@@ -373,7 +389,7 @@ impl LyricsSources {
         let bytes = self.fetcher.get_bytes(&url, json_headers()).await?;
         let entries: Vec<LrclibRaw> = serde_json::from_slice(&bytes)
             .map_err(|error| SourceError::Invalid(format!("lrclib search: {error}")))?;
-        Ok(entries
+        let mut candidates: Vec<LyricsCandidate> = entries
             .into_iter()
             .filter_map(|entry| {
                 normalize_candidate(LyricsCandidate {
@@ -387,8 +403,10 @@ impl LyricsSources {
                     query_index,
                 })
             })
-            .take(10)
-            .collect())
+            .collect();
+        candidates.sort_by_key(|candidate| candidate.synced_lrc.is_none());
+        candidates.truncate(10);
+        Ok(candidates)
     }
 
     async fn search_genius(
@@ -648,8 +666,8 @@ fn candidate_rank(
         .map(|artist| (artist_similarity(&hints.artist, artist) * 1000.0) as u16)
         .unwrap_or(0);
     (
-        u8::from(candidate.exact),
         u8::from(candidate.synced_lrc.is_some()),
+        u8::from(candidate.exact),
         title_score,
         artist_score,
         Reverse(duration_gap(hints, candidate)),
@@ -1204,6 +1222,8 @@ mod tests {
         GeniusLinked,
         GeniusSearched,
         LrclibOnly,
+        LrclibPlainBesideSynced,
+        LinkedGeniusBesideSynced,
         EmptyGeniusFailed,
         Fail,
     }
@@ -1324,6 +1344,12 @@ mod tests {
                     )),
                     MethodMode::LrclibOnly => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"A sufficiently long lrclib lyrics body from relay","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1}]}"#,
+                    )),
+                    MethodMode::LrclibPlainBesideSynced => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"A sufficiently long plain lyrics body without timing","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1},{"source":"lrclib","synced_lrc":"[00:01.00] A sufficiently long lyrics body with timing\n[00:05.00] and a second line of it","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1}]}"#,
+                    )),
+                    MethodMode::LinkedGeniusBesideSynced => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"lrclib","synced_lrc":"[00:01.00] A sufficiently long lyrics body with timing\n[00:05.00] and a second line of it","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1},{"source":"genius","plain_text":"A sufficiently long genius lyrics body from the linked page","exact":true,"query_index":0}]}"#,
                     )),
                     MethodMode::EmptyGeniusFailed => Ok(Bytes::from_static(
                         br#"{"kind":"empty","failed":["genius: lyrics upstream status 500"]}"#,
@@ -1653,6 +1679,80 @@ mod tests {
         let outcome = service.lookup(&hints()).await;
 
         assert!(matches!(outcome, LyricsLookupOutcome::Found(_)));
+    }
+
+    #[tokio::test]
+    async fn a_plain_lrclib_record_loses_to_a_synced_one_of_the_same_song() {
+        let relay = MockRelay::new(MethodMode::LrclibPlainBesideSynced, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        let LyricsLookupOutcome::Found(candidate) = outcome else {
+            panic!("expected a found outcome");
+        };
+        assert!(candidate.synced_lrc.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_linked_genius_page_loses_to_synced_lrclib_text() {
+        let relay = MockRelay::new(MethodMode::LinkedGeniusBesideSynced, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        let LyricsLookupOutcome::Found(candidate) = outcome else {
+            panic!("expected a found outcome");
+        };
+        assert_eq!(candidate.source, "lrclib");
+        assert!(candidate.synced_lrc.is_some());
+    }
+
+    #[test]
+    fn an_exact_plain_lrclib_get_loses_to_a_synced_search_hit() {
+        let exact = LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: None,
+            plain_text: Some("A sufficiently long plain lyrics body without timing".to_owned()),
+            artist: Some("Eminem".to_owned()),
+            title: Some("Lose Yourself".to_owned()),
+            duration_sec: Some(326),
+            exact: true,
+            query_index: 1,
+        };
+        let synced = synced_candidate(
+            "Lose Yourself",
+            327,
+            "[00:01.00] A sufficiently long lyrics body with timing\n[00:05.00] and a second line",
+        );
+
+        let selected = select_candidate(&hints(), vec![exact, synced]).unwrap();
+
+        assert!(selected.synced_lrc.is_some());
+    }
+
+    #[test]
+    fn a_synced_hit_of_another_length_does_not_replace_the_exact_plain_one() {
+        let exact = LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: None,
+            plain_text: Some("A sufficiently long plain lyrics body without timing".to_owned()),
+            artist: Some("Eminem".to_owned()),
+            title: Some("Lose Yourself".to_owned()),
+            duration_sec: Some(326),
+            exact: true,
+            query_index: 1,
+        };
+        let synced = synced_candidate(
+            "Lose Yourself",
+            290,
+            "[00:01.00] A sufficiently long lyrics body with timing\n[00:05.00] and a second line",
+        );
+
+        let selected = select_candidate(&hints(), vec![synced, exact]).unwrap();
+
+        assert!(selected.synced_lrc.is_none());
+        assert!(selected.exact);
     }
 
     #[test]

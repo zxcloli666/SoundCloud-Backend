@@ -193,7 +193,7 @@ local function normalized(value)
   return (string.gsub(string.lower(value), "[%s%p]", ""))
 end
 
-local function settled()
+local function settled(synced_only)
   local title = normalized(inputs.title)
   local artist = normalized(inputs.artist)
   if title == "" then
@@ -204,7 +204,7 @@ local function settled()
     local same_artist = artist == "" or candidate_artist == ""
       or string.find(candidate_artist, artist, 1, true) ~= nil
       or string.find(artist, candidate_artist, 1, true) ~= nil
-    if same_artist and normalized(candidate.title) == title then
+    if same_artist and normalized(candidate.title) == title and (not synced_only or nonempty(candidate.synced_lrc)) then
       return true
     end
   end
@@ -241,26 +241,32 @@ local function add_lrclib_exact()
   add_lrclib_item(item, 1)
 end
 
-local function add_lrclib(query, query_index)
-  if not lrclib_exact_tried then
-    add_lrclib_exact()
-    if settled() or not spare(1) then
-      return
-    end
-  end
+local function add_lrclib_search(query, query_index)
   local payload = request_json("https://lrclib.net/api/search?q=" .. urlencode(query))
   if type(payload) ~= "table" then
     error("invalid lrclib payload")
   end
   local added = 0
-  for _, item in ipairs(payload) do
-    if added >= 3 then
-      break
-    end
-    if add_lrclib_item(item, query_index) then
-      added = added + 1
+  for _, synced_pass in ipairs({ true, false }) do
+    for _, item in ipairs(payload) do
+      if added >= 3 then
+        break
+      end
+      if type(item) == "table" and nonempty(item.syncedLyrics) == synced_pass and add_lrclib_item(item, query_index) then
+        added = added + 1
+      end
     end
   end
+end
+
+local function add_lrclib(query, query_index)
+  if not lrclib_exact_tried then
+    add_lrclib_exact()
+    if settled(true) or not spare(1) then
+      return
+    end
+  end
+  add_lrclib_search(query, query_index)
 end
 
 local genius_pages = 0
@@ -305,6 +311,10 @@ local linked = attempt("genius", linked_genius)
 if linked ~= nil then
   if not genius_only and spare(1) then
     attempt("lrclib", add_lrclib_exact)
+    local query = inputs.queries and inputs.queries[1]
+    if not settled(true) and nonempty(query) and spare(1) then
+      attempt("lrclib", add_lrclib_search, query, 1)
+    end
   end
   candidates[#candidates + 1] = {
     source = "genius",
