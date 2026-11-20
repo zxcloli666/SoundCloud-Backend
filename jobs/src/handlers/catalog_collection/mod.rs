@@ -241,7 +241,7 @@ impl CatalogCollectionHandler {
 fn another_page(payload: &CatalogCollectionPayload) -> JobError {
     let wait = postpone(1, anyhow::anyhow!("collection has another page"));
     if payload.owner {
-        wait
+        wait.leaving_read_lane()
     } else {
         wait.stepping_down_to(CATALOG_REFRESH_BACKGROUND_PRIORITY)
     }

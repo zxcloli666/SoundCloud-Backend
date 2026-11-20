@@ -10,6 +10,7 @@ use crate::common::sc_ids::EntityRef;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::collection::CollectionPage;
+use crate::modules::cold_refresh::library_sync::LibrarySync;
 use crate::modules::enrich::dto as enrich_dto;
 use crate::modules::me::service::premium_response;
 use crate::modules::sync_queue::status::SyncCounts;
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(get_profile))
         .route("/me/sync", get(get_sync_status))
         .route("/me/sync/retry", post(retry_sync))
+        .route("/me/library/sync", get(get_library_sync).post(sync_library))
         .route("/me/subscription", get(get_subscription))
         .route("/me/likes/tracks", get(get_liked_tracks))
         .route("/me/likes/playlists", get(get_liked_playlists))
@@ -75,6 +77,17 @@ async fn retry_sync(
         .revive(&ctx.sc_user_id, target_urn.as_deref(), &memberships)
         .await?;
     Ok(Json(json!({ "revived": revived })))
+}
+
+async fn get_library_sync(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+) -> AppResult<Json<LibrarySync>> {
+    Ok(Json(st.me.library_sync(&ctx.sc_user_id).await?))
+}
+
+async fn sync_library(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<LibrarySync>> {
+    Ok(Json(st.me.sync_library(&ctx.sc_user_id).await?))
 }
 
 fn retry_target(body: &[u8]) -> AppResult<Option<String>> {

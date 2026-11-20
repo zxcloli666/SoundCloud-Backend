@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::*;
-use crate::queue::model::{ClaimOrder, LeasedJob, NewJob};
+use crate::queue::model::{ClaimOrder, LeasedJob, NewJob, PriorityStep};
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
@@ -117,7 +117,12 @@ async fn postponing_preserves_retry_budget_and_prevents_early_claim(
     assert_eq!(job.attempts, 1);
     assert_eq!(
         repository
-            .postpone(job, "refresh cooldown", Duration::from_secs(600), None)
+            .postpone(
+                job,
+                "refresh cooldown",
+                Duration::from_secs(600),
+                PriorityStep::Keep
+            )
             .await?,
         Completion::Completed
     );
@@ -137,7 +142,7 @@ async fn postponing_preserves_retry_budget_and_prevents_early_claim(
     assert_eq!(state, (0, true, true));
     assert_eq!(
         repository
-            .postpone(job, "duplicate", Duration::from_secs(1), None)
+            .postpone(job, "duplicate", Duration::from_secs(1), PriorityStep::Keep)
             .await?,
         Completion::LostLease
     );
@@ -190,7 +195,12 @@ async fn postponing_cannot_overwrite_an_expired_lease_or_newer_generation(
         .await?;
     assert_eq!(
         repository
-            .postpone(job, "too late", Duration::from_secs(600), None)
+            .postpone(
+                job,
+                "too late",
+                Duration::from_secs(600),
+                PriorityStep::Keep
+            )
             .await?,
         Completion::LostLease
     );
@@ -202,7 +212,12 @@ async fn postponing_cannot_overwrite_an_expired_lease_or_newer_generation(
         .await?;
     assert_eq!(
         repository
-            .postpone(job, "old generation", Duration::from_secs(600), None)
+            .postpone(
+                job,
+                "old generation",
+                Duration::from_secs(600),
+                PriorityStep::Keep
+            )
             .await?,
         Completion::Superseded
     );
@@ -253,10 +268,16 @@ async fn a_postponed_job_steps_down_one_priority_at_a_time_and_stops_at_the_floo
     repository.enqueue(&walk).await?;
 
     let mut priorities = Vec::new();
-    for floor in [Some(5), Some(5), Some(5), None, Some(9)] {
+    for step in [
+        PriorityStep::DownTo(5),
+        PriorityStep::DownTo(5),
+        PriorityStep::DownTo(5),
+        PriorityStep::Keep,
+        PriorityStep::DownTo(9),
+    ] {
         let job = claim_again(&repository, &pool).await?;
         repository
-            .postpone(&job, "another page", Duration::from_secs(1), floor)
+            .postpone(&job, "another page", Duration::from_secs(1), step)
             .await?;
         priorities.push(priority_now(&pool).await?);
     }
@@ -267,13 +288,81 @@ async fn a_postponed_job_steps_down_one_priority_at_a_time_and_stops_at_the_floo
         .execute(&pool)
         .await?;
     repository
-        .postpone(&job, "another page", Duration::from_secs(1), Some(5))
+        .postpone(
+            &job,
+            "another page",
+            Duration::from_secs(1),
+            PriorityStep::DownTo(5),
+        )
         .await?;
     assert_eq!(
         priority_now(&pool).await?,
         14,
         "a job asked for again during its lease steps down from the raised priority"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_owner_walk_leaves_the_read_lane_after_its_first_page(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "read-lane-test".into());
+    let walk = new_job(
+        JobKind::CatalogCollection,
+        Some("liked-tracks:1:owner"),
+        45,
+        3,
+        Utc::now(),
+    );
+    repository.enqueue(&walk).await?;
+
+    let mut priorities = Vec::new();
+    for _ in 0..2 {
+        let job = claim_again(&repository, &pool).await?;
+        repository
+            .postpone(
+                &job,
+                "another page",
+                Duration::from_secs(1),
+                PriorityStep::OutOfReadLane,
+            )
+            .await?;
+        priorities.push(priority_now(&pool).await?);
+    }
+    assert_eq!(priorities, [25, 25]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_read_lane_claims_only_its_band_of_its_kinds(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "read-band-test".into());
+    for (kind, key, priority) in [
+        (JobKind::CatalogCollection, "rest-of-a-library", 30),
+        (JobKind::CatalogCollection, "first-page", 40),
+        (JobKind::PlaylistObserveShadow, "opened-playlist", 45),
+        (JobKind::CatalogRefresh, "other-kind", 50),
+    ] {
+        repository
+            .enqueue(&new_job(kind, Some(key), priority, 3, Utc::now()))
+            .await?;
+    }
+
+    let claimed = repository
+        .claim(
+            &backend_contracts::LIBRARY_READ_KINDS,
+            ClaimOrder::AtLeast(40),
+            10,
+            Duration::from_secs(60),
+        )
+        .await?;
+    let keys: Vec<_> = claimed
+        .iter()
+        .filter_map(|job| job.dedup_key.clone())
+        .collect();
+    assert_eq!(keys, ["opened-playlist", "first-page"]);
     Ok(())
 }
 

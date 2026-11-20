@@ -52,6 +52,20 @@ impl JobRepository {
                 .fetch_all(&self.pool)
                 .await?
             }
+            ClaimOrder::AtLeast(priority) => {
+                sqlx::query_file_as!(
+                    LeasedJobRow,
+                    "queries/queue/claim_at_least.sql",
+                    limit,
+                    &supported_kinds,
+                    self.worker_id.as_str(),
+                    lease_milliseconds,
+                    lane.as_str(),
+                    priority
+                )
+                .fetch_all(&self.pool)
+                .await?
+            }
             ClaimOrder::Oldest => {
                 sqlx::query_file_as!(
                     LeasedJobRow,

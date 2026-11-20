@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::background_jobs::queue;
 use crate::error::{AppError, AppResult};
+use crate::modules::cold_refresh::library_sync::LibrarySync;
 use crate::modules::cold_refresh::{ColdRefreshService, FOLLOWINGS};
 use crate::modules::subscriptions::service::PremiumStatus;
 use crate::modules::sync_queue::SyncQueueService;
@@ -43,6 +44,14 @@ impl MeService {
             self.public.refresh(session, sc_user_id, &user).await;
         }
         super::profile::read(&self.pg, sc_user_id).await
+    }
+
+    pub async fn library_sync(&self, sc_user_id: &str) -> AppResult<LibrarySync> {
+        self.cold_refresh.library_sync(sc_user_id).await
+    }
+
+    pub async fn sync_library(&self, sc_user_id: &str) -> AppResult<LibrarySync> {
+        self.cold_refresh.sync_library(sc_user_id).await
     }
 
     pub async fn get_followings_tracks(

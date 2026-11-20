@@ -26,6 +26,7 @@ const DATABASE_PREFIXES: &[&str] = &["", "OPS_", "JOBS_READ_"];
 const LANE_PREFIXES: &[&str] = &[
     "JOBS_CORE_FAST",
     "JOBS_CORE_BULK",
+    "JOBS_LIBRARY_READ",
     "JOBS_MAINTENANCE",
     "JOBS_OPS",
 ];

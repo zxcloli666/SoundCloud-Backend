@@ -1,6 +1,7 @@
 mod collab;
 mod indexing;
 pub mod queue;
+pub mod wait;
 
 use std::sync::Arc;
 use std::time::Duration;

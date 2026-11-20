@@ -1,13 +1,15 @@
-use backend_contracts::{JobKind, PlaylistObservePayload, STAR_PRIORITY_BONUS};
+use backend_contracts::{
+    JobKind, LIBRARY_READ_PRIORITY, PlaylistObservePayload, STAR_PRIORITY_BONUS,
+};
 use chrono::{DateTime, Utc};
 use deadpool_redis::Pool;
 use serde::Serialize;
 use sqlx::PgPool;
-use wt::ObserveClaim;
+use wt::{EnqueuedJob, ObserveClaim};
 
 use crate::background_jobs::queue;
+use crate::background_jobs::wait::{self, QueueWait, WaitLane};
 use crate::error::AppResult;
-use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
 const EDIT_PRIORITY: i16 = 30;
 const FAILURE_STREAK_LIMIT: i32 = 5;
@@ -29,6 +31,7 @@ pub struct PlaylistMembershipStatus {
     pub queued_since: Option<DateTime<Utc>>,
     pub error_code: Option<&'static str>,
     pub retry_after_seconds: i64,
+    pub wait: Option<QueueWait>,
 }
 
 fn playlist_error_code(
@@ -64,6 +67,7 @@ fn membership_status(row: Option<MembershipStatusRow>) -> PlaylistMembershipStat
             queued_since: None,
             error_code: None,
             retry_after_seconds: 0,
+            wait: None,
         };
     };
     let error_code = playlist_error_code(
@@ -86,6 +90,7 @@ fn membership_status(row: Option<MembershipStatusRow>) -> PlaylistMembershipStat
         queued_since: row.queued_since,
         error_code,
         retry_after_seconds: row.retry_after_seconds,
+        wait: None,
     }
 }
 
@@ -124,7 +129,12 @@ impl PlaylistMembership {
                 "playlist has no membership state; answering as unhydrated"
             );
         }
-        Ok(membership_status(row))
+        let status = membership_status(row);
+        if status.queued_since.is_none() {
+            return Ok(status);
+        }
+        let wait = wait::load(&self.pool, JobKind::PlaylistObserveShadow, WaitLane::Read).await?;
+        Ok(PlaylistMembershipStatus { wait, ..status })
     }
 
     pub async fn track_if_untracked(&self, playlist_urn: &str) -> AppResult<()> {
@@ -165,7 +175,8 @@ impl PlaylistMembership {
         if !self.claim_view(playlist_urn, due_at).await {
             return;
         }
-        self.enqueue(playlist_urn, VIEWER_PRIORITY, true).await;
+        self.enqueue(playlist_urn, LIBRARY_READ_PRIORITY, true)
+            .await;
     }
 
     pub async fn enqueue_edit_observation(&self, playlist_urn: &str) -> bool {
@@ -208,6 +219,10 @@ impl PlaylistMembership {
             playlist_urn: playlist_urn.to_owned(),
             at: wt::now(),
         });
+        let job = EnqueuedJob {
+            raise_priority: true,
+            ..job
+        };
         queue::enqueue(&self.pool, vec![job], claim).await.is_ok()
     }
 }
@@ -400,6 +415,66 @@ mod tests {
             (1..=2).contains(&commands),
             "{commands} enqueue commands reached core"
         );
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+    async fn an_opened_playlist_lifts_its_background_read_into_the_read_lane(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        test_schema::seed_observed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        sqlx::query(
+            "UPDATE playlist_membership_state SET next_reconcile_at = now() - interval '1 second'",
+        )
+        .execute(&pool)
+        .await?;
+        assert!(claimed(&pool).await?);
+        sqlx::query(
+            "UPDATE playlist_membership_state SET next_reconcile_at = now() - interval '1 second'",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("UPDATE background_jobs SET available_at = now() + interval '1 hour'")
+            .execute(&pool)
+            .await?;
+
+        PlaylistMembership::new(pool.clone(), node_redis(4))
+            .enqueue_observation_if_due(PLAYLIST)
+            .await;
+
+        let job: (i16, bool) =
+            sqlx::query_as("SELECT priority, available_at <= now() FROM background_jobs")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(job, (LIBRARY_READ_PRIORITY, true));
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+    async fn a_queued_playlist_read_shows_the_read_lane_wait(pool: PgPool) -> anyhow::Result<()> {
+        test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        sqlx::query(
+            "INSERT INTO job_queue_waits (kind, lane, due, oldest_due_at, updated_at)
+             VALUES ('playlists.observe_shadow', 'read', 3, now() - interval '8 seconds', now())",
+        )
+        .execute(&pool)
+        .await?;
+        let node = PlaylistMembership::new(pool.clone(), node_redis(5));
+        assert!(node.status(PLAYLIST).await?.wait.is_none());
+
+        sqlx::query(
+            "INSERT INTO job_status (kind, dedup_key, state) VALUES ('playlists.observe_shadow', $1, 'queued')",
+        )
+        .bind(PLAYLIST)
+        .execute(&pool)
+        .await?;
+        let wait = node
+            .status(PLAYLIST)
+            .await?
+            .wait
+            .expect("a queued read shows its wait");
+        assert_eq!((wait.lane, wait.ahead), (WaitLane::Read, 3));
+        assert!((8..=9).contains(&wait.eta_seconds));
         Ok(())
     }
 

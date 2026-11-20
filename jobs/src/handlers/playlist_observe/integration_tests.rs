@@ -94,8 +94,8 @@ async fn observer_is_get_only_and_releases_a_single_connection_before_http(
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(state.0, "conflict");
-    assert_eq!(state.1.as_deref(), Some("legacy_remote_superset"));
+    assert_eq!(state.0, "clean");
+    assert_eq!(state.1, None);
     assert_eq!(state.2, 28);
     assert!(state.3.is_some_and(|due| {
         due > chrono::Utc::now() && due < chrono::Utc::now() + chrono::Duration::minutes(16)
@@ -126,14 +126,17 @@ async fn observer_is_get_only_and_releases_a_single_connection_before_http(
     .fetch_one(&pool)
     .await?;
     assert_eq!(observation, ("complete".to_owned(), true, true));
-    let legacy = sqlx::query_scalar::<_, String>(
-        "SELECT classification
+    let legacy = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT classification, prior_classification
          FROM playlist_legacy_membership_intents
          WHERE playlist_urn = 'soundcloud:playlists:42'",
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(legacy, "remote_superset");
+    assert_eq!(
+        legacy,
+        ("abandoned".to_owned(), Some("remote_superset".to_owned()))
+    );
     Ok(())
 }
 
@@ -2051,5 +2054,5 @@ async fn install_star_subscriptions(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-mod legacy_adopt;
+mod legacy_rebase;
 mod partial_and_public;

@@ -1,5 +1,6 @@
 pub mod collection;
 pub mod entity;
+pub mod library_sync;
 mod read;
 pub mod service;
 
@@ -20,6 +21,9 @@ mod audience_tests;
 
 #[cfg(test)]
 mod entity_tests;
+
+#[cfg(test)]
+mod library_sync_tests;
 
 pub use read::{read_audience_page, read_collection_page};
 pub use service::{

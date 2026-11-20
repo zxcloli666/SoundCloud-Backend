@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use backend_contracts::{LIBRARY_READ_BOOST, LIBRARY_READ_PRIORITY};
+
 use super::{Completion, JobRepository, duration_milliseconds, truncate};
 use crate::queue::backoff;
-use crate::queue::model::{LeasedJob, QueueError};
+use crate::queue::model::{LeasedJob, PriorityStep, QueueError};
 
 const MAX_ERROR_LENGTH: usize = 2_000;
 
@@ -12,11 +14,15 @@ impl JobRepository {
         job: &LeasedJob,
         error: &str,
         delay: Duration,
-        step_down_to: Option<i16>,
+        step: PriorityStep,
     ) -> Result<Completion, QueueError> {
         let error = truncate(error, MAX_ERROR_LENGTH);
         let delay_milliseconds =
             duration_milliseconds(delay.clamp(Duration::from_secs(1), Duration::from_secs(86400)))?;
+        let step_down_to = match step {
+            PriorityStep::DownTo(floor) => Some(floor),
+            PriorityStep::Keep | PriorityStep::OutOfReadLane => None,
+        };
         let updated = sqlx::query_file!(
             "queries/queue/postpone.sql",
             job.id,
@@ -24,7 +30,10 @@ impl JobRepository {
             job.generation,
             delay_milliseconds,
             error,
-            step_down_to
+            step_down_to,
+            step == PriorityStep::OutOfReadLane,
+            LIBRARY_READ_PRIORITY,
+            LIBRARY_READ_BOOST
         )
         .execute(&self.pool)
         .await?

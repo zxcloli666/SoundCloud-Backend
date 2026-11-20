@@ -87,7 +87,9 @@ SELECT v.cls FROM (VALUES
     ('enrich_calibration', 'P'),
     ('entity_reads', 'K'),
     ('featured_items', 'A'),
+    ('job_queue_waits', 'C'),
     ('job_status', 'C'),
+    ('library_sync_requests', 'A'),
     ('link_requests', 'A'),
     ('listening_history', 'A'),
     ('listening_history_listened', 'A'),
@@ -261,8 +263,12 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'entity_reads', jsonb_build_object('entity_urn', t.entity_urn) FROM public.entity_reads t ON CONFLICT DO NOTHING;
         WHEN 'featured_items' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'featured_items', jsonb_build_object('id', t.id) FROM public.featured_items t ON CONFLICT DO NOTHING;
+        WHEN 'job_queue_waits' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'job_queue_waits', jsonb_build_object('kind', t.kind, 'lane', t.lane) FROM public.job_queue_waits t ON CONFLICT DO NOTHING;
         WHEN 'job_status' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'job_status', jsonb_build_object('kind', t.kind, 'dedup_key', t.dedup_key) FROM public.job_status t ON CONFLICT DO NOTHING;
+        WHEN 'library_sync_requests' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'library_sync_requests', jsonb_build_object('sc_user_id', t.sc_user_id) FROM public.library_sync_requests t ON CONFLICT DO NOTHING;
         WHEN 'link_requests' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'link_requests', jsonb_build_object('id', t.id) FROM public.link_requests t ON CONFLICT DO NOTHING;
         WHEN 'listening_history' THEN
@@ -418,7 +424,9 @@ BEGIN
         ('disliked_tracks', 'A'),
         ('entity_reads', 'K'),
         ('featured_items', 'A'),
+        ('job_queue_waits', 'C'),
         ('job_status', 'C'),
+        ('library_sync_requests', 'A'),
         ('link_requests', 'A'),
         ('listening_history', 'A'),
         ('listening_history_listened', 'A'),

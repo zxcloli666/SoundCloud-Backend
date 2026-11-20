@@ -36,6 +36,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_catalog_work_links;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_cmd_dead;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_discover_tag_counts;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_enrich_calibration;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_job_queue_waits;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_job_status;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_llm_pause;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_llm_spend;
@@ -2861,6 +2862,114 @@ CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.featured_item
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.featured_items ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.job_queue_waits FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_job_queue_waits', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_owner_job_queue_waits()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    n bigint;
+    held boolean;
+    fast text;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        fast := current_setting('scd.copy', true);
+        IF fast IS NULL OR fast = '' THEN
+            fast := '-';
+            IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_get_activity(pg_catalog.pg_backend_pid()) a WHERE a.backend_type = 'logical replication tablesync worker')
+                AND EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel s WHERE s.srrelid = 'public.job_queue_waits'::regclass AND s.srsubstate = 'd')
+                AND NOT EXISTS (SELECT 1 FROM public.job_queue_waits) THEN
+                fast := 'job_queue_waits';
+            END IF;
+            PERFORM pg_catalog.set_config('scd.copy', fast, true);
+        END IF;
+        IF fast = 'job_queue_waits' THEN
+            RETURN NEW;
+        END IF;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_queue_waits' AND p.pk = jsonb_build_object('kind', OLD.kind, 'lane', OLD.lane)) THEN
+            RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.kind, NEW.lane) IS DISTINCT FROM (OLD.kind, OLD.lane) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_queue_waits' AND p.pk = jsonb_build_object('kind', OLD.kind, 'lane', OLD.lane)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_queue_waits' AND p.pk = jsonb_build_object('kind', NEW.kind, 'lane', NEW.lane)) THEN
+                    INSERT INTO public.job_queue_waits (due, kind, lane, oldest_due_at, updated_at) VALUES (NEW.due, NEW.kind, NEW.lane, NEW.oldest_due_at, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_queue_waits' AND p.pk = jsonb_build_object('kind', NEW.kind, 'lane', NEW.lane)) THEN
+                DELETE FROM public.job_queue_waits t WHERE (t.kind, t.lane) = (OLD.kind, OLD.lane);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_queue_waits' AND p.pk = jsonb_build_object('kind', NEW.kind, 'lane', NEW.lane)) THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.job_queue_waits t WHERE (t.kind, t.lane) = (NEW.kind, NEW.lane) FOR UPDATE;
+        held := FOUND;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_queue_waits' AND p.pk = jsonb_build_object('kind', NEW.kind, 'lane', NEW.lane)) THEN
+            RETURN NULL;
+        END IF;
+        IF held THEN
+            UPDATE public.job_queue_waits t SET due = NEW.due, oldest_due_at = NEW.oldest_due_at, updated_at = NEW.updated_at WHERE (t.kind, t.lane) = (NEW.kind, NEW.lane);
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.job_queue_waits (due, kind, lane, oldest_due_at, updated_at)
+        VALUES (NEW.due, NEW.kind, NEW.lane, NEW.oldest_due_at, NEW.updated_at)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.job_queue_waits still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.job_queue_waits FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_queue_waits();
+ALTER TABLE public.job_queue_waits ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE FUNCTION public.scd_owner_copy_job_queue_waits()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    IF current_setting('scd.copy', true) IS DISTINCT FROM 'job_queue_waits' THEN
+        RETURN NULL;
+    END IF;
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    FOR p IN SELECT c.pk FROM public.cmd_pending c WHERE c.tbl = 'job_queue_waits' LOOP
+        DELETE FROM public.job_queue_waits t WHERE t.kind = (p.pk ->> 'kind')::text AND t.lane = (p.pk ->> 'lane')::text AND t.xmin = pg_catalog.xid(pg_catalog.pg_current_xact_id());
+    END LOOP;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+    RETURN NULL;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner_copy AFTER INSERT ON public.job_queue_waits FOR EACH STATEMENT WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_copy_job_queue_waits();
+ALTER TABLE public.job_queue_waits ENABLE REPLICA TRIGGER zz_owner_copy;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_queue_waits FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.job_queue_waits ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.job_status FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_job_status', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_job_status()
@@ -2968,6 +3077,80 @@ ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zz_owner_copy;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE FUNCTION public.scd_merge_library_sync_requests()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.requested_at := OLD.requested_at;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.library_sync_requests t WHERE t.sc_user_id = NEW.sc_user_id;
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.library_sync_requests t SET
+                    requested_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.requested_at ELSE o.requested_at END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE t.sc_user_id = o.sc_user_id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.library_sync_requests (requested_at, row_v, sc_user_id)
+        VALUES (NEW.requested_at, NEW.row_v, NEW.sc_user_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.library_sync_requests still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.library_sync_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_library_sync_requests();
+ALTER TABLE public.library_sync_requests ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_library_sync_requests()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(NEW.row_v);
+        RETURN NEW;
+    END IF;
+    IF NEW.requested_at IS DISTINCT FROM OLD.requested_at THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.library_sync_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_library_sync_requests();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.library_sync_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.library_sync_requests ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_link_requests()
 RETURNS trigger
@@ -10188,6 +10371,7 @@ FROM (VALUES
     ('guard', 'cmd_dead', 'scd_guard_cmd_dead'),
     ('guard', 'discover_tag_counts', 'scd_guard_discover_tag_counts'),
     ('guard', 'enrich_calibration', 'scd_guard_enrich_calibration'),
+    ('guard', 'job_queue_waits', 'scd_guard_job_queue_waits'),
     ('guard', 'job_status', 'scd_guard_job_status'),
     ('guard', 'llm_pause', 'scd_guard_llm_pause'),
     ('guard', 'llm_spend', 'scd_guard_llm_spend'),
@@ -10413,10 +10597,17 @@ BEGIN
             ('featured_items', 'zz_tomb_check'),
             ('featured_items', 'zz_ver'),
             ('featured_items', 'zzz_suppress'),
+            ('job_queue_waits', 'zz_guard'),
+            ('job_queue_waits', 'zz_owner'),
+            ('job_queue_waits', 'zz_owner_copy'),
+            ('job_queue_waits', 'zzz_suppress'),
             ('job_status', 'zz_guard'),
             ('job_status', 'zz_owner'),
             ('job_status', 'zz_owner_copy'),
             ('job_status', 'zzz_suppress'),
+            ('library_sync_requests', 'zz_merge'),
+            ('library_sync_requests', 'zz_ver'),
+            ('library_sync_requests', 'zzz_suppress'),
             ('link_requests', 'zz_merge'),
             ('link_requests', 'zz_tomb'),
             ('link_requests', 'zz_tomb_check'),
