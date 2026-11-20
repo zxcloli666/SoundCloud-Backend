@@ -35,6 +35,9 @@ class EngineTurn:
             return bool(self._waiting)
         return group != self._home
 
+    def holding(self, lane: str) -> bool:
+        return lane in self._holders
+
     def claim(self, lane: str, wanted: bool) -> bool:
         if not wanted:
             return False

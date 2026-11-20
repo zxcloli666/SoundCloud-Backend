@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 import nats.errors
@@ -95,6 +95,7 @@ class LaneRunner:
         self._clock = clock
         self._turn = turn
         self._subscription: JetStreamContext.PullSubscription | None = None
+        self._parked: list[Msg] = []
         self._stop = asyncio.Event()
         self._abort = asyncio.Event()
         self._freed = asyncio.Event()
@@ -116,6 +117,7 @@ class LaneRunner:
         try:
             await self._serve()
         finally:
+            await self._release_parked()
             self._yield_turn()
 
     async def _serve(self) -> None:
@@ -134,7 +136,8 @@ class LaneRunner:
                 continue
             if self._turn is not None and not await self._turn_taken(self._turn):
                 continue
-            if not await self._pull(free):
+            free = self.capacity - self.inflight
+            if free > 0 and not await self._pull(free):
                 self._yield_turn()
 
     def stop_fetching(self) -> None:
@@ -192,7 +195,8 @@ class LaneRunner:
             "task_p95_ms": task_ms["p95"],
         }
 
-    async def _pull(self, batch: int) -> int:
+    async def _pull(self, batch: int, take: Callable[[Msg], None] | None = None) -> int:
+        take = take or self._spawn
         subscription = await self._bound()
         if subscription is None:
             return 0
@@ -204,7 +208,7 @@ class LaneRunner:
             )
             async for msg in pulling:
                 taken += 1
-                self._spawn(msg)
+                take(msg)
         except PullUnanswered as unanswered:
             self._counters.inc("pull_unanswered_total", lane=self.lane.name)
             log.warning("pull_unanswered", extra={"lane": self.lane.name, "error": str(unanswered)})
@@ -244,17 +248,48 @@ class LaneRunner:
 
     async def _turn_taken(self, turn: EngineTurn) -> bool:
         if turn.claim(self.lane.name, await self._wants_turn(turn)):
+            self._unpark()
             return True
         await self._wait_turn(turn)
         return False
 
     async def _wants_turn(self, turn: EngineTurn) -> bool:
-        if self.tasks or not turn.needs_proof(self.lane.name):
+        if self.tasks or self._parked or not turn.needs_proof(self.lane.name):
             return True
-        return await self.watch.has_work()
+        await self._pull(1, self._park)
+        return bool(self._parked)
+
+    def _park(self, msg: Msg) -> None:
+        self._parked.append(msg)
+        self._counters.inc("turn_parked_total", lane=self.lane.name)
+
+    def _unpark(self) -> None:
+        parked, self._parked = self._parked, []
+        for msg in parked:
+            self._spawn(msg)
+
+    async def _keep_parked(self) -> None:
+        for msg in self._parked:
+            try:
+                await msg.in_progress()
+            except nats.errors.Error as error:
+                log.warning(
+                    "parked_progress_failed", extra={"lane": self.lane.name, "error": str(error)}
+                )
+
+    async def _release_parked(self) -> None:
+        parked, self._parked = self._parked, []
+        for msg in parked:
+            try:
+                await msg.nak()
+            except nats.errors.Error as error:
+                log.warning(
+                    "parked_release_failed", extra={"lane": self.lane.name, "error": str(error)}
+                )
 
     async def _wait_turn(self, turn: EngineTurn) -> None:
         self._yield_turn()
+        await self._keep_parked()
         self._freed.clear()
         await race(
             self._clock.sleep(turn.probe_s),
@@ -279,7 +314,10 @@ class LaneRunner:
                 self._counters.inc("lingering_status_total", lane=self.lane.name)
                 continue
             self._counters.inc("lingering_taken_total", lane=self.lane.name)
-            self._spawn(msg)
+            if self._turn is None or self._turn.holding(self.lane.name):
+                self._spawn(msg)
+            else:
+                self._park(msg)
 
     def _spawn(self, msg: Msg) -> None:
         task = asyncio.create_task(self._handler.handle(msg, self._abort))

@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from tests.bus.conftest import AUDIO_TASK, Harness, build_harness
 from tests.contract import samples
 from tests.fakes.clock import FakeClock
-from tests.fakes.jetstream import FakeNats
+from tests.fakes.jetstream import FakeConsumer, FakeNats
 from worker.bus.lane_runner import IDLE_POLL_S, PULL_EXPIRES_S, LaneRunner
 from worker.bus.turn import EngineTurn
 from worker.contract import Contract
@@ -216,7 +216,7 @@ async def test_a_video_job_takes_the_idle_card_and_the_regular_lane_resumes_afte
         await keyframe.stop()
 
 
-async def test_regular_tasks_in_flight_finish_before_the_video_lane_pulls(
+async def test_regular_tasks_in_flight_finish_before_the_video_job_starts(
     fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
 ) -> None:
     order: list[str] = []
@@ -234,7 +234,6 @@ async def test_regular_tasks_in_flight_finish_before_the_video_lane_pulls(
             await clock.tick(PROBE_S, turns=40)
         assert turn.owner == "regular"
         assert keyframe.processor.calls == []
-        assert keyframe.bus.consumers[(keyframe.lane.stream, keyframe.lane.durable)].pending == {}
         audio.processor.resume()
         await idle_polls(clock)
         assert order == [AUDIO, KEYFRAME]
@@ -245,6 +244,67 @@ async def test_regular_tasks_in_flight_finish_before_the_video_lane_pulls(
         await keyframe.stop()
 
 
+async def test_a_video_job_gets_the_card_within_the_hold_while_the_regular_lanes_stay_busy(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    order: list[str] = []
+    turn = mixed(clock)
+    busy = [
+        await turned_harness(
+            fake_nats, contract, settings, clock, lane, turn, order, capacity=4, task_s=PROBE_S * 3
+        )
+        for lane in (AUDIO, LYRICS)
+    ]
+    keyframe = await turned_harness(fake_nats, contract, settings, clock, KEYFRAME, turn, order)
+    try:
+        for harness in busy:
+            for index in range(int(HOLD_S // PROBE_S) * 4):
+                harness.enqueue(samples.REQUESTS[harness.lane.name], f"{harness.lane.name}:{index}")
+            await start(harness)
+        await clock.tick(PROBE_S, turns=40)
+        keyframe.enqueue(samples.REQUESTS[KEYFRAME], "kf:1")
+        await start(keyframe)
+        asked = clock.now()
+        while KEYFRAME not in order and clock.now() - asked < HOLD_S * 2:
+            await clock.tick(PROBE_S / 2, turns=40)
+        assert KEYFRAME in order
+        assert clock.now() - asked <= HOLD_S + PROBE_S * 4
+        assert {AUDIO, LYRICS} <= set(order[: order.index(KEYFRAME)])
+        assert all(consumer(harness).num_pending(clock.now()) for harness in busy)
+    finally:
+        for harness in (*busy, keyframe):
+            await harness.stop()
+
+
+async def test_a_video_job_takes_the_turn_on_a_broker_that_only_shows_work_to_a_puller(
+    fake_nats: FakeNats, contract: Contract, settings: Settings, clock: FakeClock
+) -> None:
+    order: list[str] = []
+    turn = mixed(clock)
+    audio = await turned_harness(
+        fake_nats, contract, settings, clock, AUDIO, turn, order, capacity=4, task_s=PROBE_S * 3
+    )
+    shot = await turned_harness(fake_nats, contract, settings, clock, SHOT, turn, order)
+    try:
+        for index in range(int(HOLD_S // PROBE_S) * 4):
+            audio.enqueue(samples.REQUESTS[AUDIO], f"audio:{index}")
+        await start(audio)
+        await clock.tick(PROBE_S, turns=40)
+        shot.enqueue(samples.REQUESTS[SHOT], "shot:1")
+        consumer(shot).num_pending = lambda now: 0
+        await start(shot)
+        asked = clock.now()
+        while SHOT not in order and clock.now() - asked < HOLD_S * 2:
+            await clock.tick(PROBE_S / 2, turns=40)
+        assert SHOT in order
+        assert clock.now() - asked <= HOLD_S + PROBE_S * 4
+        await idle_polls(clock)
+        assert order[-1] == AUDIO
+    finally:
+        await audio.stop()
+        await shot.stop()
+
+
 async def turned_harness(
     fake_nats: FakeNats,
     contract: Contract,
@@ -253,11 +313,14 @@ async def turned_harness(
     lane: str,
     turn: EngineTurn,
     order: list[str],
+    capacity: int = 1,
+    task_s: float = 0.0,
 ) -> Harness:
-    harness = await build_harness(fake_nats, contract, settings, clock, lane, capacity=1)
+    harness = await build_harness(fake_nats, contract, settings, clock, lane, capacity=capacity)
 
     async def behaviour(request: Mapping[str, object], deadline: Deadline) -> Outcome:
         order.append(lane)
+        await clock.sleep(task_s)
         raise PermanentFailure(Reason.INVALID_REQUEST, "scripted")
 
     harness.processor.behaviour = behaviour
@@ -268,7 +331,7 @@ async def turned_harness(
         harness.connection.js,
         harness.connection,
         harness.outbox,
-        1,
+        capacity,
         harness.counters,
         clock,
         turn,
@@ -285,3 +348,7 @@ async def start(harness: Harness) -> None:
 async def idle_polls(clock: FakeClock) -> None:
     for _ in range(12):
         await clock.tick(PULL_EXPIRES_S + IDLE_POLL_S, turns=40)
+
+
+def consumer(harness: Harness) -> FakeConsumer:
+    return harness.bus.consumers[(harness.lane.stream, harness.lane.durable)]
