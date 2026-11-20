@@ -21,6 +21,7 @@ const TRACK_WORK_KEYS: &str = "track_work_keys";
 const TRACK_ENRICH_QUEUE: &str = "track_enrich_queue";
 const ARTIST_PLAYABLE_TRACKS: &str = "artist_playable_tracks";
 const ARTIST_TRACK_TITLES: &str = "artist_track_titles";
+const LYRICS_FTS_INLINE: &str = "lyrics_fts_inline";
 const WANTED_ALIASES: &str = "wanted_aliases";
 const MAINTENANCE_PRIORITY: i16 = 20;
 const MAINTENANCE_MAX_ATTEMPTS: i16 = 8;
@@ -151,6 +152,14 @@ pub async fn artist_track_titles(
     State(state): State<AppState>,
 ) -> AppResult<Json<MaintenanceAccepted>> {
     enqueue(&state, ARTIST_TRACK_TITLES, JobKind::AdminArtistTrackTitles).await
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn lyrics_fts_inline(
+    _: AdminAuth,
+    State(state): State<AppState>,
+) -> AppResult<Json<MaintenanceAccepted>> {
+    enqueue(&state, LYRICS_FTS_INLINE, JobKind::AdminLyricsFtsInline).await
 }
 
 #[tracing::instrument(skip_all)]
