@@ -1,4 +1,5 @@
 mod artist_playable_tracks;
+mod artist_track_titles;
 mod lyrics_description;
 mod lyrics_queue;
 mod lyrics_refetch;
@@ -28,6 +29,7 @@ use crate::queue::{
 };
 
 pub const ARTIST_PLAYABLE_TRACKS: &str = "artist_playable_tracks";
+pub const ARTIST_TRACK_TITLES: &str = "artist_track_titles";
 pub const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
 pub const LYRICS_DESCRIPTION: &str = "lyrics_description";
 pub const LYRICS_LOOKUP_QUEUE: &str = "lyrics_lookup_queue";
@@ -77,6 +79,7 @@ pub struct AdminMaintenanceHandler {
     track_work_keys_batch: i64,
     track_enrich_queue_batch: i64,
     artist_playable_tracks_batch: i64,
+    artist_track_titles_batch: i64,
     governor: Arc<WriteGovernor>,
 }
 
@@ -97,6 +100,7 @@ impl AdminMaintenanceHandler {
             track_work_keys_batch: config.track_work_keys_batch,
             track_enrich_queue_batch: config.track_enrich_queue_batch,
             artist_playable_tracks_batch: config.artist_playable_tracks_batch,
+            artist_track_titles_batch: config.artist_track_titles_batch,
             governor,
         }
     }
@@ -189,6 +193,14 @@ impl AdminMaintenanceHandler {
         self.run(job, payload, ARTIST_PLAYABLE_TRACKS).await
     }
 
+    pub async fn backfill_artist_track_titles(
+        &self,
+        job: &LeasedJob,
+        payload: AdminMaintenancePayload,
+    ) -> JobResult {
+        self.run(job, payload, ARTIST_TRACK_TITLES).await
+    }
+
     async fn run(
         &self,
         job: &LeasedJob,
@@ -264,6 +276,8 @@ impl AdminMaintenanceHandler {
             track_enrich_queue::FIRST_PHASE
         } else if kind == ARTIST_PLAYABLE_TRACKS {
             artist_playable_tracks::FIRST_PHASE
+        } else if kind == ARTIST_TRACK_TITLES {
+            artist_track_titles::FIRST_PHASE
         } else if kind == LYRICS_REFETCH {
             lyrics_refetch::FIRST_PHASE
         } else if kind == LYRICS_DESCRIPTION {
@@ -290,6 +304,8 @@ impl AdminMaintenanceHandler {
             track_enrich_queue::execute(self, state).await
         } else if kind == ARTIST_PLAYABLE_TRACKS {
             artist_playable_tracks::execute(self, state).await
+        } else if kind == ARTIST_TRACK_TITLES {
+            artist_track_titles::execute(self, state).await
         } else if kind == LYRICS_REFETCH {
             lyrics_refetch::execute(self, state).await
         } else if kind == LYRICS_DESCRIPTION {
@@ -396,6 +412,8 @@ fn continuation_kind(kind: &str) -> JobKind {
         JobKind::AdminTrackEnrichQueue
     } else if kind == ARTIST_PLAYABLE_TRACKS {
         JobKind::AdminArtistPlayableTracks
+    } else if kind == ARTIST_TRACK_TITLES {
+        JobKind::AdminArtistTrackTitles
     } else if kind == LYRICS_REFETCH {
         JobKind::AdminLyricsRefetch
     } else if kind == LYRICS_DESCRIPTION {

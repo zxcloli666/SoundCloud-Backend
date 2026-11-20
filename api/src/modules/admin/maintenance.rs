@@ -20,6 +20,7 @@ const TRACK_SYNC_STAMPS: &str = "track_sync_stamps";
 const TRACK_WORK_KEYS: &str = "track_work_keys";
 const TRACK_ENRICH_QUEUE: &str = "track_enrich_queue";
 const ARTIST_PLAYABLE_TRACKS: &str = "artist_playable_tracks";
+const ARTIST_TRACK_TITLES: &str = "artist_track_titles";
 const WANTED_ALIASES: &str = "wanted_aliases";
 const MAINTENANCE_PRIORITY: i16 = 20;
 const MAINTENANCE_MAX_ATTEMPTS: i16 = 8;
@@ -142,6 +143,14 @@ pub async fn artist_playable_tracks(
         JobKind::AdminArtistPlayableTracks,
     )
     .await
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn artist_track_titles(
+    _: AdminAuth,
+    State(state): State<AppState>,
+) -> AppResult<Json<MaintenanceAccepted>> {
+    enqueue(&state, ARTIST_TRACK_TITLES, JobKind::AdminArtistTrackTitles).await
 }
 
 #[tracing::instrument(skip_all)]
