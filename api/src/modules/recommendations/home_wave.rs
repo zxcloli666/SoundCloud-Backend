@@ -327,11 +327,7 @@ impl RecommendationsService {
             .as_ref()
             .map(|l| l.join(","))
             .unwrap_or_default();
-        let genres = req
-            .genres
-            .as_ref()
-            .map(|g| g.join(","))
-            .unwrap_or_default();
+        let genres = req.genres.as_ref().map(|g| g.join(",")).unwrap_or_default();
         let key = format!(
             "home:{}:{}:{}:{}:{}",
             req.sc_user_id, lang, genres, req.per_cluster, req.hide_listened
