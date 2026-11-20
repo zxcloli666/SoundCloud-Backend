@@ -2,6 +2,9 @@ mod account_scan;
 mod ai_matcher;
 
 #[cfg(test)]
+#[path = "candidates_tests.rs"]
+mod candidates_tests;
+#[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
 

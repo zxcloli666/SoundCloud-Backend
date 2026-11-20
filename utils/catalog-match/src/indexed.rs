@@ -8,6 +8,7 @@ use crate::score::title_score;
 pub const WORK_TITLE_THRESHOLD: f32 = 0.85;
 
 const CANDIDATE_LIMIT: i64 = 200;
+const PREFIX_END: char = '\u{10FFFF}';
 const SAME_RECORDING_SCORE: f32 = 1.0;
 const SAME_WORK_SCORE: f32 = 0.9;
 
@@ -28,18 +29,21 @@ pub async fn best_indexed_for_artist_title(
     if target.work_key.is_empty() && normalized.is_empty() {
         return Ok(None);
     }
-    let work_keys: Vec<String> = target.work_keys().map(str::to_owned).collect();
-    let first_word_prefix = match normalized.split_whitespace().next() {
-        Some(word) => format!("{word}%"),
-        None => format!("{normalized}%"),
-    };
+    let work_keys: Vec<String> = target
+        .work_keys()
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let first_word = normalized.split_whitespace().next().unwrap_or(&normalized);
+    let first_word_end = format!("{first_word}{PREFIX_END}");
 
     let candidates = sqlx::query_file!(
         "queries/indexed_candidates.sql",
         artist_id,
         &work_keys,
         &normalized,
-        &first_word_prefix,
+        first_word,
+        &first_word_end,
         CANDIDATE_LIMIT
     )
     .fetch_all(pool)
