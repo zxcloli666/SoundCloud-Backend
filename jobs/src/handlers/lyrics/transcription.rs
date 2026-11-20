@@ -54,7 +54,8 @@ impl Outcome {
             (WorkerStatus::Empty, _) => Self::Empty,
             (WorkerStatus::Rejected, _) => Self::Rejected,
             (WorkerStatus::Failed, Some(reason))
-                if reason.is_reopenable_on(WorkerLane::Transcribe) =>
+                if reason.is_reopenable_on(WorkerLane::Transcribe)
+                    || reason == WorkerReason::DeadlineExceeded =>
             {
                 Self::Reopenable
             }
@@ -391,7 +392,7 @@ mod tests {
             (
                 WorkerStatus::Failed,
                 Some(WorkerReason::DeadlineExceeded),
-                Outcome::Quarantined,
+                Outcome::Reopenable,
             ),
             (
                 WorkerStatus::Failed,
