@@ -90,6 +90,18 @@ impl<'a> GatedClient<'a> {
             .await
     }
 
+    pub async fn put_image(
+        &self,
+        path: &str,
+        access_token: &str,
+        field: &'static str,
+        jpeg: &[u8],
+    ) -> Result<Value, SoundCloudError> {
+        self.client
+            .send_image_gated(path, access_token, field, jpeg, self.gate)
+            .await
+    }
+
     pub async fn delete(&self, path: &str, access_token: &str) -> Result<Value, SoundCloudError> {
         self.client
             .send_gated(Method::DELETE, path, access_token, None, self.gate)

@@ -30,6 +30,15 @@ const LANE_PREFIXES: &[&str] = &[
     "JOBS_OPS",
 ];
 const LANE_SETTINGS: &[&str] = &["_CONCURRENCY", "_CLAIM_BATCH"];
+const STORE_PREFIXES: &[&str] = &["VIDEO_S3", "PLAYLIST_ARTWORK_S3"];
+const STORE_SETTINGS: &[&str] = &[
+    "_ENDPOINT",
+    "_REGION",
+    "_BUCKET",
+    "_ACCESS_KEY_ID",
+    "_SECRET_ACCESS_KEY",
+    "_PATH_STYLE",
+];
 
 const READ_BY_A_LIBRARY: &[&str] = &[
     "RUST_LOG",
@@ -147,6 +156,11 @@ fn settings_the_code_reads() -> BTreeSet<String> {
     for lane in LANE_PREFIXES {
         for setting in LANE_SETTINGS {
             found.insert(format!("{lane}{setting}"));
+        }
+    }
+    for store in STORE_PREFIXES {
+        for setting in STORE_SETTINGS {
+            found.insert(format!("{store}{setting}"));
         }
     }
     for named in READ_BY_A_LIBRARY {
