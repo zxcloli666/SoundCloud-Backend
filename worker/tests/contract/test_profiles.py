@@ -89,7 +89,16 @@ DESIGN = {
     "cpu-tts": Profile("lane", "trusted", {"speak": 1}, {}),
     "gpu-tts": Profile("lane", "public", {"speak": 1}, {}),
     "gpu-video": Profile("lane", "public", {"video-keyframe": 1, "video-shot": 1}, {}),
+    "gpu-48-mix": Profile(
+        "lane",
+        "public",
+        {"audio": 32, "lyrics": 64, "transcribe": 8, "video-keyframe": 1, "video-shot": 1},
+        dict.fromkeys(SYNC_X2, 4),
+    ),
 }
+TURNING = {"gpu-video", "gpu-48-mix"}
+GENERATING_ENGINES = {"image-edit", "image-to-video"}
+REGULAR_SLOTS = ("muq", "mulan", "text", "sep", "asr", "align", "mms")
 SPEAK_ONLY = {"speak"}
 NOT_YET = {"video-vlm"}
 GENERATION = {"video-keyframe", "video-shot", "video-assemble"}
@@ -134,7 +143,8 @@ def test_profile_passes_both_public_locks(contract: Contract, name: str) -> None
     s.check_public_lanes(settings, contract.public_lanes)
     speaks_only = set(settings.lanes.enabled) == SPEAK_ONLY
     generates_only = set(settings.lanes.enabled) <= GENERATION
-    assert settings.is_public == bool(settings.small_card) or speaks_only or generates_only
+    turns = bool(settings.runtime.turn_groups)
+    assert settings.is_public == bool(settings.small_card) or speaks_only or generates_only or turns
     if settings.is_public:
         assert set(settings.lanes.enabled) <= contract.public_lanes
 
@@ -339,14 +349,15 @@ def test_the_tts_profile_needs_its_models_folder(contract: Contract) -> None:
         Blueprint.of(load("cpu-tts"), contract, {}, cpus=4)
 
 
-def test_only_the_video_profile_turns_on_video_generation() -> None:
+def test_only_the_turning_profiles_turn_on_video_generation() -> None:
     for path in (CONFIG_DIR / "profiles").glob("*.toml"):
         generates = bool(GENERATION & set(load(path.stem).lanes.enabled))
-        assert generates is (path.stem == "gpu-video"), path.stem
+        assert generates is (path.stem in TURNING), path.stem
 
 
-def test_the_video_profile_offloads_both_pipelines_on_a_public_cuda_node() -> None:
-    settings = load("gpu-video")
+@pytest.mark.parametrize("name", sorted(TURNING))
+def test_a_generating_profile_offloads_both_pipelines_on_a_public_cuda_node(name: str) -> None:
+    settings = load(name)
     assert settings.is_public and settings.runtime.device == "cuda"
     assert settings.video_gen.offload is True
     assert settings.runtime.idle_unload_s > 0
@@ -355,14 +366,67 @@ def test_the_video_profile_offloads_both_pipelines_on_a_public_cuda_node() -> No
 def test_the_video_profile_loads_one_generation_engine_at_a_time(contract: Contract) -> None:
     settings = load("gpu-video")
     plans = Blueprint.of(settings, contract, {}, cpus=8).plans
-    assert {plan.name: plan.exclusive for plan in plans} == {
-        "image-edit": True,
-        "image-to-video": True,
+    assert {plan.name: plan.turn_group for plan in plans} == {
+        "image-edit": "keyframe",
+        "image-to-video": "shot",
     }
-    assert settings.runtime.exclusive_turn_s > 0
+    assert settings.runtime.turn_home == ""
+    assert settings.runtime.turn_hold_s > 0
+    assert s.turn_lanes(settings) == {"video-keyframe": "keyframe", "video-shot": "shot"}
+
+
+def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
+    contract: Contract,
+) -> None:
+    settings = load("gpu-48-mix")
+    runtime = settings.runtime
+    assert dict(runtime.turn_groups) == {
+        "regular": REGULAR_SLOTS,
+        "keyframe": (s.IMAGE_EDIT_SLOT,),
+        "shot": (s.IMAGE_TO_VIDEO_SLOT,),
+    }
+    assert runtime.turn_home == "regular"
+    assert runtime.turn_switch == s.TURN_SWITCH_EXIT
+    assert s.turn_lanes(settings) == {
+        "audio": "regular",
+        "lyrics": "regular",
+        "transcribe": "regular",
+        "video-keyframe": "keyframe",
+        "video-shot": "shot",
+    }
+    blueprint = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=16)
+    groups = {plan.name: plan.turn_group for plan in blueprint.plans}
+    assert groups == {
+        "audio": "regular",
+        **{f"sync#{index}": "regular" for index in range(4)},
+        "cpu-tools": "",
+        "image-edit": "keyframe",
+        "image-to-video": "shot",
+    }
+    assert blueprint.policy.exit_on_switch is True
+
+
+@pytest.mark.parametrize("name", sorted(TURNING))
+def test_generation_engines_get_their_own_memory_growth_cap(contract: Contract, name: str) -> None:
+    settings = load(name)
+    plans = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=16).plans
+    caps = {plan.name: plan.memory_growth_cap_mib for plan in plans}
+    for slot in (s.IMAGE_EDIT_SLOT, s.IMAGE_TO_VIDEO_SLOT):
+        cap = settings.slots[slot].memory_growth_cap_mib
+        assert caps[slot] == cap > settings.runtime.memory_growth_cap_mib
+    assert all(caps[plan] == 0 for plan in caps if plan not in GENERATING_ENGINES)
+
+
+def test_the_mixed_profile_keeps_the_large_card_batches() -> None:
+    mixed, large = load("gpu-48-mix"), load("gpu-48")
+    for slot in REGULAR_SLOTS:
+        assert mixed.slots[slot].max_batch == large.slots[slot].max_batch, slot
+        assert mixed.slots[slot].replicas == large.slots[slot].replicas, slot
+    for lane in ("audio", "lyrics", "transcribe"):
+        assert mixed.lanes.capacity[lane] == large.lanes.capacity[lane], lane
 
 
 def test_no_other_profile_shares_an_engine_turn() -> None:
     for path in (CONFIG_DIR / "profiles").glob("*.toml"):
-        exclusive = load(path.stem).runtime.exclusive_slots
-        assert bool(exclusive) is (path.stem == "gpu-video"), path.stem
+        groups = load(path.stem).runtime.turn_groups
+        assert bool(groups) is (path.stem in TURNING), path.stem

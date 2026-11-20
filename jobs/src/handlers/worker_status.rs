@@ -235,6 +235,15 @@ impl WorkerStatusBoard {
         series
     }
 
+    pub fn served_within(&self, lane: WorkerLane, window: Duration, now: Instant) -> bool {
+        self.lock().nodes.values().any(|node| {
+            node.lanes
+                .get(lane.as_str())
+                .and_then(|view| view.last_serving)
+                .is_some_and(|seen| now.saturating_duration_since(seen) < window)
+        })
+    }
+
     pub fn health(&self, now: Instant) -> WorkerHealth {
         let board = self.lock();
         WorkerHealth {
@@ -634,6 +643,26 @@ mod tests {
         );
         board.record_status("gpu-main", &unlabelled, start + STATUS_FRESH_FOR)?;
         assert!(board.health(start + STATUS_FRESH_FOR).is_healthy());
+        Ok(())
+    }
+
+    #[test]
+    fn a_lane_counts_as_served_while_any_node_name_reported_it_within_the_window()
+    -> anyhow::Result<()> {
+        let board = WorkerStatusBoard::new();
+        let start = Instant::now();
+        let window = Duration::from_secs(120);
+
+        assert!(!board.served_within(WorkerLane::VideoShot, window, start));
+        board.record_status(
+            "public.gpu1",
+            &status("public", serving("video-shot")),
+            start,
+        )?;
+        board.record_status("public.gpu1", &status("public", serving("audio")), start)?;
+
+        assert!(board.served_within(WorkerLane::VideoShot, window, start + window / 2));
+        assert!(!board.served_within(WorkerLane::VideoShot, window, start + window));
         Ok(())
     }
 

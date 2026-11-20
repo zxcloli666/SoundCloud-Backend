@@ -132,8 +132,7 @@ class LaneRunner:
             if free <= 0:
                 await self._wait_for_room()
                 continue
-            if self._turn is not None and not self._turn.claim(self.lane.name):
-                await self._wait_turn(self._turn)
+            if self._turn is not None and not await self._turn_taken(self._turn):
                 continue
             if not await self._pull(free):
                 self._yield_turn()
@@ -243,11 +242,22 @@ class LaneRunner:
         self._freed.clear()
         await race(self._clock.sleep(self.lane.heartbeat_s), self._freed.wait(), self._stop.wait())
 
+    async def _turn_taken(self, turn: EngineTurn) -> bool:
+        if turn.claim(self.lane.name, await self._wants_turn(turn)):
+            return True
+        await self._wait_turn(turn)
+        return False
+
+    async def _wants_turn(self, turn: EngineTurn) -> bool:
+        if self.tasks or not turn.needs_proof(self.lane.name):
+            return True
+        return await self.watch.has_work()
+
     async def _wait_turn(self, turn: EngineTurn) -> None:
         self._yield_turn()
         self._freed.clear()
         await race(
-            self._clock.sleep(self.lane.heartbeat_s),
+            self._clock.sleep(turn.probe_s),
             turn.changed(),
             self._freed.wait(),
             self._stop.wait(),

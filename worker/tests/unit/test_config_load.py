@@ -271,8 +271,21 @@ def test_env_overrides_are_coerced_by_field_type(base_env: dict[str, str]) -> No
         ("WORKER__LANES__ENABLED", "audio, lyrics", "expected a TOML value"),
         ("WORKER__RUNTIME__THREADS", "many", "expected a number"),
         ("WORKER__RUNTIME__THREADS", "-1", "runtime.threads must be >= 0"),
-        ("WORKER__RUNTIME__EXCLUSIVE_SLOTS", '["paint"]', "exclusive_slots has unknown slots"),
-        ("WORKER__RUNTIME__EXCLUSIVE_TURN_S", "0", "exclusive_turn_s must be > 0"),
+        ("WORKER__RUNTIME__TURN_GROUPS", '{ art = ["paint"] }', "turn_groups has unknown slots"),
+        (
+            "WORKER__RUNTIME__TURN_GROUPS",
+            '{ a = ["muq"], b = ["muq"] }',
+            "puts a slot in two groups",
+        ),
+        (
+            "WORKER__RUNTIME__TURN_GROUPS",
+            '{ a = ["muq"], b = ["mulan"] }',
+            "lane audio spans turn groups",
+        ),
+        ("WORKER__RUNTIME__TURN_HOME", "nobody", "is not a turn group"),
+        ("WORKER__RUNTIME__TURN_HOLD_S", "0", "turn_probe_s must be > 0"),
+        ("WORKER__RUNTIME__TURN_PROBE_S", "0", "turn_probe_s must be > 0"),
+        ("WORKER__RUNTIME__TURN_SWITCH", "sleep", "turn_switch must be one of"),
     ],
 )
 def test_bad_env_values_are_start_errors(

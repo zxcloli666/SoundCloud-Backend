@@ -101,7 +101,7 @@ use self::telemetry::TelemetryHandler;
 use self::video_accounts::{Checker, Proxied, Seal, SpotifyKey, Telegram, VideoAccounts};
 use self::video_find::ytdlp::YtDlp;
 use self::video_find::{Pooled, ProxyPool, VideoFind};
-use self::video_gen::VideoGen;
+use self::video_gen::{Fleet, VideoGen};
 use self::video_vlm::VideoVlm;
 use self::wanted::{AiMatcherClient, WantedHandler};
 use crate::objects::Objects;
@@ -478,11 +478,9 @@ impl JobHandlers {
         &self,
         pool: sqlx::PgPool,
         config: &JobsConfig,
-        bus: crate::bus::Bus,
-    ) -> Result<
-        Option<Arc<VideoGen<Anthropic, Objects, crate::bus::Bus, Telegram>>>,
-        crate::ClientBuildError,
-    > {
+        lanes: Fleet,
+    ) -> Result<Option<Arc<VideoGen<Anthropic, Objects, Fleet, Telegram>>>, crate::ClientBuildError>
+    {
         let (Some(objects), Some(director)) = (
             config.video_find.objects.as_ref(),
             config.video_gen.director.as_ref(),
@@ -495,7 +493,7 @@ impl JobHandlers {
             config.video_gen.clone(),
             Anthropic::new(director)?,
             Objects::connect(objects).await,
-            bus,
+            lanes,
             Telegram::new(config.video_accounts.tg_webhook.clone())?,
         ))))
     }

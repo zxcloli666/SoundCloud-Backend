@@ -16,7 +16,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::config::VideoGenConfig;
@@ -26,7 +26,8 @@ use crate::objects::{Blobs, Objects, ObjectsError};
 use crate::queue::JobResult;
 
 pub use self::director::Director;
-pub use self::lanes::Lanes;
+pub use self::lanes::{Fleet, Lanes};
+use self::lanes::{Nodes, STAGE_LANES};
 use self::parts::Parts;
 use self::state::{DIRECTOR_STAGES, LANE_STAGES};
 
@@ -54,7 +55,7 @@ pub struct VideoGen<D, S, L, N> {
     parts: Parts,
 }
 
-impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
+impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
     pub fn new(
         pool: PgPool,
         storage_url: Url,
@@ -107,8 +108,10 @@ impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
     }
 
     pub(crate) async fn dispatch(&self) -> JobResult {
+        let held = self.held_stages();
+        state::hold_sent(&self.pool, &held).await?;
         state::requeue_unanswered(&self.pool, self.config.timeout).await?;
-        let mut open = self.gate().await?;
+        let mut open = held.is_empty() && self.gate().await?;
         let (sent, active) = state::busy(&self.pool).await?;
         let free = self.config.in_flight - sent;
         if free <= 0 {
@@ -120,6 +123,7 @@ impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
         }
         let stages: Vec<String> = LANE_STAGES
             .iter()
+            .filter(|stage| !held.iter().any(|held| held == *stage))
             .chain(DIRECTOR_STAGES.iter().filter(|_| open))
             .map(|stage| (*stage).to_owned())
             .collect();
@@ -135,6 +139,21 @@ impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
             }
         }
         Ok(())
+    }
+
+    fn held_stages(&self) -> Vec<String> {
+        let held: Vec<String> = STAGE_LANES
+            .iter()
+            .filter(|(_, lane)| !self.lanes.serving(*lane))
+            .map(|(stage, _)| (*stage).to_owned())
+            .collect();
+        if !held.is_empty() {
+            debug!(
+                ?held,
+                "video generation waits for a node that serves its lanes"
+            );
+        }
+        held
     }
 
     async fn gate(&self) -> JobResult<bool> {

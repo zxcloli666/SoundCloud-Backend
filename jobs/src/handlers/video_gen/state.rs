@@ -199,6 +199,17 @@ pub async fn busy(pool: &PgPool) -> JobResult<(i64, i64)> {
     Ok((row.sent, row.active))
 }
 
+pub async fn hold_sent(pool: &PgPool, stages: &[String]) -> JobResult {
+    if stages.is_empty() {
+        return Ok(());
+    }
+    sqlx::query_file!("queries/video_gen/hold_sent.sql", stages)
+        .execute(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    Ok(())
+}
+
 pub async fn requeue_unanswered(pool: &PgPool, timeout: Duration) -> JobResult {
     sqlx::query_file!("queries/video_gen/unanswered.sql", timeout.as_secs_f64())
         .execute(pool)

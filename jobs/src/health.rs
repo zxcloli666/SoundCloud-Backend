@@ -59,6 +59,10 @@ impl HealthState {
         self
     }
 
+    pub fn workers(&self) -> WorkerStatusBoard {
+        self.workers.clone()
+    }
+
     pub fn require_worker_lanes(self, lanes: &[WorkerLane]) -> Self {
         self.workers.require_lanes(lanes);
         self

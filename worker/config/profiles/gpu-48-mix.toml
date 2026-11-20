@@ -1,0 +1,37 @@
+[worker]
+trust = "public"
+
+[runtime]
+mode = "lane"
+device = "cuda"
+idle_unload_s = 600
+turn_groups = { regular = ["muq", "mulan", "text", "sep", "asr", "align", "mms"], keyframe = ["image-edit"], shot = ["image-to-video"] }
+turn_home = "regular"
+turn_switch = "exit"
+
+[lanes]
+enabled = ["audio", "lyrics", "transcribe", "video-keyframe", "video-shot"]
+capacity = { audio = 32, lyrics = 64, transcribe = 8, video-keyframe = 1, video-shot = 1 }
+required = { audio = false, lyrics = false, transcribe = false, video-keyframe = false, video-shot = false }
+
+[slots.muq]
+max_batch = 4
+
+[slots.text]
+max_batch = 16000
+
+[slots.sep]
+replicas = 4
+
+[slots.asr]
+replicas = 4
+max_batch = 4
+
+[slots.align]
+replicas = 4
+
+[slots.mms]
+replicas = 4
+
+[video_gen]
+offload = true

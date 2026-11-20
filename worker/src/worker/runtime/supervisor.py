@@ -19,6 +19,7 @@ from worker.runtime.engine_client import (
     CAUSE_PING,
     CAUSE_RECYCLE,
     CAUSE_STOP,
+    CAUSE_SWITCH,
     DeadlineExceeded,
     EngineClient,
     EngineCrashed,
@@ -46,7 +47,7 @@ STATE_RESTARTING = "restarting"
 STATE_BROKEN = "broken"
 STATE_UNLOADED = "unloaded"
 STATE_STOPPED = "stopped"
-PLANNED_CAUSES = frozenset({CAUSE_DEADLINE, CAUSE_PING, CAUSE_RECYCLE, CAUSE_STOP})
+PLANNED_CAUSES = frozenset({CAUSE_DEADLINE, CAUSE_PING, CAUSE_RECYCLE, CAUSE_STOP, CAUSE_SWITCH})
 GPU_DEVICES = frozenset({"auto", "cuda"})
 INLINE_SLOTS = frozenset({"vad", "lid", "fingerprint"})
 BULK_NICE = 10
@@ -68,8 +69,13 @@ class EnginePlan:
     nice: int = 0
     idle_unload_s: float = 0.0
     shares_budget: bool = False
-    exclusive: bool = False
+    turn_group: str = ""
+    memory_growth_cap_mib: int = 0
     env: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def exclusive(self) -> bool:
+        return bool(self.turn_group)
 
     @property
     def slot_names(self) -> tuple[str, ...]:
@@ -92,6 +98,7 @@ class RuntimePolicy:
     recycle_gap_mib: int = 1024
     recycle_overlap: bool = True
     idle_unload_s: float = 0.0
+    exit_on_switch: bool = False
     oom_unload: bool = True
     oom_recycle_count: int = 3
     oom_recycle_window_s: float = 300.0
@@ -526,7 +533,8 @@ class Supervisor:
         )
 
     def _rivals(self, managed: Managed) -> list[Managed]:
-        return [m for m in self._engines if m is not managed and m.plan.exclusive]
+        group = managed.plan.turn_group
+        return [m for m in self._engines if m.plan.exclusive and m.plan.turn_group != group]
 
     def _holds_memory(self, managed: Managed) -> bool:
         client = managed.client
@@ -684,7 +692,7 @@ class Supervisor:
     async def _after_death(self, managed: Managed, client: EngineClient) -> None:
         cause = client.kill_cause
         planned = cause in PLANNED_CAUSES
-        for slot in managed.plan.slot_names:
+        for slot in () if cause == CAUSE_SWITCH else managed.plan.slot_names:
             self._counters.inc("slot_restarts_total", slot=slot)
             if cause == CAUSE_DEADLINE:
                 self._counters.inc("slot_kills_deadline_total", slot=slot)
@@ -765,27 +773,28 @@ class Supervisor:
             ):
                 continue
             held = client.usage().held_mib
+            cap = managed.plan.memory_growth_cap_mib or self._policy.memory_growth_cap_mib
             if not client.calling:
-                self._settle_peak(client, peaks.pop(client, 0))
+                self._settle_peak(client, peaks.pop(client, 0), cap)
                 client.idle_held_mib = held
                 continue
             growth = held - client.idle_held_mib
             if growth <= peaks.get(client, 0):
                 continue
             peaks[client] = growth
-            if growth > self._policy.memory_growth_cap_mib:
-                await self._over_cap(client, held, growth)
+            if growth > cap:
+                await self._over_cap(client, held, growth, cap)
         for gone in [client for client in peaks if not client.alive]:
             del peaks[gone]
 
-    def _settle_peak(self, client: EngineClient, growth: int) -> None:
+    def _settle_peak(self, client: EngineClient, growth: int, cap: int) -> None:
         if growth <= 0:
             return
         self._counters.gauge("engine_call_growth_mib", growth, engine=client.name)
-        if growth * GROWTH_LOG_SHARE >= self._policy.memory_growth_cap_mib:
+        if growth * GROWTH_LOG_SHARE >= cap:
             self._log.info("engine_memory_growth", engine=client.name, growth_mib=growth)
 
-    async def _over_cap(self, client: EngineClient, held: int, growth: int) -> None:
+    async def _over_cap(self, client: EngineClient, held: int, growth: int, cap: int) -> None:
         kill = self._policy.memory_guard_kill
         self._counters.inc(
             "engine_memory_over_cap_total", engine=client.name, kill=str(kill).lower()
@@ -797,7 +806,7 @@ class Supervisor:
             held_mib=held,
             idle_held_mib=client.idle_held_mib,
             growth_mib=growth,
-            growth_cap_mib=self._policy.memory_growth_cap_mib,
+            growth_cap_mib=cap,
             kill=kill,
         )
         if kill:
@@ -947,19 +956,35 @@ class Supervisor:
             other = rival.client
             if other is None or not other.alive:
                 continue
-            for slot in rival.plan.slot_names:
-                if not other.loaded(slot):
-                    continue
-                started = self._clock.now()
-                if await self._unload(other, slot):
-                    self._counters.inc("slot_switches_total", slot=slot)
-                    self._log.info(
-                        "slot_switch_unloaded",
-                        engine=other.name,
-                        slot=slot,
-                        to=client.name,
-                        seconds=round(self._clock.now() - started, 2),
-                    )
+            loaded = [slot for slot in rival.plan.slot_names if other.loaded(slot)]
+            if not loaded:
+                continue
+            started = self._clock.now()
+            if self._policy.exit_on_switch:
+                loaded = loaded if await self._exit_rival(other) else []
+            else:
+                loaded = [slot for slot in loaded if await self._unload(other, slot)]
+            for slot in loaded:
+                self._counters.inc("slot_switches_total", slot=slot)
+                self._log.info(
+                    "slot_switch_unloaded",
+                    engine=other.name,
+                    slot=slot,
+                    to=client.name,
+                    exited=self._policy.exit_on_switch,
+                    seconds=round(self._clock.now() - started, 2),
+                )
+
+    async def _exit_rival(self, client: EngineClient) -> bool:
+        if client in self._retiring:
+            await client.exited()
+            return False
+        self._retiring.add(client)
+        try:
+            await client.stop(CAUSE_SWITCH)
+        finally:
+            self._retiring.discard(client)
+        return True
 
     async def _unload(self, client: EngineClient, slot: str) -> bool:
         try:

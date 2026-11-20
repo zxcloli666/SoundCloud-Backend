@@ -3,7 +3,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use super::director::{self, Brief, Director, Look, Picture, Review, Verdict};
-use super::lanes::{self, Lanes};
+use super::lanes::{self, Nodes};
 use super::state::{self, Accepted, Gen, Save, Stage};
 use super::{LADDER, Store, VideoGen};
 use crate::handlers::video_accounts::Notify;
@@ -24,7 +24,7 @@ enum Directed<T> {
     Invalid(String),
 }
 
-impl<D: Director, S: Store, L: Lanes, N: Notify> VideoGen<D, S, L, N> {
+impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
     pub(super) async fn advance(&self, job: Gen) -> JobResult<Flow> {
         match job.stage {
             Stage::Plan => self.plan(job).await,

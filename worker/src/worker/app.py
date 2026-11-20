@@ -231,8 +231,11 @@ class Blueprint:
                 del specs[TEXT_SLOT], replicas[TEXT_SLOT]
         groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
         plans = [
-            exclusive_plan(
-                settings, vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+            growth_plan(
+                settings,
+                turn_plan(
+                    settings, vlm_plan(settings, tts_plan(settings, local_llm_plan(settings, plan)))
+                ),
             )
             for plan in plan_engines(runtime.mode, specs, replicas, groups)
         ]
@@ -262,6 +265,7 @@ class Blueprint:
             recycle_gap_mib=runtime.recycle_gap_mib,
             recycle_overlap=runtime.mode == MODE_SLOT,
             idle_unload_s=float(runtime.idle_unload_s),
+            exit_on_switch=runtime.turn_switch == settings_module.TURN_SWITCH_EXIT,
             oom_unload=runtime.oom_unload,
             memory_growth_cap_mib=runtime.memory_growth_cap_mib,
             memory_guard_kill=runtime.memory_guard_kill,
@@ -528,8 +532,15 @@ class Node:
             AI_LANE: lambda: self.ai_methods(engines),
             SPEAK_LANE: lambda: self.speak_methods(engines),
         }
-        exclusive = set(settings.runtime.exclusive_slots)
-        turn = EngineTurn(self.clock, float(settings.runtime.exclusive_turn_s))
+        runtime = settings.runtime
+        turn_lanes = settings_module.turn_lanes(settings)
+        turn = EngineTurn(
+            self.clock,
+            float(runtime.turn_hold_s),
+            float(runtime.turn_probe_s),
+            turn_lanes,
+            runtime.turn_home,
+        )
         for lane in self.blueprint.lanes:
             watch = watches[lane.name]
             watch.paused = True
@@ -576,7 +587,7 @@ class Node:
                 settings.lanes.capacity[lane.name],
                 self.counters,
                 self.clock,
-                turn if exclusive & set(LANE_GATES.get(lane.name, ())) else None,
+                turn if lane.name in turn_lanes else None,
             )
             self.lanes[lane.name] = ServedLane(lane, watch, runner)
         self.status = StatusReporter(
@@ -936,10 +947,27 @@ def tts_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
     )
 
 
-def exclusive_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
-    if not set(settings.runtime.exclusive_slots) & set(plan.slot_names):
+def growth_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    caps = [
+        slot.memory_growth_cap_mib
+        for name in plan.slot_names
+        if (slot := settings.slots.get(name)) is not None
+    ]
+    cap = max(caps, default=0)
+    return replace(plan, memory_growth_cap_mib=cap) if cap else plan
+
+
+def turn_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
+    groups = [
+        group
+        for group, members in settings.runtime.turn_groups.items()
+        if set(members) & set(plan.slot_names)
+    ]
+    if not groups:
         return plan
-    return replace(plan, exclusive=True)
+    if len(groups) > 1:
+        raise StartupError(f"engine {plan.name} hosts slots of turn groups {groups}")
+    return replace(plan, turn_group=groups[0])
 
 
 def tts_threads(logical_cpus: int | None, affinity_cpus: int, quota: int | None) -> int:
