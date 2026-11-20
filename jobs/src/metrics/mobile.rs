@@ -8,7 +8,7 @@ const LINKS: &str = "jobs_mobile_links";
 const SERVICE: &str = "jobs";
 
 const LINK_PLANS: [&str; 3] = ["go_plus", "go", "free"];
-const LINK_STATES: [&str; 3] = ["working", "stale", "relink_required"];
+const LINK_STATES: [&str; 3] = ["working", "failing", "relink_required"];
 
 pub const ACTION_TYPES: [&str; 11] = [
     "track_reaction_set",

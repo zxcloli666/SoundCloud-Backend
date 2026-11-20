@@ -5,8 +5,8 @@ SELECT CASE plan
        END AS "plan!",
        CASE
            WHEN status = 'relink_required' THEN 'relink_required'
-           WHEN expires_at > now() THEN 'working'
-           ELSE 'stale'
+           WHEN refresh_failure_count > 0 THEN 'failing'
+           ELSE 'working'
        END AS "state!",
        count(*)::bigint AS "links!"
 FROM mobile_credentials
