@@ -222,3 +222,93 @@ async fn a_common_chorus_over_long_lyrics_stays_fast(pool: PgPool) -> anyhow::Re
     }
     Ok(())
 }
+
+async fn ranked_songs(
+    pool: &PgPool,
+    ids: std::ops::RangeInclusive<i64>,
+    sharing: &str,
+    repeats: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing, play_count_sc)
+         SELECT n::text, 'soundcloud:tracks:' || n, 'song ' || n, 'song ' || n, 200000, $3, (n * 7919) % 100003
+         FROM generate_series($1::bigint, $2::bigint) n",
+    )
+    .bind(ids.start())
+    .bind(ids.end())
+    .bind(sharing)
+    .execute(pool)
+    .await?;
+    sqlx::query(&format!(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, source, plain_source)
+         SELECT n::text,
+                repeat(E'midnight city\\n', {repeats}) || E'we keep on dancing\\nthrough the neon glow',
+                'lrclib', 'lrclib'
+         FROM generate_series($1::bigint, $2::bigint) n"
+    ))
+    .bind(ids.start())
+    .bind(ids.end())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn pages(search: &SearchService, count: i64) -> anyhow::Result<Vec<i64>> {
+    let mut ids = Vec::new();
+    for page in 0..count {
+        let answer = search.lyrics("midnight city", Some(page), Some(20)).await?;
+        ids.extend(
+            answer
+                .collection
+                .iter()
+                .filter_map(|hit| hit.track["id"].as_i64()),
+        );
+    }
+    Ok(ids)
+}
+
+fn by_rank(ids: impl Iterator<Item = i64>, repeats: impl Fn(i64) -> i64) -> Vec<i64> {
+    let mut ids: Vec<i64> = ids.collect();
+    ids.sort_by_key(|id| {
+        (
+            std::cmp::Reverse(repeats(*id)),
+            std::cmp::Reverse((id * 7919) % 100003),
+        )
+    });
+    ids
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn pages_past_the_tracks_window_keep_the_full_ranking(pool: PgPool) -> anyhow::Result<()> {
+    for group in 1..=5_i64 {
+        ranked_songs(
+            &pool,
+            group * 100 + 1..=group * 100 + 30,
+            "public",
+            &group.to_string(),
+        )
+        .await?;
+    }
+    super::lexicon_refresh::refresh(&pool).await?;
+    let search = service(&pool)?;
+    let found = pages(&search, 8).await?;
+    let want = by_rank(
+        (1..=5).flat_map(|group| group * 100 + 1..=group * 100 + 30),
+        |id| id / 100,
+    );
+    assert_eq!(found, want);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn hidden_hits_above_the_window_still_leave_a_full_page(pool: PgPool) -> anyhow::Result<()> {
+    ranked_songs(&pool, 1..=90, "private", "6").await?;
+    ranked_songs(&pool, 101..=130, "public", "2").await?;
+    ranked_songs(&pool, 201..=230, "public", "1").await?;
+    super::lexicon_refresh::refresh(&pool).await?;
+    let search = service(&pool)?;
+    let found = pages(&search, 3).await?;
+    let want = by_rank((101..=130).chain(201..=230), |id| 3 - id / 100);
+    assert_eq!(found, want);
+    Ok(())
+}

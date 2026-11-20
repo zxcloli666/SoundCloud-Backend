@@ -102,6 +102,7 @@ pub(super) fn handler_with(pool: &PgPool, governor: Arc<WriteGovernor>) -> Admin
             track_enrich_queue_batch: 5_000,
             artist_playable_tracks_batch: 5_000,
             artist_track_titles_batch: 5_000,
+            lyrics_fts_inline_batch: 1_000,
         },
         governor,
     )

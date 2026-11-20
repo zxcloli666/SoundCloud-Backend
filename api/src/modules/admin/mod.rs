@@ -76,6 +76,10 @@ pub fn router() -> Router<AppState> {
             post(maintenance::artist_track_titles),
         )
         .route(
+            "/admin/maintenance/lyrics-fts-inline",
+            post(maintenance::lyrics_fts_inline),
+        )
+        .route(
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
         )

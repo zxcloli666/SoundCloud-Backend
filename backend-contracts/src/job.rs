@@ -116,6 +116,7 @@ pub enum JobKind {
     AdminTrackEnrichQueue,
     AdminArtistPlayableTracks,
     AdminArtistTrackTitles,
+    AdminLyricsFtsInline,
     AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
@@ -182,6 +183,7 @@ impl JobKind {
         Self::AdminTrackEnrichQueue,
         Self::AdminArtistPlayableTracks,
         Self::AdminArtistTrackTitles,
+        Self::AdminLyricsFtsInline,
         Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
@@ -248,6 +250,7 @@ impl JobKind {
             Self::AdminTrackEnrichQueue => "admin.track_enrich_queue",
             Self::AdminArtistPlayableTracks => "admin.artist_playable_tracks",
             Self::AdminArtistTrackTitles => "admin.artist_track_titles",
+            Self::AdminLyricsFtsInline => "admin.lyrics_fts_inline",
             Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
@@ -358,6 +361,7 @@ impl JobKind {
             | Self::AdminTrackEnrichQueue
             | Self::AdminArtistPlayableTracks
             | Self::AdminArtistTrackTitles
+            | Self::AdminLyricsFtsInline
             | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
@@ -391,6 +395,7 @@ impl FromStr for JobKind {
             "admin.track_enrich_queue" => Self::AdminTrackEnrichQueue,
             "admin.artist_playable_tracks" => Self::AdminArtistPlayableTracks,
             "admin.artist_track_titles" => Self::AdminArtistTrackTitles,
+            "admin.lyrics_fts_inline" => Self::AdminLyricsFtsInline,
             "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
@@ -532,7 +537,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 62);
+        assert_eq!(kinds.len(), 63);
     }
 
     #[test]
