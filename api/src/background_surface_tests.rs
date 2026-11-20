@@ -22,6 +22,7 @@ const DETACHED: &[&str] = &[
 
 const AWAITED_BLOCKING_WORK: &[&str] = &[
     "src/modules/diag/report/sourcemaps.rs",
+    "src/modules/playlists/artwork/mod.rs",
     "src/modules/recommendations/mmr.rs",
 ];
 const RUNTIME_PROBE: &str = "src/metrics.rs";

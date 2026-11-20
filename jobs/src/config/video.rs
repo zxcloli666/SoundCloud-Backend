@@ -22,16 +22,21 @@ pub struct ObjectsConfig {
 
 impl ObjectsConfig {
     fn from_env() -> Result<Option<Self>, ConfigError> {
-        let Some(endpoint) = env::optional("VIDEO_S3_ENDPOINT") else {
+        Self::from_prefix("VIDEO_S3")
+    }
+
+    pub(super) fn from_prefix(prefix: &str) -> Result<Option<Self>, ConfigError> {
+        let endpoint_name = format!("{prefix}_ENDPOINT");
+        let Some(endpoint) = env::optional(&endpoint_name) else {
             return Ok(None);
         };
         Ok(Some(Self {
-            endpoint: http_url("VIDEO_S3_ENDPOINT", endpoint)?,
-            region: env::parse("VIDEO_S3_REGION", "us-east-1")?,
-            bucket: env::required("VIDEO_S3_BUCKET")?,
-            access_key_id: env::required("VIDEO_S3_ACCESS_KEY_ID")?.into(),
-            secret_access_key: env::required("VIDEO_S3_SECRET_ACCESS_KEY")?.into(),
-            path_style: env::boolean("VIDEO_S3_PATH_STYLE", true)?,
+            endpoint: http_url(&endpoint_name, endpoint)?,
+            region: env::parse(&format!("{prefix}_REGION"), "us-east-1")?,
+            bucket: env::required(&format!("{prefix}_BUCKET"))?,
+            access_key_id: env::required(&format!("{prefix}_ACCESS_KEY_ID"))?.into(),
+            secret_access_key: env::required(&format!("{prefix}_SECRET_ACCESS_KEY"))?.into(),
+            path_style: env::boolean(&format!("{prefix}_PATH_STYLE"), true)?,
         }))
     }
 }

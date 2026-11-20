@@ -258,13 +258,16 @@ jobs:
       packages: write
     env:
       QDRANT_URL: http://127.0.0.1:6334
+      CHAT_TEST_S3_ENDPOINT: http://127.0.0.1:8333
+      CHAT_TEST_S3_ACCESS_KEY: UPTESTAK
+      CHAT_TEST_S3_SECRET_KEY: UPTESTSECRET
       TARGETS: backend-contracts/target jobs/target utils/admin-catalog/target
       TARGET_KEY: backend-contracts/Cargo.lock jobs/Cargo.lock utils/admin-catalog/Cargo.lock scripts/ci-sqlx-template.patch
     steps:
       - uses: actions/checkout@v7
 
       - name: Services
-        run: sh scripts/ci-db.sh up postgres qdrant
+        run: sh scripts/ci-db.sh up postgres qdrant seaweed
 
       - name: Toolchain
         run: sh scripts/ci-toolchain.sh
@@ -311,6 +314,10 @@ jobs:
       - name: Live vector store
         working-directory: jobs
         run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --lib --run-ignored only --no-tests warn -E 'test(~indexing::result::live_tests)'
+
+      - name: Live object store
+        working-directory: jobs
+        run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --lib --run-ignored only --no-tests warn -E 'test(~sync_queue::artwork_tests)'
 
       - name: Admin catalog
         working-directory: utils/admin-catalog

@@ -46,6 +46,7 @@ chrono = { version = "0.4", default-features = false, features = [
 uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 bytes = "1"
 aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 sha2 = "0.10"
 hmac = "0.12"

@@ -9,6 +9,7 @@ use url::Url;
 use wreq::header::{
     ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, HeaderValue, RETRY_AFTER,
 };
+use wreq::multipart::{Form, Part};
 use wreq::{Client, Method, StatusCode};
 
 use crate::config::{OAuthConfig, SyncQueueConfig};
@@ -17,6 +18,12 @@ use crate::handlers::apiv1_pace;
 use super::write_gate::{WriteGate, WriteHold};
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum Body<'a> {
+    Json(&'a Value),
+    Image { field: &'static str, jpeg: &'a [u8] },
+}
 
 pub struct SoundCloudClient {
     http: Client,
@@ -91,7 +98,20 @@ impl SoundCloudClient {
         body: Option<&Value>,
         gate: &WriteGate<'_>,
     ) -> Result<Value, SoundCloudError> {
-        self.send_api(method, path, access_token, body, Some(gate))
+        self.send_api(method, path, access_token, body.map(Body::Json), Some(gate))
+            .await
+    }
+
+    pub(super) async fn send_image_gated(
+        &self,
+        path: &str,
+        access_token: &str,
+        field: &'static str,
+        jpeg: &[u8],
+        gate: &WriteGate<'_>,
+    ) -> Result<Value, SoundCloudError> {
+        let body = Body::Image { field, jpeg };
+        self.send_api(Method::PUT, path, access_token, Some(body), Some(gate))
             .await
     }
 
@@ -100,7 +120,7 @@ impl SoundCloudClient {
         method: Method,
         path: &str,
         access_token: &str,
-        body: Option<&Value>,
+        body: Option<Body<'_>>,
         gate: Option<&WriteGate<'_>>,
     ) -> Result<Value, SoundCloudError> {
         let target = self
@@ -126,7 +146,7 @@ impl SoundCloudClient {
         method: Method,
         target: &Url,
         access_token: &str,
-        body: Option<&Value>,
+        body: Option<Body<'_>>,
     ) -> Result<Value, SoundCloudError> {
         let Some(proxy) = &self.proxy_url else {
             return self.send_to(method, target, None, access_token, body).await;
@@ -149,7 +169,7 @@ impl SoundCloudClient {
         target: &Url,
         proxy: Option<&Url>,
         access_token: &str,
-        body: Option<&Value>,
+        body: Option<Body<'_>>,
     ) -> Result<Value, SoundCloudError> {
         let mut request = match proxy {
             Some(proxy) => self.http.request(method, proxy.as_str()).header(
@@ -165,10 +185,19 @@ impl SoundCloudClient {
         )
         .header(ACCEPT, "application/json; charset=utf-8")
         .header(ACCEPT_ENCODING, "identity");
-        if let Some(body) = body {
-            request = request
-                .header(CONTENT_TYPE, "application/json; charset=utf-8")
-                .json(body);
+        match body {
+            Some(Body::Json(body)) => {
+                request = request
+                    .header(CONTENT_TYPE, "application/json; charset=utf-8")
+                    .json(body);
+            }
+            Some(Body::Image { field, jpeg }) => {
+                let part = Part::bytes(jpeg.to_vec())
+                    .file_name("artwork.jpg")
+                    .mime_str("image/jpeg")?;
+                request = request.multipart(Form::new().part(field, part));
+            }
+            None => {}
         }
         let response = request.send().await?;
         let status = response.status();
@@ -334,6 +363,14 @@ impl SoundCloudError {
             "like_track" | "unlike_track" | "like_playlist" | "unlike_playlist" => {
                 matches!(*status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN)
             }
+            "playlist_artwork" => matches!(
+                *status,
+                StatusCode::BAD_REQUEST
+                    | StatusCode::FORBIDDEN
+                    | StatusCode::PAYLOAD_TOO_LARGE
+                    | StatusCode::UNSUPPORTED_MEDIA_TYPE
+                    | StatusCode::UNPROCESSABLE_ENTITY
+            ),
             _ => false,
         };
         refused && !self.is_invalid_grant() && !self.is_app_credentials_error()

@@ -401,7 +401,7 @@ impl SyncQueueRepository {
         use backend_contracts::{CatalogEntity, CatalogRefreshPayload, JobKind, Versioned};
         let entity = match mutation.action_type.as_str() {
             "track_update" => CatalogEntity::Track,
-            "playlist_update" => CatalogEntity::Playlist,
+            "playlist_update" | "playlist_artwork" => CatalogEntity::Playlist,
             _ => return Ok(()),
         };
         let payload = CatalogRefreshPayload {

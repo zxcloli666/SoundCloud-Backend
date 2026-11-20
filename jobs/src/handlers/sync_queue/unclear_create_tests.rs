@@ -182,6 +182,7 @@ pub(super) fn handler(
         client: Arc::new(SoundCloudClient::new(&config)?),
         token_client: Arc::new(TokenRefreshClient::new(&oauth)?),
         storage: TrackStorage::new(&config)?,
+        artwork: None,
         mobile: MobileSender::new(pool.clone(), None),
         write_pauses: WritePauses::default(),
         spacings: WritePauses::default(),

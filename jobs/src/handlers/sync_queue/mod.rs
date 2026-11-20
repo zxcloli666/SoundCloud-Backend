@@ -1,4 +1,7 @@
 mod actions;
+mod artwork;
+#[cfg(test)]
+mod artwork_tests;
 mod client;
 mod connection;
 mod create_check;
@@ -44,6 +47,7 @@ use tracing::{info, warn};
 
 use crate::config::JobsConfig;
 use crate::handlers::star_priority::{Round, Turns};
+use crate::objects::Objects;
 use crate::queue::{JobError, JobResult};
 
 use self::actions::{ActionError, Remote};
@@ -84,6 +88,7 @@ pub struct SyncQueueHandler {
     client: Arc<SoundCloudClient>,
     token_client: Arc<TokenRefreshClient>,
     storage: TrackStorage,
+    artwork: Option<Objects>,
     mobile: MobileSender,
     write_pauses: WritePauses<(uuid::Uuid, String)>,
     spacings: WritePauses<(uuid::Uuid, String)>,
@@ -110,6 +115,7 @@ impl SyncQueueHandler {
             client: Arc::new(SoundCloudClient::new(&config.sync_queue)?),
             token_client: Arc::new(TokenRefreshClient::new(&config.oauth)?),
             storage: TrackStorage::new(&config.sync_queue)?,
+            artwork: config.playlist_artwork.as_ref().map(Objects::new),
             mobile: MobileSender::new(pool, config.sync_queue.proxy_url.clone()),
             write_pauses: WritePauses::default(),
             spacings: WritePauses::default(),
@@ -447,6 +453,9 @@ impl SyncQueueHandler {
         }
         let hold = || self.hold_before_write(mutation, oauth_app_id, probing);
         let gate = WriteGate::before_first_write(&hold);
+        if mutation.action_type == artwork::ACTION_TYPE {
+            return self.push_artwork(mutation, access_token, &gate).await;
+        }
         actions::execute_remote(&self.client, mutation, access_token, &gate).await
     }
 
@@ -707,7 +716,12 @@ impl SyncQueueHandler {
 
     async fn finalize(&self, mutation: &ClaimedMutation) -> Result<(), anyhow::Error> {
         match self.repository.finalize(mutation).await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                if mutation.action_type == artwork::ACTION_TYPE {
+                    self.discard_artwork(mutation).await;
+                }
+                Ok(())
+            }
             Err(FinalizeError::Action(
                 error @ (ActionError::InvalidPayload(_)
                 | ActionError::InvalidRemoteResult(_)
@@ -833,6 +847,11 @@ impl SyncQueueHandler {
             ActionError::SoundCloud(error) if error.is_terminal_refusal(&mutation.action_type) => {
                 self.close_refused(mutation, &error.to_string()).await?;
             }
+            ActionError::Staging(_) => {
+                self.repository
+                    .postpone(mutation, &error.to_string(), INFRASTRUCTURE_RETRY_SECONDS)
+                    .await?;
+            }
             ActionError::InvalidPayload(_)
             | ActionError::InvalidRemoteResult(_)
             | ActionError::UnknownAction(_) => {
@@ -908,6 +927,15 @@ impl SyncQueueHandler {
                     .await?;
             }
             ActionError::Database(error) => return Err(clone_database_error(error)),
+            ActionError::Staging(_) => {
+                self.repository
+                    .postpone_unattempted(
+                        mutation,
+                        &error.to_string(),
+                        INFRASTRUCTURE_RETRY_SECONDS,
+                    )
+                    .await?;
+            }
             ActionError::SoundCloud(SoundCloudError::Api { status, .. })
                 if status.is_client_error() =>
             {

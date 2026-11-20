@@ -1,3 +1,4 @@
+pub mod artwork;
 mod edit;
 pub mod handlers;
 pub mod journal;

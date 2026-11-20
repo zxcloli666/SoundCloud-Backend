@@ -58,6 +58,27 @@ impl Objects {
             bucket: config.bucket.clone(),
         }
     }
+
+    pub fn new(config: &ObjectsConfig) -> Self {
+        let credentials = Credentials::new(
+            config.access_key_id.expose(),
+            config.secret_access_key.expose(),
+            None,
+            None,
+            "jobs-env",
+        );
+        let settings = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new(config.region.clone()))
+            .credentials_provider(credentials)
+            .endpoint_url(config.endpoint.as_str())
+            .force_path_style(config.path_style)
+            .build();
+        Self {
+            client: Client::from_conf(settings),
+            bucket: config.bucket.clone(),
+        }
+    }
 }
 
 pub trait Blobs: Send + Sync {

@@ -23,6 +23,9 @@ pub enum ActionError {
     #[error("invalid stored SoundCloud result: {0}")]
     InvalidRemoteResult(&'static str),
 
+    #[error("staged artwork store failed: {0}")]
+    Staging(String),
+
     #[error("unknown sync action {0:?}")]
     UnknownAction(String),
 }
@@ -32,7 +35,7 @@ pub enum Remote {
     TargetMissing,
 }
 
-const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 9] = [
+const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 10] = [
     "like_track",
     "unlike_track",
     "like_playlist",
@@ -40,6 +43,7 @@ const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 9] = [
     "follow_user",
     "unfollow_user",
     "playlist_delete",
+    "playlist_artwork",
     "track_delete",
     "comment_delete",
 ];
@@ -271,6 +275,7 @@ pub async fn apply_local(
             .await?;
         }
         "comment"
+        | "playlist_artwork"
         | "comment_delete"
         | "comment_like"
         | "comment_unlike"

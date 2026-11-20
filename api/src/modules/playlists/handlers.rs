@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, put};
 use axum::{Json, Router};
@@ -33,6 +33,15 @@ pub fn router() -> Router<AppState> {
             put(set_playlist_sharing),
         )
         .route("/playlists/{playlist_urn}/reposters", get(get_reposters))
+        .route(
+            "/playlists/{playlist_urn}/artwork",
+            put(change_artwork).layer(DefaultBodyLimit::max(super::artwork::BODY_MAX_BYTES)),
+        )
+}
+
+#[derive(Deserialize)]
+struct ArtworkBody {
+    image_data: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -205,6 +214,19 @@ async fn set_playlist_sharing(
     let v = st
         .playlists
         .set_sharing(&ctx.sc_user_id, &playlist_urn, &body.sharing)
+        .await?;
+    Ok(Json(v))
+}
+
+async fn change_artwork(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    Path(playlist_urn): Path<String>,
+    Json(body): Json<ArtworkBody>,
+) -> AppResult<Json<Value>> {
+    let v = st
+        .playlists
+        .change_artwork(&ctx.sc_user_id, &playlist_urn, &body.image_data)
         .await?;
     Ok(Json(v))
 }

@@ -35,6 +35,7 @@ pub struct PlaylistsService {
     membership: PlaylistMembership,
     journal: PlaylistJournal,
     mutations: super::mutations::PlaylistMutations,
+    artwork: super::artwork::PlaylistArtwork,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,6 +53,7 @@ pub struct PlaylistsDeps {
     pub tokens: Arc<TokenProvider>,
     pub redis: deadpool_redis::Pool,
     pub miss: Arc<CatalogMiss>,
+    pub artwork: Option<super::artwork::ArtworkStore>,
 }
 
 impl PlaylistsService {
@@ -60,6 +62,11 @@ impl PlaylistsService {
         let journal = PlaylistJournal::new(deps.pg.clone());
         let mutations =
             super::mutations::PlaylistMutations::new(deps.pg.clone(), deps.sync_queue.clone());
+        let artwork = super::artwork::PlaylistArtwork::new(
+            deps.pg.clone(),
+            deps.sync_queue.clone(),
+            deps.artwork,
+        );
         Arc::new(Self {
             sc: deps.sc,
             pg: deps.pg,
@@ -70,6 +77,7 @@ impl PlaylistsService {
             membership,
             journal,
             mutations,
+            artwork,
         })
     }
 
@@ -243,7 +251,7 @@ impl PlaylistsService {
     ) -> AppResult<PlaylistTracksPage> {
         let canonical = super::mutations::target_urn(playlist_urn)?;
         let playlist_urn = canonical.as_str();
-        self.assert_owner(sc_user_id, playlist_urn).await?;
+        assert_owner(&self.pg, sc_user_id, playlist_urn).await?;
         self.miss
             .tracks(session_id, &request.edit.submitted_track_ids())
             .await?;
@@ -298,7 +306,7 @@ impl PlaylistsService {
         let membership = match submitted {
             Some(submitted) => {
                 let track_ids = crate::modules::playlists::edit::track_ids_of(&submitted)?;
-                self.assert_owner(sc_user_id, playlist_urn).await?;
+                assert_owner(&self.pg, sc_user_id, playlist_urn).await?;
                 self.miss.tracks(session_id, &track_ids).await?;
                 let edit = if replace {
                     TrackEdit::Replace { track_ids }
@@ -388,23 +396,6 @@ impl PlaylistsService {
         }
     }
 
-    async fn assert_owner(&self, sc_user_id: &str, playlist_urn: &str) -> AppResult<()> {
-        let me = extract_sc_id(sc_user_id);
-        let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let owns = sqlx::query_file_scalar!(
-            "queries/playlists/assert_owner.sql",
-            me,
-            playlist_urn,
-            &variants
-        )
-        .fetch_one(&self.pg)
-        .await?;
-        if !owns {
-            return Err(AppError::not_found("Playlist not found"));
-        }
-        Ok(())
-    }
-
     async fn project_page(
         &self,
         playlist_urn: &str,
@@ -456,6 +447,17 @@ impl PlaylistsService {
 
     pub async fn delete(&self, sc_user_id: &str, playlist_urn: &str) -> AppResult<Value> {
         self.mutations.delete(sc_user_id, playlist_urn).await
+    }
+
+    pub async fn change_artwork(
+        &self,
+        sc_user_id: &str,
+        playlist_urn: &str,
+        image_data: &str,
+    ) -> AppResult<Value> {
+        self.artwork
+            .change(sc_user_id, playlist_urn, image_data)
+            .await
     }
 
     pub async fn get_tracks(
@@ -525,6 +527,27 @@ impl PlaylistsService {
             .audience_page(PLAYLIST_REPOSTERS, playlist_urn, sc_user_id, page, limit)
             .await
     }
+}
+
+pub(super) async fn assert_owner(
+    pg: &PgPool,
+    sc_user_id: &str,
+    playlist_urn: &str,
+) -> AppResult<()> {
+    let me = extract_sc_id(sc_user_id);
+    let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
+    let owns = sqlx::query_file_scalar!(
+        "queries/playlists/assert_owner.sql",
+        me,
+        playlist_urn,
+        &variants
+    )
+    .fetch_one(pg)
+    .await?;
+    if !owns {
+        return Err(AppError::not_found("Playlist not found"));
+    }
+    Ok(())
 }
 
 fn submitted_track_urns(body: &Value) -> AppResult<Option<Vec<String>>> {

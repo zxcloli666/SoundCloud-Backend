@@ -300,6 +300,7 @@ async fn main() {
         tokens: tokens.clone(),
         redis: redis_pool.clone(),
         miss: miss.clone(),
+        artwork: crate::modules::playlists::artwork::ArtworkStore::from_env(),
     });
     let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone(), public_users);
     let dislikes = DislikesService::new(pg.clone(), events.clone());
