@@ -92,6 +92,7 @@ fn response(sc_track_id: &str, row: OwnRow) -> LyricsResponse {
     LyricsResponse {
         sc_track_id: Some(sc_track_id.to_owned()),
         synced_lrc: row.synced_lrc,
+        synced_words: None,
         plain_text: row.plain_text,
         source: if row.origin == "lrclib" {
             "lrclib"

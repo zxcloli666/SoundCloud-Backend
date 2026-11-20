@@ -1,4 +1,5 @@
 SELECT cache.synced_lrc AS "synced_lrc?",
+       cache.synced_words AS "synced_words?",
        cache.plain_text AS "plain_text?",
        cache.source AS "source?",
        cache.language AS "language?",

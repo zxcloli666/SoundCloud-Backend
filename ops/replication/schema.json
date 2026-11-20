@@ -1227,6 +1227,7 @@
     {"default": null, "generated": false, "name": "synced_lrc", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "synced_source", "notnull": false, "type": "character varying(16)"},
     {"default": null, "generated": false, "name": "synced_version", "notnull": false, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "synced_words", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "track_id", "notnull": false, "type": "uuid"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
    ],

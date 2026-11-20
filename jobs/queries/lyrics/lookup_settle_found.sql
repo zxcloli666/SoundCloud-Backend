@@ -62,6 +62,10 @@ WITH owned_state AS MATERIALIZED (
     ON CONFLICT (sc_track_id) DO UPDATE
     SET track_id = EXCLUDED.track_id,
         synced_lrc = COALESCE(lyrics_cache.synced_lrc, EXCLUDED.synced_lrc),
+        synced_words = CASE
+            WHEN lyrics_cache.synced_lrc IS NULL THEN NULL
+            ELSE lyrics_cache.synced_words
+        END,
         plain_text = CASE
             WHEN lyrics_cache.source NOT IN ('lrclib', 'musixmatch', 'genius', 'netease')
                  AND EXCLUDED.plain_text IS NOT NULL

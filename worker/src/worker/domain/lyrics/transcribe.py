@@ -408,6 +408,7 @@ class TranscribeLane:
         fields["synced_lrc"] = rendered.synced_lrc
         if quality.words_publishable(verdict.metrics, self._sync.quality):
             fields["words"] = rendered.words
+            fields["synced_words"] = rendered.synced_words
         return Outcome.ok(**fields)
 
     def _rejected(

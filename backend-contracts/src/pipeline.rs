@@ -254,6 +254,9 @@ pub struct TranscriptionResult {
     #[schemars(with = "String")]
     pub synced_lrc: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    pub synced_words: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Vec<TranscriptionWord>")]
     pub words: Option<Vec<TranscriptionWord>>,
 }

@@ -17,6 +17,8 @@ pub struct LyricsResponse {
     pub sc_track_id: Option<String>,
     #[serde(rename = "syncedLrc")]
     pub synced_lrc: Option<String>,
+    #[serde(rename = "syncedWords")]
+    pub synced_words: Option<String>,
     #[serde(rename = "plainText")]
     pub plain_text: Option<String>,
     pub source: String,
@@ -39,6 +41,7 @@ pub struct LyricsHints {
 #[derive(Debug, Clone, FromRow)]
 struct LyricsStatusRow {
     synced_lrc: Option<String>,
+    synced_words: Option<String>,
     plain_text: Option<String>,
     source: Option<String>,
     language: Option<String>,
@@ -56,6 +59,7 @@ struct LyricsSearchRow {
     uploader_username: Option<String>,
     duration_ms: i32,
     synced_lrc: Option<String>,
+    synced_words: Option<String>,
     plain_text: Option<String>,
     source: String,
     language: Option<String>,
@@ -181,6 +185,7 @@ impl LyricsService {
         Ok(LyricsResponse {
             sc_track_id: Some(candidate.sc_track_id),
             synced_lrc: candidate.synced_lrc,
+            synced_words: candidate.synced_words,
             plain_text: candidate.plain_text,
             source: candidate.source,
             language: candidate.language,
@@ -248,6 +253,7 @@ fn found_response(sc_track_id: &str, row: LyricsStatusRow) -> LyricsResponse {
     LyricsResponse {
         sc_track_id: Some(sc_track_id.to_owned()),
         synced_lrc: row.synced_lrc,
+        synced_words: row.synced_words,
         plain_text: row.plain_text,
         source: row.source.unwrap_or_else(|| "none".to_owned()),
         language: row.language,
@@ -262,6 +268,7 @@ fn pending_response(sc_track_id: Option<&str>) -> LyricsResponse {
     LyricsResponse {
         sc_track_id: sc_track_id.map(str::to_owned),
         synced_lrc: None,
+        synced_words: None,
         plain_text: None,
         source: "none".to_owned(),
         language: None,
@@ -276,6 +283,7 @@ fn none_response(sc_track_id: Option<&str>) -> LyricsResponse {
     LyricsResponse {
         sc_track_id: sc_track_id.map(str::to_owned),
         synced_lrc: None,
+        synced_words: None,
         plain_text: None,
         source: "none".to_owned(),
         language: None,
@@ -581,6 +589,31 @@ mod tests {
                 .fetch_one(&pool)
                 .await?;
         assert_eq!(queued, 0);
+        Ok(())
+    }
+
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+    async fn stored_word_timings_are_served_beside_the_line_timings(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, source, plain_text, synced_lrc, synced_words, language)
+             VALUES ('42', 'lrclib', 'a line', '[00:01.00]a line',
+                     '[00:01.00]<00:01.00>a <00:01.40>line<00:02.00>', 'en')",
+        )
+        .execute(&pool)
+        .await?;
+        let lyrics = service(&pool, false).await?;
+
+        let response = lyrics.ensure_lyrics("17", "42").await?;
+        let json = serde_json::to_value(&response)?;
+
+        assert_eq!(json["syncedLrc"], "[00:01.00]a line");
+        assert_eq!(
+            json["syncedWords"],
+            "[00:01.00]<00:01.00>a <00:01.40>line<00:02.00>"
+        );
         Ok(())
     }
 

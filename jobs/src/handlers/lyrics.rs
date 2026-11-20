@@ -5,6 +5,7 @@ mod embedding_result;
 mod lookup;
 mod reaper;
 mod refetch_text;
+mod synced_words;
 mod text;
 mod transcription;
 mod vectors;

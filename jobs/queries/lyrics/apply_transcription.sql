@@ -66,6 +66,12 @@ WITH track AS MATERIALIZED (
                 THEN $13::text
             ELSE cache.synced_lrc
         END,
+        synced_words = CASE
+            WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL
+                 OR COALESCE(cache.synced_source, cache.source) = 'lrclib'
+                THEN $21::text
+            ELSE cache.synced_words
+        END,
         synced_source = CASE
             WHEN NULLIF(btrim(cache.synced_lrc), '') IS NULL
                  OR COALESCE(cache.synced_source, cache.source) = 'lrclib'
