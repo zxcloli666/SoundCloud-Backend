@@ -8,6 +8,10 @@ use sqlx::types::Uuid;
 use crate::common::sc_ids::{EntityKind, EntityRef, require_ref};
 use crate::error::{AppError, AppResult};
 
+const SAME_PLAY_SECS: i64 = 60;
+const CLOCK_SKEW_SECS: i64 = 120;
+const PLAYED_AT_MAX_AGE_DAYS: i64 = 30;
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct ListeningHistory {
@@ -39,6 +43,8 @@ pub struct RecordHistoryDto {
     #[serde(rename = "artworkUrl")]
     pub artwork_url: Option<String>,
     pub duration: i32,
+    #[serde(rename = "playedAt", default)]
+    pub played_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,33 +76,47 @@ impl HistoryService {
     pub async fn record(&self, sc_user_id: &str, data: &RecordHistoryDto) -> AppResult<Uuid> {
         let track = require_ref(EntityKind::Track, &data.sc_track_id)?;
         let track_urn = track.urn();
-        let cutoff = chrono::Utc::now().naive_utc() - Duration::seconds(60);
+        let played_at = played_at(data.played_at, Utc::now());
+        let same_play = Duration::seconds(SAME_PLAY_SECS);
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let recent = sqlx::query_file_scalar!(
-            "queries/history/service/find_recent_play.sql",
+        let mut tx = self.pg.begin().await?;
+        sqlx::query_file_scalar!(
+            "queries/history/service/lock_play.sql",
+            sc_user_id,
+            &track_urn
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let same = sqlx::query_file_scalar!(
+            "queries/history/service/find_same_play.sql",
             &variants,
             &[track_urn.clone(), track.sc_id()],
-            cutoff
+            played_at - same_play,
+            played_at + same_play
         )
-        .fetch_optional(&self.pg)
+        .fetch_optional(&mut *tx)
         .await?;
-        if let Some(id) = recent {
-            return Ok(id);
-        }
-        let id = sqlx::query_scalar(
-            "INSERT INTO listening_history \
-             (soundcloud_user_id, sc_track_id, title, artist_name, artist_urn, artwork_url, duration) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-        )
-        .bind(sc_user_id)
-        .bind(&track_urn)
-        .bind(&data.title)
-        .bind(&data.artist_name)
-        .bind(&data.artist_urn)
-        .bind(&data.artwork_url)
-        .bind(data.duration)
-        .fetch_one(&self.pg)
-        .await?;
+        let id = match same {
+            Some(id) => id,
+            None => {
+                sqlx::query_scalar(
+                    "INSERT INTO listening_history \
+                     (soundcloud_user_id, sc_track_id, title, artist_name, artist_urn, artwork_url, duration, played_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+                )
+                .bind(sc_user_id)
+                .bind(&track_urn)
+                .bind(&data.title)
+                .bind(&data.artist_name)
+                .bind(&data.artist_urn)
+                .bind(&data.artwork_url)
+                .bind(data.duration)
+                .bind(played_at)
+                .fetch_one(&mut *tx)
+                .await?
+            }
+        };
+        tx.commit().await?;
         Ok(id)
     }
 
@@ -164,7 +184,20 @@ impl HistoryService {
     }
 }
 
+fn played_at(sent: Option<DateTime<Utc>>, now: DateTime<Utc>) -> NaiveDateTime {
+    let earliest = now - Duration::days(PLAYED_AT_MAX_AGE_DAYS);
+    let latest = now + Duration::seconds(CLOCK_SKEW_SECS);
+    sent.filter(|at| (earliest..=latest).contains(at))
+        .unwrap_or(now)
+        .min(now)
+        .naive_utc()
+}
+
 pub fn ts_iso<S: Serializer>(dt: &NaiveDateTime, s: S) -> Result<S::Ok, S::Error> {
     let utc = DateTime::<Utc>::from_naive_utc_and_offset(*dt, Utc);
     s.serialize_str(&utc.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
+
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;

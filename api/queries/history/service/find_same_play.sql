@@ -3,4 +3,5 @@ FROM listening_history
 WHERE soundcloud_user_id = ANY ($1)
   AND sc_track_id = ANY ($2)
   AND played_at > $3
+  AND played_at < $4
 ORDER BY played_at DESC LIMIT 1
