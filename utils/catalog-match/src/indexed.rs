@@ -29,7 +29,11 @@ pub async fn best_indexed_for_artist_title(
     if target.work_key.is_empty() && normalized.is_empty() {
         return Ok(None);
     }
-    let work_keys: Vec<String> = target.work_keys().map(str::to_owned).collect();
+    let work_keys: Vec<String> = target
+        .work_keys()
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned)
+        .collect();
     let first_word = normalized.split_whitespace().next().unwrap_or(&normalized);
     let first_word_end = format!("{first_word}{PREFIX_END}");
 

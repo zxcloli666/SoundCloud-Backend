@@ -6,22 +6,28 @@ WITH keyed AS MATERIALIZED (
     UNION
     SELECT keys.track_id
     FROM track_work_keys AS keys
-    JOIN track_artists AS credit
-      ON credit.track_id = keys.track_id AND credit.artist_id = $1 AND credit.role = 'primary'
+    CROSS JOIN LATERAL (SELECT 1
+                        FROM track_artists AS credit
+                        WHERE credit.track_id = keys.track_id
+                          AND credit.artist_id = $1
+                          AND credit.role = 'primary'
+                        LIMIT 1) AS credited
     WHERE keys.work_key = ANY ($2)
     UNION
     SELECT alias.track_id
     FROM track_work_aliases AS alias
+    JOIN track_work_keys AS keys ON keys.track_id = alias.track_id AND keys.primary_artist_id = $1
     WHERE alias.alias_key = ANY ($2)
-      AND (EXISTS (SELECT 1
-                   FROM track_work_keys AS keys
-                   WHERE keys.track_id = alias.track_id
-                     AND keys.primary_artist_id = $1)
-        OR EXISTS (SELECT 1
-                   FROM track_artists AS credit
-                   WHERE credit.track_id = alias.track_id
-                     AND credit.artist_id = $1
-                     AND credit.role = 'primary'))
+    UNION
+    SELECT alias.track_id
+    FROM track_work_aliases AS alias
+    CROSS JOIN LATERAL (SELECT 1
+                        FROM track_artists AS credit
+                        WHERE credit.track_id = alias.track_id
+                          AND credit.artist_id = $1
+                          AND credit.role = 'primary'
+                        LIMIT 1) AS credited
+    WHERE alias.alias_key = ANY ($2)
 ), titled AS MATERIALIZED (
     SELECT title.track_id,
            min(CASE WHEN title.title_normalized = $3 THEN 1 ELSE 2 END) AS rank
