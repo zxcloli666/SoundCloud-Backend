@@ -1,31 +1,49 @@
 WITH strict AS MATERIALIZED (
-    SELECT sc_track_id FROM lyrics_cache
+    SELECT sc_track_id, ts_rank(fts, $1::text::tsquery) AS rank FROM lyrics_cache
     WHERE fts @@ $1::text::tsquery AND NOT (source = 'self_gen' AND plain_source IS NULL)
     LIMIT 300
 ),
 loose AS MATERIALIZED (
-    SELECT sc_track_id FROM lyrics_cache
+    SELECT sc_track_id, ts_rank(fts, $2::text::tsquery) AS rank FROM lyrics_cache
     WHERE $2::text IS NOT NULL AND (SELECT count(*) FROM strict) < 20
       AND fts @@ $2::text::tsquery AND NOT (source = 'self_gen' AND plain_source IS NULL)
     LIMIT 300
 ),
-hits AS (
-    SELECT sc_track_id, min(tier) AS tier
-    FROM (SELECT sc_track_id, 0 AS tier FROM strict UNION ALL SELECT sc_track_id, 1 FROM loose) found
-    GROUP BY sc_track_id
+hits AS MATERIALIZED (
+    SELECT DISTINCT ON (found.sc_track_id) found.sc_track_id, found.tier, found.rank
+    FROM (SELECT sc_track_id, 0 AS tier, rank FROM strict UNION ALL SELECT sc_track_id, 1, rank FROM loose) found
+    ORDER BY found.sc_track_id, found.tier
 ),
-ranked AS MATERIALIZED (
-    SELECT hits.sc_track_id, hits.tier,
-           row_number() OVER (
-               ORDER BY hits.tier,
-                        ts_rank(lc.fts, CASE WHEN hits.tier = 0 THEN $1 ELSE $2 END::tsquery) DESC,
-                        t.play_count_sc DESC NULLS LAST,
-                        hits.sc_track_id DESC
-           ) AS pos
+boundary AS MATERIALIZED (
+    SELECT hits.tier, hits.rank FROM hits
+    ORDER BY hits.tier, hits.rank DESC
+    OFFSET greatest(64, $4 + $5) + 16
+    LIMIT 1
+),
+front AS MATERIALIZED (
+    SELECT hits.sc_track_id, hits.tier, hits.rank, t.play_count_sc
     FROM hits
     JOIN tracks t ON t.sc_track_id = hits.sc_track_id
      AND t.sharing = 'public' AND t.deleted_at IS NULL AND t.superseded_by IS NULL
-    JOIN lyrics_cache lc ON lc.sc_track_id = hits.sc_track_id
+    WHERE NOT EXISTS (SELECT 1 FROM boundary)
+       OR hits.tier < (SELECT boundary.tier FROM boundary)
+       OR (hits.tier = (SELECT boundary.tier FROM boundary) AND hits.rank >= (SELECT boundary.rank FROM boundary))
+),
+covered AS MATERIALIZED (
+    SELECT (SELECT count(*) FROM front) >= greatest(64, $4 + $5) OR NOT EXISTS (SELECT 1 FROM boundary) AS ok
+),
+ranked AS MATERIALIZED (
+    SELECT picked.sc_track_id, picked.tier,
+           row_number() OVER (ORDER BY picked.tier, picked.rank DESC, picked.play_count_sc DESC NULLS LAST, picked.sc_track_id DESC) AS pos
+    FROM (
+        SELECT front.sc_track_id, front.tier, front.rank, front.play_count_sc FROM front WHERE (SELECT ok FROM covered)
+        UNION ALL
+        SELECT hits.sc_track_id, hits.tier, hits.rank, t.play_count_sc
+        FROM hits
+        JOIN tracks t ON t.sc_track_id = hits.sc_track_id
+         AND t.sharing = 'public' AND t.deleted_at IS NULL AND t.superseded_by IS NULL
+        WHERE NOT (SELECT ok FROM covered)
+    ) picked
 ),
 needle AS MATERIALIZED (
     SELECT search_latin($3) AS latin
