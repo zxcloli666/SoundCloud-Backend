@@ -56,6 +56,8 @@ struct HomeQuery {
     #[serde(default)]
     languages: Option<String>,
     #[serde(default)]
+    genres: Option<String>,
+    #[serde(default)]
     hide_listened: Option<String>,
 }
 
@@ -75,6 +77,7 @@ async fn home(
     let req = HomeRequest {
         sc_user_id: ctx.sc_user_id.clone(),
         languages,
+        genres: parse_genres(q.genres.as_deref()),
         per_cluster,
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
     };

@@ -359,6 +359,7 @@ async fn home_shelf(service: &RecommendationsService) -> anyhow::Result<(Vec<u64
     let home = Box::pin(service.home_wave(HomeRequest {
         sc_user_id: LISTENER.to_owned(),
         languages: None,
+        genres: None,
         per_cluster: 6,
         hide_listened: true,
     }))

@@ -48,6 +48,7 @@ impl RecommendationsService {
             self,
             sc_user_id,
             languages,
+            None,
             SmartWaveSeed::Track(anchor),
             WAVE_LIMIT,
             hide_listened,

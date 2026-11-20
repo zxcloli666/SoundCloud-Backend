@@ -20,6 +20,7 @@ async fn home_wave(
     Ok(Box::pin(service.home_wave(HomeRequest {
         sc_user_id: listener.to_owned(),
         languages: None,
+        genres: None,
         per_cluster: PER_CLUSTER,
         hide_listened: false,
     }))

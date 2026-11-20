@@ -212,6 +212,9 @@ pub async fn build(
     }
     let settled: HashSet<u64> = graph_tracks.iter().map(|(track, _)| *track).collect();
     let mut artist_of = reach::attribution(&graph_tracks, &mert_artists);
+    for (track, artist) in genres::pool(&svc.pg, req.genres, &exclude).await {
+        artist_of.entry(track).or_insert(artist);
+    }
 
     let variants = user_id_variants(req.sc_user_id);
     let pooled: Vec<u64> = artist_of.keys().copied().collect();
@@ -238,7 +241,7 @@ pub async fn build(
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
     let mut cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
-    genres::weigh(&svc.pg, req.genres, &mut cands).await;
+    let mut matched = genres::weigh(&svc.pg, req.genres, &mut cands).await;
 
     let tail = reach.tail(rest, &cands, &settled);
     if !tail.is_empty() {
@@ -264,10 +267,24 @@ pub async fn build(
         );
         fresh.retain(|tid, _| !blocked.contains(tid));
         let mut fresh = score_candidates(fresh, &taste, &skipped, &sunk_artists, [&fm, &fc, &fl]);
-        genres::weigh(&svc.pg, req.genres, &mut fresh).await;
+        matched.extend(genres::weigh(&svc.pg, req.genres, &mut fresh).await);
         cands.extend(fresh);
     }
-    let picked = reach.pick(&cands);
+    let mut picked = reach.pick(&cands);
+    if !matched.is_empty() {
+        let own: Vec<rank::Candidate> = cands
+            .iter()
+            .filter(|cand| matched.contains(&cand.sc_track_id))
+            .cloned()
+            .collect();
+        for track in reach.pick(&own) {
+            if !picked.iter().any(|p| p.sc_track_id == track.sc_track_id) {
+                picked.push(track);
+            }
+        }
+        picked.sort_by(|a, b| b.score.total_cmp(&a.score));
+        picked = genres::lead(picked, &matched, req.limit);
+    }
     let cand_count = cands.len();
     let graph_artists = head.len() + tail.len();
 
@@ -347,6 +364,7 @@ pub async fn cluster_tracks(
     svc: &RecommendationsService,
     sc_user_id: &str,
     languages: Option<&[String]>,
+    genres: Option<&[String]>,
     seed: SmartWaveSeed<'_>,
     limit: usize,
     hide_listened: bool,
@@ -354,7 +372,7 @@ pub async fn cluster_tracks(
     let req = SmartWaveRequest {
         sc_user_id,
         languages,
-        genres: None,
+        genres,
         limit,
         cursor_token: None,
         seed,

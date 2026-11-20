@@ -76,6 +76,7 @@ impl RecommendationsService {
             self,
             sc_user_id,
             None,
+            None,
             SmartWaveSeed::Artist(artist_id, &top_ids),
             WAVE_LIMIT,
             hide_listened,
