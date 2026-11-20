@@ -57,6 +57,7 @@ pub(super) fn parse(
     }
     let mut items = Vec::with_capacity(collection.len());
     let mut liked_at: Vec<(String, DateTime<Utc>)> = Vec::new();
+    let mut untitled = 0;
     for item in collection {
         if apiv2 && is_system_playlist_like(payload, item) {
             continue;
@@ -104,7 +105,8 @@ pub(super) fn parse(
             .and_then(Value::as_str)
             .is_none_or(|title| title.trim().is_empty())
         {
-            return Err(malformed("collection entity title is missing"));
+            untitled += 1;
+            continue;
         }
         if !is_user {
             match entity.get("sharing").and_then(Value::as_str) {
@@ -133,6 +135,9 @@ pub(super) fn parse(
             liked_at.push((id, time));
         }
         items.push(entity);
+    }
+    if items.is_empty() && untitled > 0 {
+        return Err(malformed("collection entity title is missing"));
     }
     Ok(Page {
         items,
@@ -377,6 +382,35 @@ mod tests {
                 true
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_untitled_entity_is_skipped_unless_the_whole_page_is_untitled() {
+        let followers = CatalogCollectionPayload {
+            collection: CatalogCollection::Followers,
+            subject_id: "42".into(),
+            owner: false,
+        };
+        let page = parse(
+            &followers,
+            json!({"collection": [{"id": 7, "username": " "}, {"id": 8, "username": "Listener"}, {"id": 9}], "next_href": null}),
+            false,
+        )
+        .unwrap();
+        let ids: Vec<_> = page
+            .items
+            .iter()
+            .map(|item| item.get("id").and_then(Value::as_i64))
+            .collect();
+        assert_eq!(ids, [Some(8)]);
+        assert!(
+            parse(
+                &followers,
+                json!({"collection": [{"id": 7, "username": ""}, {"id": 9}]}),
+                false
+            )
+            .is_err()
         );
     }
 
