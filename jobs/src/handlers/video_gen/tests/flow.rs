@@ -461,27 +461,40 @@ async fn a_sent_step_waits_for_its_node_without_faults_or_resends(pool: PgPool) 
     bench.dispatch().await.unwrap();
     assert_eq!(wire.subjects(), ["video.keyframe.new"]);
     wire.absent.lock().unwrap().push(WorkerLane::VideoKeyframe);
+    sent_long_ago(&pool).await;
+    let aged = sent_at(&pool).await;
 
     for _ in 0..3 {
-        sent_long_ago(&pool).await;
         due_now(&pool).await;
         bench.dispatch().await.unwrap();
     }
 
     let (stage, _, _, faults) = row(&pool, TRACK).await;
     assert_eq!((stage.as_str(), faults), ("keyframe", 0));
-    assert!(
-        sent_at(&pool)
-            .await
-            .is_some_and(|at| Utc::now() - at < chrono::Duration::minutes(1))
-    );
+    assert_eq!(sent_at(&pool).await, aged);
     assert_eq!(wire.subjects(), ["video.keyframe.new"]);
 
     wire.absent.lock().unwrap().clear();
     bench.dispatch().await.unwrap();
 
     assert_eq!(row(&pool, TRACK).await.3, 0);
+    assert!(
+        sent_at(&pool)
+            .await
+            .is_some_and(|at| Utc::now() - at < chrono::Duration::minutes(1))
+    );
     assert_eq!(wire.subjects(), ["video.keyframe.new"]);
     keyframe(&bench, &wire).await;
     assert_eq!(row(&pool, TRACK).await.0, "keyframe_review");
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_wait_for_a_node_is_noted_once_and_the_return_once(pool: PgPool) {
+    let (bench, _, _, _, _) = bench(&pool, config());
+    let shot = vec!["shot".to_owned()];
+
+    assert!(bench.note_held(&shot).is_empty());
+    assert!(bench.note_held(&shot).is_empty());
+    assert_eq!(bench.note_held(&[]), shot);
+    assert!(bench.note_held(&[]).is_empty());
 }

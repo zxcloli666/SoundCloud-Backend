@@ -2,7 +2,7 @@
 trust = "public"
 
 [runtime]
-mode = "lane"
+mode = "slot"
 device = "cuda"
 idle_unload_s = 600
 turn_groups = { regular = ["muq", "mulan", "text", "sep", "asr", "align", "mms"], keyframe = ["image-edit"], shot = ["image-to-video"] }

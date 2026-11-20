@@ -12,13 +12,13 @@ mod temps;
 mod tests;
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::Utc;
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use url::Url;
 
 use crate::config::VideoGenConfig;
@@ -56,6 +56,7 @@ pub struct VideoGen<D, S, L, N> {
     lanes: L,
     notify: N,
     parts: Parts,
+    held: Mutex<Vec<String>>,
 }
 
 impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
@@ -82,6 +83,7 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
             lanes,
             notify,
             parts: Parts::default(),
+            held: Mutex::default(),
         }
     }
 
@@ -112,8 +114,9 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
 
     pub(crate) async fn dispatch(&self) -> JobResult {
         let held = self.held_stages();
-        state::hold_sent(&self.pool, &held).await?;
-        state::requeue_unanswered(&self.pool, self.config.timeout).await?;
+        let back = self.note_held(&held);
+        state::restart_sent(&self.pool, &back).await?;
+        state::requeue_unanswered(&self.pool, self.config.timeout, &held).await?;
         let mut open = held.is_empty() && self.gate().await?;
         let (sent, active) = state::busy(&self.pool).await?;
         let free = self.config.in_flight - sent;
@@ -145,18 +148,29 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
     }
 
     fn held_stages(&self) -> Vec<String> {
-        let held: Vec<String> = STAGE_LANES
+        STAGE_LANES
             .iter()
             .filter(|(_, lane)| !self.lanes.serving(*lane))
             .map(|(stage, _)| (*stage).to_owned())
-            .collect();
-        if !held.is_empty() {
-            debug!(
-                ?held,
-                "video generation waits for a node that serves its lanes"
-            );
+            .collect()
+    }
+
+    fn note_held(&self, held: &[String]) -> Vec<String> {
+        let mut last = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if *last == held {
+            return Vec::new();
         }
-        held
+        let back: Vec<String> = last
+            .iter()
+            .filter(|stage| !held.contains(stage))
+            .cloned()
+            .collect();
+        match held.is_empty() {
+            true => info!(?back, "a GPU node is back"),
+            false => info!(?held, "video generation waits for a GPU node"),
+        }
+        held.clone_into(&mut last);
+        back
     }
 
     async fn gate(&self) -> JobResult<bool> {

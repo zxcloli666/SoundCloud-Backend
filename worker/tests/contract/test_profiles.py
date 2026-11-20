@@ -90,7 +90,7 @@ DESIGN = {
     "gpu-tts": Profile("lane", "public", {"speak": 1}, {}),
     "gpu-video": Profile("lane", "public", {"video-keyframe": 1, "video-shot": 1}, {}),
     "gpu-48-mix": Profile(
-        "lane",
+        "slot",
         "public",
         {"audio": 32, "lyrics": 64, "transcribe": 8, "video-keyframe": 1, "video-shot": 1},
         dict.fromkeys(SYNC_X2, 4),
@@ -210,7 +210,7 @@ def test_sixteen_gigabyte_profile_runs_one_engine_per_model(contract: Contract) 
     ]
 
 
-@pytest.mark.parametrize("name", ["gpu-24", "gpu-48"])
+@pytest.mark.parametrize("name", ["gpu-24", "gpu-48", "gpu-48-mix"])
 def test_slot_mode_gpu_profiles_use_batches_that_fit_the_card(name: str) -> None:
     settings = load(name)
     batches = {slot: settings.slots[slot].max_batch for slot in SLOT_MODE_MAX_BATCH}
@@ -397,8 +397,12 @@ def test_the_mixed_profile_gives_the_card_to_the_regular_lanes_by_default(
     blueprint = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=16)
     groups = {plan.name: plan.turn_group for plan in blueprint.plans}
     assert groups == {
-        "audio": "regular",
-        **{f"sync#{index}": "regular" for index in range(4)},
+        **dict.fromkeys(("muq", "mulan", "text"), "regular"),
+        **{
+            f"{slot}#{index}": "regular"
+            for slot in ("sep", "asr", "align", "mms")
+            for index in range(4)
+        },
         "cpu-tools": "",
         "image-edit": "keyframe",
         "image-to-video": "shot",
@@ -417,8 +421,9 @@ def test_generation_engines_get_their_own_memory_growth_cap(contract: Contract, 
     assert all(caps[plan] == 0 for plan in caps if plan not in GENERATING_ENGINES)
 
 
-def test_the_mixed_profile_keeps_the_large_card_batches() -> None:
+def test_the_mixed_profile_keeps_the_large_card_layout() -> None:
     mixed, large = load("gpu-48-mix"), load("gpu-48")
+    assert mixed.runtime.mode == large.runtime.mode
     for slot in REGULAR_SLOTS:
         assert mixed.slots[slot].max_batch == large.slots[slot].max_batch, slot
         assert mixed.slots[slot].replicas == large.slots[slot].replicas, slot

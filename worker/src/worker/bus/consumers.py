@@ -222,23 +222,6 @@ class ConsumerWatch:
         self._note_degraded()
         return self.state
 
-    async def has_work(self) -> bool:
-        try:
-            raw = await self._js._api_request(
-                self.info_subject, b"", timeout=CONSUMER_INFO_TIMEOUT_S
-            )
-        except nats.errors.Error as error:
-            self._counters.inc("work_probe_failures_total", lane=self.lane.name)
-            log.warning(
-                "work_probe_failed",
-                extra={"lane": self.lane.name, "error": str(error) or type(error).__name__},
-            )
-            return False
-        waiting = int(raw.get("num_pending") or 0)
-        if self.max_deliver != BROKER_MAX_DELIVER:
-            waiting += int(raw.get("num_ack_pending") or 0)
-        return waiting > 0
-
     def _observe_timeout(self, started: float, error: Exception) -> None:
         if not self._connection.is_connected:
             self._keep(UNAVAILABLE_RETRY_MIN_S, "disconnected")
