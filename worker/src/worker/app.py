@@ -1019,6 +1019,7 @@ def video_gen_options(settings: Settings) -> dict[str, object]:
     shot = settings.video_gen.shot
     return {
         "offload": settings.video_gen.offload,
+        "lightning": shot.lightning,
         "lora_repo": shot.lora_repo,
         "lora_revision": shot.lora_revision,
         "lora_high": shot.lora_high.file,

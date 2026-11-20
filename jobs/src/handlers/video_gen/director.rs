@@ -2,6 +2,7 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
+use super::state::Rejection;
 use crate::llm::anthropic::Answer;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -64,14 +65,34 @@ pub struct Review<'a> {
     pub earlier: Vec<Picture>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Replan<'a> {
+    pub plan: &'a Plan,
+    pub shot: usize,
+    pub cover_url: &'a str,
+    pub failures: Vec<&'a Rejection>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Reshot {
+    pub keyframe: String,
+    pub motion: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Verdict {
-    Accept { trim_start_ms: i32 },
+    Accept { trim_start_ms: i32, note: String },
     Redo { reason: String, edit: String },
 }
 
 pub trait Director: Send + Sync {
-    fn plan(&self, brief: &Brief) -> impl Future<Output = Answer<Plan>> + Send;
+    fn plan(
+        &self,
+        brief: &Brief,
+        refused: Option<&str>,
+    ) -> impl Future<Output = Answer<Plan>> + Send;
+
+    fn replan(&self, replan: &Replan<'_>) -> impl Future<Output = Answer<Reshot>> + Send;
 
     fn review(&self, review: &Review<'_>) -> impl Future<Output = Answer<Verdict>> + Send;
 }
@@ -110,4 +131,11 @@ pub fn checked(plan: Plan, brief: &Brief) -> Result<Plan, String> {
         ));
     }
     Ok(plan)
+}
+
+pub fn reshot(reshot: Reshot) -> Result<Reshot, String> {
+    if reshot.keyframe.trim().is_empty() || reshot.motion.trim().is_empty() {
+        return Err("the new shot has an empty prompt".to_owned());
+    }
+    Ok(reshot)
 }

@@ -245,6 +245,7 @@ class KeyframeSettings:
 
 @dataclass(frozen=True)
 class ShotSettings:
+    lightning: bool
     steps: int
     guidance_scale: float
     guidance_scale_2: float

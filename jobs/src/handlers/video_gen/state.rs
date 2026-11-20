@@ -10,6 +10,8 @@ use crate::queue::{JobError, JobResult};
 
 pub const LANE_STAGES: [&str; 3] = ["keyframe", "shot", "assemble"];
 pub const DIRECTOR_STAGES: [&str; 3] = ["plan", "keyframe_review", "shot_review"];
+pub const TEMP_PREFIX: &str = "video-tmp/gen/";
+pub const REJECTED_PREFIX: &str = "video-tmp/gen-rejected/";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -42,6 +44,19 @@ pub struct State {
     pub accepted: Vec<Accepted>,
     #[serde(default)]
     pub temps: Vec<String>,
+    #[serde(default)]
+    pub redos: i32,
+    #[serde(default)]
+    pub replans: i32,
+    #[serde(default)]
+    pub passed: Vec<Passed>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Passed {
+    pub shot: i32,
+    pub look: String,
+    pub note: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -57,6 +72,8 @@ pub struct Rejection {
     pub reason: String,
     #[serde(default)]
     pub edit: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,7 +167,7 @@ impl Gen {
 
     pub fn temp_key(&self, name: &str) -> String {
         format!(
-            "video-tmp/gen/{}-{}-{}-{name}",
+            "{TEMP_PREFIX}{}-{}-{}-{name}",
             self.track, self.attempt, self.step
         )
     }
@@ -174,7 +191,24 @@ impl Gen {
             look: look.to_owned(),
             reason: reason.to_owned(),
             edit: edit.to_owned(),
+            media: Vec::new(),
         });
+    }
+
+    pub fn pass(&mut self, look: &str, note: &str) {
+        self.state.passed.push(Passed {
+            shot: self.shot,
+            look: look.to_owned(),
+            note: note.to_owned(),
+        });
+    }
+
+    pub fn failures(&self) -> Vec<&Rejection> {
+        self.rejections
+            .iter()
+            .filter(|rejection| rejection.shot == self.shot)
+            .filter(|rejection| matches!(rejection.look.as_str(), "keyframe" | "shot"))
+            .collect()
     }
 
     pub fn end(&mut self, stage: Stage, reason: &str) {

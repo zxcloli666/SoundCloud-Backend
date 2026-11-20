@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use serde_json::{Value, json};
 
-use crate::handlers::video_gen::director::{Brief, Picture, Plan, Review, Verdict};
+use crate::handlers::video_gen::director::{Brief, Picture, Plan, Replan, Reshot, Review, Verdict};
 use crate::handlers::video_gen::prompts;
 use crate::llm::anthropic::{Anthropic, Call, LlmError, Spend, finished, text_of};
 
@@ -11,27 +11,51 @@ const NUDGE: &str = "Answer by calling accept or reject.";
 pub(super) async fn plan(
     opus: &Anthropic,
     brief: &Brief,
+    refused: Option<&str>,
     spend: &mut Vec<Spend>,
 ) -> Result<Plan, LlmError> {
+    let request = prompts::plan_request(brief, refused);
+    let schema = prompts::plan_schema();
+    structured(opus, "plan", &brief.cover_url, &request, schema, spend).await
+}
+
+pub(super) async fn replan(
+    opus: &Anthropic,
+    replan: &Replan<'_>,
+    spend: &mut Vec<Spend>,
+) -> Result<Reshot, LlmError> {
+    let request = prompts::replan_request(replan);
+    let schema = prompts::reshot_schema();
+    structured(opus, "replan", replan.cover_url, &request, schema, spend).await
+}
+
+async fn structured<T: serde::de::DeserializeOwned>(
+    opus: &Anthropic,
+    name: &'static str,
+    cover_url: &str,
+    request: &str,
+    schema: Value,
+    spend: &mut Vec<Spend>,
+) -> Result<T, LlmError> {
     let messages = [json!({
         "role": "user",
         "content": [
-            {"type": "image", "source": {"type": "url", "url": brief.cover_url}},
-            {"type": "text", "text": prompts::plan_request(brief)},
+            {"type": "image", "source": {"type": "url", "url": cover_url}},
+            {"type": "text", "text": request},
         ],
     })];
     let call = Call {
-        name: "plan",
+        name,
         system: Some(prompts::SYSTEM),
         messages: &messages,
         tools: None,
-        format: Some(prompts::plan_schema()),
+        format: Some(schema),
         effort: None,
     };
     let message = opus.send(&call, spend).await?;
     finished(&message)?;
     serde_json::from_str(&text_of(&message))
-        .map_err(|error| LlmError::Invalid(format!("plan: {error}")))
+        .map_err(|error| LlmError::Invalid(format!("{name}: {error}")))
 }
 
 pub(super) async fn verdict(
@@ -91,6 +115,7 @@ fn decided(tool: &Value) -> Option<Result<Verdict, LlmError>> {
             trim_start_ms: input["trim_start_ms"]
                 .as_i64()
                 .map_or(0, |trim| trim.clamp(0, i64::from(i32::MAX)) as i32),
+            note: input["note"].as_str().unwrap_or_default().to_owned(),
         })),
         "reject" => Some(match (input["reason"].as_str(), input["edit"].as_str()) {
             (Some(reason), Some(edit)) => Ok(Verdict::Redo {
