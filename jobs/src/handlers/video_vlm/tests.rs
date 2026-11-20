@@ -35,6 +35,7 @@ fn vlm_config(haiku: bool) -> VideoVlmConfig {
         recheck: Duration::from_secs(1_800),
         verify_stored: 0,
         gpu_seen: Duration::from_secs(120),
+        gpu_timeout: Duration::from_secs(720),
         haiku: haiku.then(|| crate::config::AnthropicLadder {
             steps: Vec::new(),
             reset_day: 17,
@@ -292,7 +293,7 @@ async fn the_request_names_the_temp_file_by_its_storage_url_and_a_resend_gets_a_
     sqlx::query("UPDATE track_video_dispatch SET updated_at = now() - interval '2 hours' WHERE sc_track_id = '11'")
         .execute(&pool)
         .await?;
-    queue::requeue_unanswered(&pool, Duration::from_secs(3_600))
+    queue::requeue_unanswered(&pool, Duration::from_secs(3_600), Duration::from_secs(720))
         .await
         .unwrap();
     assert_eq!(stage(&pool, "11").await?.0, "pending_vlm");

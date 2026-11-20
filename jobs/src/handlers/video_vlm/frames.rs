@@ -103,7 +103,7 @@ impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             debug!(track, attempt, "stale VLM frames ignored");
             return Ok(());
         };
-        self.send(&claim, self.local()).await;
+        self.send(&claim, self.local(&claim)).await;
         Ok(())
     }
 }

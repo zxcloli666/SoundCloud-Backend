@@ -129,6 +129,7 @@ impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
             haiku = self.haiku.is_some(),
             month_usd = self.config.month_usd,
             gpu_seen_s = self.config.gpu_seen.as_secs(),
+            gpu_timeout_s = self.config.gpu_timeout.as_secs(),
             "video VLM sweep started"
         );
         let mut ticker = tokio::time::interval(self.config.tick);
@@ -145,7 +146,7 @@ impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
     }
 
     pub(crate) async fn dispatch(&self, cancellation: &CancellationToken) -> JobResult {
-        queue::requeue_unanswered(&self.pool, self.config.timeout).await?;
+        queue::requeue_unanswered(&self.pool, self.config.timeout, self.config.gpu_timeout).await?;
         self.verify_stored().await?;
         let free = self.config.in_flight - queue::busy(&self.pool).await?;
         if free <= 0 {
@@ -163,23 +164,31 @@ impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
                 self.release(&claim, Duration::ZERO, "shutdown").await;
                 continue;
             }
+            let judge = match (judge, claim.gpu_failed()) {
+                (Judge::Gpu, true) => self.spare().await?,
+                _ => judge,
+            };
             self.send(&claim, judge).await;
         }
         Ok(())
     }
 
     async fn judge(&self) -> JobResult<Judge> {
-        if self.lanes.serving(WorkerLane::VideoVlmGpu) {
-            return Ok(Judge::Gpu);
+        match self.lanes.serving(WorkerLane::VideoVlmGpu) {
+            true => Ok(Judge::Gpu),
+            false => self.spare().await,
         }
-        if self.haiku_open().await? {
-            return Ok(Judge::Haiku);
-        }
-        Ok(Judge::Cpu)
     }
 
-    fn local(&self) -> Judge {
-        match self.lanes.serving(WorkerLane::VideoVlmGpu) {
+    async fn spare(&self) -> JobResult<Judge> {
+        match self.haiku_open().await? {
+            true => Ok(Judge::Haiku),
+            false => Ok(Judge::Cpu),
+        }
+    }
+
+    fn local(&self, claim: &Claimed) -> Judge {
+        match self.lanes.serving(WorkerLane::VideoVlmGpu) && !claim.gpu_failed() {
             true => Judge::Gpu,
             false => Judge::Cpu,
         }
@@ -213,6 +222,13 @@ impl<B: Blobs + 'static, L: Nodes, V: Vision, N: Notify> VideoVlm<B, L, V, N> {
         if let Err(error) = self.publish(claim, held, step).await {
             warn!(track = %claim.sc_track_id, %error, "video VLM request was not published");
             self.release(claim, RETRY_PUBLISH, "publish_failed").await;
+            return;
+        }
+        if step.lane() != WorkerLane::VideoVlmGpu {
+            return;
+        }
+        if let Err(error) = queue::sent_gpu(&self.pool, &claim.sc_track_id, claim.attempt).await {
+            warn!(track = %claim.sc_track_id, %error, "GPU VLM send was not marked; it waits for the common timeout");
         }
     }
 
