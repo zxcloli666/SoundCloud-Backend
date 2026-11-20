@@ -92,6 +92,16 @@ def test_video_node_fetches_only_the_generation_models(env: dict[str, str]) -> N
     assert slots == {s.IMAGE_EDIT_SLOT, s.IMAGE_TO_VIDEO_SLOT}
 
 
+def test_the_lightning_lora_is_fetched_only_when_it_is_on(env: dict[str, str]) -> None:
+    def i2v(environ: dict[str, str]) -> list[fm.Artifact]:
+        items = plan_for("gpu-video", environ)
+        return [item.artifact for item in items if item.slot == s.IMAGE_TO_VIDEO_SLOT]
+
+    off = {**env, "WORKER__VIDEO_GEN__SHOT__LIGHTNING": "false"}
+    assert len(i2v(env)) == 3
+    assert [type(artifact) for artifact in i2v(off)] == [fm.HubSnapshot]
+
+
 def test_local_llm_weights_come_as_one_pinned_file_with_the_ai_lane(env: dict[str, str]) -> None:
     for profile in PROFILES:
         environ = {**env, s.PROFILE_ENV: profile}

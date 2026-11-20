@@ -1,6 +1,7 @@
 mod budget;
 mod flow;
 mod queue;
+mod replan;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
@@ -18,7 +19,9 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use url::Url;
 
-use super::director::{Brief, Character, Director, Look, Plan, PlannedShot, Review, Verdict};
+use super::director::{
+    Brief, Character, Director, Look, Plan, PlannedShot, Replan, Reshot, Review, Verdict,
+};
 use super::lanes::{Lanes, Nodes};
 use super::{Store, VideoGen};
 use crate::config::{AnthropicLadder, VideoGenConfig};
@@ -28,10 +31,12 @@ use crate::objects::{Blobs, Listed, ObjectsError};
 
 pub(super) type Bench = VideoGen<Scripted, Memory, Wire, Inbox>;
 pub(super) type Seen = (Look, usize, usize, usize);
+pub(super) type Asked = (usize, Vec<String>);
 
 pub(super) const TRACK: &str = "501";
 pub(super) const PLAN_USD: f64 = 0.30;
 pub(super) const REVIEW_USD: f64 = 0.05;
+pub(super) const REPLAN_USD: f64 = 0.10;
 
 pub(super) fn config() -> VideoGenConfig {
     VideoGenConfig {
@@ -46,6 +51,8 @@ pub(super) fn config() -> VideoGenConfig {
         shots: 2,
         keyframe_tries: 3,
         shot_tries: 2,
+        shot_replans: 2,
+        track_redos: 12,
         side: 720,
         fps: 16,
         frames: 81,
@@ -111,7 +118,10 @@ pub(super) fn plan() -> Plan {
 pub(super) struct Scripted {
     plans: Arc<Mutex<VecDeque<Result<Plan, LlmError>>>>,
     verdicts: Arc<Mutex<VecDeque<Result<Verdict, LlmError>>>>,
+    reshots: Arc<Mutex<VecDeque<Result<Reshot, LlmError>>>>,
     pub(super) briefs: Arc<Mutex<Vec<Brief>>>,
+    pub(super) refusals: Arc<Mutex<Vec<Option<String>>>>,
+    pub(super) replans: Arc<Mutex<Vec<Asked>>>,
     pub(super) reviews: Arc<Mutex<Vec<Seen>>>,
 }
 
@@ -122,6 +132,10 @@ impl Scripted {
 
     pub(super) fn verdicts(&self, answer: Result<Verdict, LlmError>) {
         self.verdicts.lock().unwrap().push_back(answer);
+    }
+
+    pub(super) fn reshots(&self, answer: Result<Reshot, LlmError>) {
+        self.reshots.lock().unwrap().push_back(answer);
     }
 }
 
@@ -143,12 +157,31 @@ fn spent<T>(call: &'static str, usd: f64, result: Result<T, LlmError>) -> Answer
 }
 
 impl Director for Scripted {
-    async fn plan(&self, brief: &Brief) -> Answer<Plan> {
+    async fn plan(&self, brief: &Brief, refused: Option<&str>) -> Answer<Plan> {
         self.briefs.lock().unwrap().push(brief.clone());
+        self.refusals
+            .lock()
+            .unwrap()
+            .push(refused.map(str::to_owned));
         let next = self.plans.lock().unwrap().pop_front();
         spent(
             "plan",
             PLAN_USD,
+            next.unwrap_or(Err(LlmError::Invalid("unscripted".to_owned()))),
+        )
+    }
+
+    async fn replan(&self, replan: &Replan<'_>) -> Answer<Reshot> {
+        let reasons = replan
+            .failures
+            .iter()
+            .map(|failure| failure.reason.clone())
+            .collect();
+        self.replans.lock().unwrap().push((replan.shot, reasons));
+        let next = self.reshots.lock().unwrap().pop_front();
+        spent(
+            "replan",
+            REPLAN_USD,
             next.unwrap_or(Err(LlmError::Invalid("unscripted".to_owned()))),
         )
     }

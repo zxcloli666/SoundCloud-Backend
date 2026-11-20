@@ -257,6 +257,7 @@ def artifacts_for(slot: str, settings: Settings, environ: Mapping[str, str]) -> 
         loras = [
             HubFile(shot.lora_repo, shot.lora_revision, weights.file, weights.sha256)
             for weights in (shot.lora_high, shot.lora_low)
+            if shot.lightning
         ]
         return [HubSnapshot(spec.model, spec.revision), *loras]
     return [HubSnapshot(spec.model, spec.revision), *COMPANIONS.get(spec.model, ())]

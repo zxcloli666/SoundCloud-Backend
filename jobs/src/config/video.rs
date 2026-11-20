@@ -56,6 +56,7 @@ pub struct VideoFindConfig {
     pub stage_timeout: Duration,
     pub max_file_mib: u64,
     pub temp_ttl: Duration,
+    pub rejected_ttl: Duration,
     pub vlm_backlog: i64,
     pub sweep_every: Duration,
     pub ytdlp: PathBuf,
@@ -116,6 +117,9 @@ impl VideoFindConfig {
             )?),
             max_file_mib: env::positive_u64("VIDEO_MAX_FILE_MIB", 96)?,
             temp_ttl: Duration::from_secs(env::positive_u64("VIDEO_TEMP_TTL_DAYS", 3)? * 86_400),
+            rejected_ttl: Duration::from_secs(
+                env::positive_u64("VIDEO_GEN_KEEP_REJECTED_DAYS", 3)? * 86_400,
+            ),
             vlm_backlog: i64::try_from(env::positive_u64("VIDEO_FIND_VLM_BACKLOG", 24)?)
                 .unwrap_or(i64::MAX),
             sweep_every: Duration::from_secs(env::positive_u64("VIDEO_TEMP_SWEEP_SECONDS", 3_600)?),

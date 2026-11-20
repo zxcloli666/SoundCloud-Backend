@@ -24,15 +24,8 @@ class ImageToVideoSlot:
         pipe = PIPELINE_LOADER(
             spec.model, revision=spec.revision, torch_dtype=torch.bfloat16, local_files_only=True
         )
-        repo, revision = str(spec.options["lora_repo"]), str(spec.options["lora_revision"])
-        high = hf_hub_download(
-            repo, str(spec.options["lora_high"]), revision=revision, local_files_only=True
-        )
-        low = hf_hub_download(
-            repo, str(spec.options["lora_low"]), revision=revision, local_files_only=True
-        )
-        pipe.load_lora_weights(high, adapter_name=HIGH_ADAPTER)
-        pipe.load_lora_weights(low, adapter_name=LOW_ADAPTER, load_into_transformer_2=True)
+        if spec.options.get("lightning"):
+            load_lightning(pipe, spec)
         if spec.options.get("offload") and spec.device == "cuda":
             pipe.enable_model_cpu_offload()
         else:
@@ -78,3 +71,15 @@ class ImageToVideoSlot:
         self._pipe = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+
+def load_lightning(pipe: Any, spec: SlotSpec) -> None:
+    repo, revision = str(spec.options["lora_repo"]), str(spec.options["lora_revision"])
+    high = hf_hub_download(
+        repo, str(spec.options["lora_high"]), revision=revision, local_files_only=True
+    )
+    low = hf_hub_download(
+        repo, str(spec.options["lora_low"]), revision=revision, local_files_only=True
+    )
+    pipe.load_lora_weights(high, adapter_name=HIGH_ADAPTER)
+    pipe.load_lora_weights(low, adapter_name=LOW_ADAPTER, load_into_transformer_2=True)

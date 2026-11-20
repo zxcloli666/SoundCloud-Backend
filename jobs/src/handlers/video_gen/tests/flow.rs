@@ -12,26 +12,32 @@ use super::{
     Bench, PLAN_USD, REVIEW_USD, Scripted, TRACK, Wire, bench, config, due_now, failed, lyrics,
     plan, queued, reply, row, star, superlike, track,
 };
+use crate::config::VideoGenConfig;
 use crate::llm::anthropic::LlmError;
 use crate::llm::ledger;
 
-const ACCEPT: Verdict = Verdict::Accept { trim_start_ms: 0 };
+pub(super) fn accept(trim_start_ms: i32) -> Verdict {
+    Verdict::Accept {
+        trim_start_ms,
+        note: "the lock holds".to_owned(),
+    }
+}
 
-async fn waiting(pool: &PgPool) {
+pub(super) async fn waiting(pool: &PgPool) {
     star(pool, "11").await;
     track(pool, TRACK, "90").await;
     superlike(pool, "11", TRACK).await;
     lyrics(pool, TRACK).await;
 }
 
-fn redo(edit: &str) -> Verdict {
+pub(super) fn redo(edit: &str) -> Verdict {
     Verdict::Redo {
         reason: "the face changed".to_owned(),
         edit: edit.to_owned(),
     }
 }
 
-async fn keyframe(bench: &Bench, wire: &Wire) {
+pub(super) async fn keyframe(bench: &Bench, wire: &Wire) {
     reply(
         bench,
         wire,
@@ -42,7 +48,7 @@ async fn keyframe(bench: &Bench, wire: &Wire) {
     .await;
 }
 
-async fn shot(bench: &Bench, wire: &Wire) {
+pub(super) async fn shot(bench: &Bench, wire: &Wire) {
     let files: [(&str, &[u8]); 3] = [
         ("shot.mp4", b"shot-mp4-bytes"),
         ("still0.jpg", b"still-a"),
@@ -55,10 +61,8 @@ async fn through_shots(bench: &Bench, director: &Scripted, wire: &Wire, trims: [
     director.plans(Ok(plan()));
     bench.dispatch().await.unwrap();
     for trim in trims {
-        director.verdicts(Ok(ACCEPT));
-        director.verdicts(Ok(Verdict::Accept {
-            trim_start_ms: trim,
-        }));
+        director.verdicts(Ok(accept(0)));
+        director.verdicts(Ok(accept(trim)));
         keyframe(bench, wire).await;
         bench.dispatch().await.unwrap();
         shot(bench, wire).await;
@@ -66,7 +70,7 @@ async fn through_shots(bench: &Bench, director: &Scripted, wire: &Wire, trims: [
     }
 }
 
-fn payload(wire: &Wire) -> Value {
+pub(super) fn payload(wire: &Wire) -> Value {
     wire.last().1
 }
 
@@ -162,9 +166,17 @@ async fn accepted_shots_become_a_generated_video(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
-async fn a_keyframe_redone_too_often_rejects_the_video_with_reasons(pool: PgPool) {
+async fn a_keyframe_redone_too_often_without_re_plans_rejects_the_video_and_keeps_its_media(
+    pool: PgPool,
+) {
     waiting(&pool).await;
-    let (bench, director, store, wire, _) = bench(&pool, config());
+    let (bench, director, store, wire, _) = bench(
+        &pool,
+        VideoGenConfig {
+            shot_replans: 0,
+            ..config()
+        },
+    );
     director.plans(Ok(plan()));
     bench.dispatch().await.unwrap();
 
@@ -183,10 +195,24 @@ async fn a_keyframe_redone_too_often_rejects_the_video_with_reasons(pool: PgPool
     );
     let (stage, reason, rejections, _) = row(&pool, TRACK).await;
     assert_eq!(stage, "rejected");
-    assert!(reason.unwrap().contains("keyframe 1 rejected 3 times"));
+    assert!(
+        reason
+            .unwrap()
+            .contains("keyframe 1 failed after 0 re-plans")
+    );
     assert_eq!(rejections.as_array().unwrap().len(), 3);
     assert_eq!(rejections[2]["edit"], "same hair");
-    assert!(store.keys().is_empty());
+    assert_eq!(
+        rejections[0]["media"][0],
+        "video-tmp/gen-rejected/501-1-1-frame.png"
+    );
+    assert_eq!(store.keys().len(), 3);
+    assert!(
+        store
+            .keys()
+            .iter()
+            .all(|key| key.starts_with("video-tmp/gen-rejected/501-1-"))
+    );
 }
 
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
@@ -194,7 +220,7 @@ async fn a_rejected_shot_is_drawn_again_from_the_same_keyframe(pool: PgPool) {
     waiting(&pool).await;
     let (bench, director, _, wire, _) = bench(&pool, config());
     director.plans(Ok(plan()));
-    director.verdicts(Ok(ACCEPT));
+    director.verdicts(Ok(accept(0)));
     director.verdicts(Ok(redo("slower")));
     bench.dispatch().await.unwrap();
     keyframe(&bench, &wire).await;
@@ -215,7 +241,7 @@ async fn a_gone_keyframe_draws_it_again(pool: PgPool) {
     waiting(&pool).await;
     let (bench, director, _, wire, _) = bench(&pool, config());
     director.plans(Ok(plan()));
-    director.verdicts(Ok(ACCEPT));
+    director.verdicts(Ok(accept(0)));
     bench.dispatch().await.unwrap();
     keyframe(&bench, &wire).await;
     bench.dispatch().await.unwrap();
@@ -306,7 +332,7 @@ async fn a_stale_or_repeated_answer_is_ignored(pool: PgPool) {
     waiting(&pool).await;
     let (bench, director, store, wire, _) = bench(&pool, config());
     director.plans(Ok(plan()));
-    director.verdicts(Ok(ACCEPT));
+    director.verdicts(Ok(accept(0)));
     bench.dispatch().await.unwrap();
     let request = payload(&wire);
     keyframe(&bench, &wire).await;
@@ -361,10 +387,12 @@ async fn a_bad_plan_is_retried_and_then_fails(pool: PgPool) {
     let (bench, director, _, wire, _) = bench(&pool, config());
     let mut short = plan();
     short.shots.truncate(1);
+    director.plans(Ok(short.clone()));
     director.plans(Ok(short));
     director.plans(Err(LlmError::Invalid("no tool call".to_owned())));
     let mut gap = plan();
     gap.shots[1].start_ms = 35_000;
+    director.plans(Ok(gap.clone()));
     director.plans(Ok(gap));
 
     for _ in 0..3 {
@@ -379,7 +407,7 @@ async fn a_bad_plan_is_retried_and_then_fails(pool: PgPool) {
             .unwrap()
             .contains("does not start where the last one ended")
     );
-    assert_eq!(rejections.as_array().unwrap().len(), 3);
+    assert_eq!(rejections.as_array().unwrap().len(), 5);
     assert_eq!(faults, 3);
     assert!(wire.sent.lock().unwrap().is_empty());
 }

@@ -48,6 +48,7 @@ pub(crate) fn config() -> VideoFindConfig {
         stage_timeout: Duration::from_secs(1_800),
         max_file_mib: 96,
         temp_ttl: Duration::from_secs(3 * 86_400),
+        rejected_ttl: Duration::from_secs(7 * 86_400),
         vlm_backlog: 24,
         sweep_every: Duration::from_secs(3_600),
         ytdlp: "yt-dlp".into(),
@@ -805,6 +806,21 @@ async fn the_sweep_deletes_only_temp_files_past_their_three_days(
 
     assert_eq!(removed, 1);
     assert_eq!(blobs.keys(), ["video-tmp/9-2-0.mp4", "video/9-1.mp4"]);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn rejected_generation_files_are_kept_for_their_own_days(pool: PgPool) -> anyhow::Result<()> {
+    let (video, _, blobs, _) = rig(&pool);
+    let days = |count: u64| SystemTime::now() - Duration::from_secs(count * 86_400);
+    blobs.put_at("video-tmp/gen-rejected/9-1-3-shot.mp4", b"x", days(4));
+    blobs.put_at("video-tmp/gen-rejected/9-1-1-frame.png", b"x", days(8));
+    blobs.put_at("video-tmp/gen/9-1-5-shot.mp4", b"x", days(4));
+
+    let removed = video.expire_once().await?;
+
+    assert_eq!(removed, 2);
+    assert_eq!(blobs.keys(), ["video-tmp/gen-rejected/9-1-3-shot.mp4"]);
     Ok(())
 }
 

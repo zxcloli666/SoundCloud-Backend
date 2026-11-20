@@ -9,6 +9,7 @@ use super::VideoFind;
 use super::stage::TEMP_PREFIX;
 use super::ytdlp::Tube;
 use crate::handlers::video_accounts::Fetch;
+use crate::handlers::video_gen::REJECTED_PREFIX;
 use crate::objects::Blobs;
 
 impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, T> {
@@ -27,10 +28,14 @@ impl<F: Fetch + 'static, B: Blobs + 'static, T: Tube + 'static> VideoFind<F, B, 
     }
 
     pub(super) async fn expire_once(&self) -> anyhow::Result<usize> {
-        let limit = SystemTime::now() - self.config.temp_ttl;
+        let now = SystemTime::now();
         let mut removed = 0;
         for listed in self.blobs.list(TEMP_PREFIX).await? {
-            if listed.modified < limit {
+            let ttl = match listed.key.starts_with(REJECTED_PREFIX) {
+                true => self.config.rejected_ttl,
+                false => self.config.temp_ttl,
+            };
+            if listed.modified < now - ttl {
                 self.blobs.delete(&listed.key).await?;
                 removed += 1;
             }

@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use super::director::{self, Brief, Director, Look, Picture, Review, Verdict};
 use super::lanes::{self, Nodes};
+use super::redo;
 use super::state::{self, Accepted, Gen, Save, Stage};
 use super::{LADDER, Store, VideoGen};
 use crate::handlers::video_accounts::Notify;
@@ -18,7 +19,7 @@ pub enum Flow {
     Halted,
 }
 
-enum Directed<T> {
+pub(super) enum Directed<T> {
     Done(T),
     Halted,
     Invalid(String),
@@ -42,16 +43,30 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
         if !self.affordable().await? {
             return Ok(Flow::Halted);
         }
+        if job.plan.is_some() {
+            return self.replan(job).await;
+        }
         let Some(brief) = self.brief(&job.track).await? else {
             job.end(Stage::Failed, "the track has no cover or duration");
             self.close(job).await?;
             return Ok(Flow::Moved);
         };
-        let answer = self.director.plan(&brief).await;
-        let plan = match self.directed(&job, answer).await? {
-            Directed::Done(plan) => director::checked(plan, &brief),
-            Directed::Halted => return Ok(Flow::Halted),
-            Directed::Invalid(reason) => Err(reason),
+        let mut refused: Option<String> = None;
+        let plan = loop {
+            let answer = self.director.plan(&brief, refused.as_deref()).await;
+            let plan = match self.directed(&job, answer).await? {
+                Directed::Done(plan) => director::checked(plan, &brief),
+                Directed::Halted => return Ok(Flow::Halted),
+                Directed::Invalid(reason) => break Err(reason),
+            };
+            match plan {
+                Err(reason) if refused.is_none() => {
+                    warn!(track = %job.track, reason, "video plan is asked again");
+                    job.reject("plan", &reason, "");
+                    refused = Some(reason);
+                }
+                plan => break plan,
+            }
         };
         match plan {
             Ok(plan) => {
@@ -83,7 +98,7 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
             Look::Shot => job.state.stills.clone(),
         };
         let Some(current) = self.pictures(&keys, "frame").await? else {
-            job.stage = drawn(look);
+            job.stage = redo::drawn(look);
             self.send(job).await?;
             return Ok(Flow::Moved);
         };
@@ -117,8 +132,18 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
             }
         };
         match (verdict, look) {
-            (Verdict::Accept { .. }, Look::Keyframe) => self.keyframe_accepted(job).await?,
-            (Verdict::Accept { trim_start_ms }, Look::Shot) => {
+            (Verdict::Accept { note, .. }, Look::Keyframe) => {
+                job.pass("keyframe", &note);
+                self.keyframe_accepted(job).await?
+            }
+            (
+                Verdict::Accept {
+                    trim_start_ms,
+                    note,
+                },
+                Look::Shot,
+            ) => {
+                job.pass("shot", &note);
                 self.shot_accepted(job, trim_start_ms).await?
             }
             (Verdict::Redo { reason, edit }, _) => self.redo(job, look, &reason, &edit).await?,
@@ -152,34 +177,13 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
         self.drop_temps(&stills).await;
         job.state.temps.retain(|key| !stills.contains(key));
         job.state.edit = None;
+        job.state.replans = 0;
         job.redo = 0;
         job.shot += 1;
         job.stage = match job.shot as usize >= shots {
             true => Stage::Assemble,
             false => Stage::Keyframe,
         };
-        self.send(job).await
-    }
-
-    async fn redo(&self, mut job: Gen, look: Look, reason: &str, edit: &str) -> JobResult {
-        let (name, tries) = match look {
-            Look::Keyframe => ("keyframe", self.config.keyframe_tries),
-            Look::Shot => ("shot", self.config.shot_tries),
-        };
-        job.reject(name, reason, edit);
-        job.redo += 1;
-        if job.redo >= tries {
-            let shot = job.shot + 1;
-            let redo = job.redo;
-            job.end(
-                Stage::Rejected,
-                &format!("{name} {shot} rejected {redo} times: {reason}"),
-            );
-            info!(track = %job.track, name, shot, "generated video rejected");
-            return self.close(job).await;
-        }
-        job.state.edit = Some(edit.to_owned());
-        job.stage = drawn(look);
         self.send(job).await
     }
 
@@ -238,20 +242,12 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
             wait: Duration::ZERO,
         };
         if state::save(&self.pool, &job, job.step, done).await? {
-            self.drop_temps(&job.state.temps).await;
+            self.clear_temps(&job).await;
         }
         Ok(())
     }
 
-    pub(super) async fn drop_temps(&self, keys: &[String]) {
-        for key in keys {
-            if let Err(error) = self.store.delete(key).await {
-                warn!(key, %error, "a generation temp file was not deleted; the sweep removes it");
-            }
-        }
-    }
-
-    async fn directed<T>(&self, job: &Gen, answer: Answer<T>) -> JobResult<Directed<T>> {
+    pub(super) async fn directed<T>(&self, job: &Gen, answer: Answer<T>) -> JobResult<Directed<T>> {
         let period = ledger::period(chrono::Utc::now(), self.reset_day);
         ledger::record(&self.pool, LADDER, period, &job.track, &answer.spend).await?;
         match answer.result {
@@ -313,12 +309,5 @@ impl<D: Director, S: Store, L: Nodes, N: Notify> VideoGen<D, S, L, N> {
             });
         }
         Ok(Some(pictures))
-    }
-}
-
-fn drawn(look: Look) -> Stage {
-    match look {
-        Look::Keyframe => Stage::Keyframe,
-        Look::Shot => Stage::Shot,
     }
 }
