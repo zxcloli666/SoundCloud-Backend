@@ -45,8 +45,15 @@ pub(super) fn parse(
     };
     if payload.collection.item() == backend_contracts::CollectionItem::Comment {
         let mut items = Vec::with_capacity(collection.len());
+        let mut blank = 0;
         for item in collection {
-            items.push(comment(payload, item)?);
+            match comment(payload, item)? {
+                Some(comment) => items.push(comment),
+                None => blank += 1,
+            }
+        }
+        if items.is_empty() && blank > 0 {
+            return Err(malformed("comment body is missing or oversized"));
         }
         return Ok(Page {
             items,
@@ -176,16 +183,18 @@ fn identity(object: &Value) -> Option<String> {
     )))
 }
 
-fn comment(payload: &CatalogCollectionPayload, item: &Value) -> JobResult<Value> {
+fn comment(payload: &CatalogCollectionPayload, item: &Value) -> JobResult<Option<Value>> {
     let mut comment = item.clone();
     sc_transport::normalize_v2_to_v1(&mut comment);
     let id = identity(&comment).ok_or_else(|| malformed("comment identity is missing"))?;
-    let body = comment
+    let Some(body) = comment
         .get("body")
         .and_then(Value::as_str)
         .filter(|body| !body.trim().is_empty() && body.len() <= MAX_COMMENT_BYTES)
-        .ok_or_else(|| malformed("comment body is missing or oversized"))?
-        .to_owned();
+        .map(str::to_owned)
+    else {
+        return Ok(None);
+    };
     let user = comment
         .get("user")
         .filter(|user| user.is_object())
@@ -225,14 +234,14 @@ fn comment(payload: &CatalogCollectionPayload, item: &Value) -> JobResult<Value>
             Value::String(backend_contracts::CatalogEntity::User.urn(&author)),
         );
     }
-    Ok(serde_json::json!({
+    Ok(Some(serde_json::json!({
         "id": id,
         "body": body,
         "timestamp": position,
         "created_at": created_at,
         "track_id": payload.subject_id,
         "user": user,
-    }))
+    })))
 }
 
 fn cursor(payload: &CatalogCollectionPayload, value: &str, apiv2: bool) -> JobResult<String> {
@@ -409,6 +418,38 @@ mod tests {
                 &followers,
                 json!({"collection": [{"id": 7, "username": ""}, {"id": 9}]}),
                 false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_blank_comment_is_skipped_unless_the_whole_page_is_blank() {
+        let comments = CatalogCollectionPayload {
+            collection: CatalogCollection::TrackComments,
+            subject_id: "42".into(),
+            owner: false,
+        };
+        let author = json!({"id": 5, "kind": "user", "username": "Author"});
+        let oversized = "x".repeat(MAX_COMMENT_BYTES + 1);
+        let page = parse(
+            &comments,
+            json!({"collection": [
+                {"id": 7, "body": " ", "user": author},
+                {"id": 8, "body": "hi", "user": author},
+                {"id": 9, "user": author},
+                {"id": 10, "body": oversized, "user": author}
+            ], "next_href": null}),
+            true,
+        )
+        .unwrap();
+        let ids: Vec<_> = page.items.iter().map(|item| item["id"].clone()).collect();
+        assert_eq!(ids, [json!("8")]);
+        assert!(
+            parse(
+                &comments,
+                json!({"collection": [{"id": 7, "body": "", "user": author}, {"id": 9, "user": author}]}),
+                true
             )
             .is_err()
         );
