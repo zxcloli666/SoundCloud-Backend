@@ -35,6 +35,11 @@ fn a_reserve_that_breaks_the_shape_is_invalid() {
         kind,
         bytes,
         thumb_bytes: thumb,
+        motion_bytes: None,
+    };
+    let moving = |kind, thumb, motion| ReserveBody {
+        motion_bytes: Some(motion),
+        ..make(kind, 8_192, thumb)
     };
     let bad = [
         make(MediaKind::Image, 151_552, None),
@@ -45,6 +50,12 @@ fn a_reserve_that_breaks_the_shape_is_invalid() {
         make(MediaKind::Image, 614_400, Some(32_768 + 4_096)),
         make(MediaKind::Image, 8_192, Some(0)),
         make(MediaKind::Avatar, 65_536 + 4_096, None),
+        moving(MediaKind::Image, Some(4_096), 614_400 + 4_096),
+        moving(MediaKind::Image, Some(4_096), 4_097),
+        moving(MediaKind::Image, Some(4_096), 0),
+        moving(MediaKind::Image, None, 4_096),
+        moving(MediaKind::Avatar, None, 4_096),
+        moving(MediaKind::Backdrop, None, 4_096),
     ];
     for body in bad {
         assert_eq!(body.validate(), Err(ChatError::Invalid), "{body:?}");
@@ -55,6 +66,9 @@ fn a_reserve_that_breaks_the_shape_is_invalid() {
     make(MediaKind::Avatar, 65_536, None)
         .validate()
         .expect("the largest avatar");
+    let gif = moving(MediaKind::Image, Some(32_768), 614_400);
+    gif.validate().expect("the largest motion");
+    assert_eq!(gif.total(), 8_192 + 32_768 + 614_400);
 }
 
 #[test]
@@ -87,6 +101,7 @@ fn the_reserve_answer_matches_the_core_wire() {
                 headers: Default::default(),
             },
         }),
+        motion: None,
         expires_in_s: 600,
         used: 7_340_032,
         quota: 1_073_741_824,
@@ -100,6 +115,20 @@ fn the_reserve_answer_matches_the_core_wire() {
             "thumb": {"id": id(2), "put": {"url": "https://s3.scnative.dev/y", "headers": {}}},
             "expires_in_s": 600, "used": 7_340_032, "quota": 1_073_741_824
         })
+    );
+    let gif = ReserveAnswer {
+        motion: Some(ReservedThumb {
+            id: id(3),
+            put: PresignedPut {
+                url: "https://s3.scnative.dev/z".to_owned(),
+                headers: Default::default(),
+            },
+        }),
+        ..answer.clone()
+    };
+    assert_eq!(
+        serde_json::to_value(&gif).expect("json")["motion"],
+        json!({"id": id(3), "put": {"url": "https://s3.scnative.dev/z", "headers": {}}})
     );
     let avatar = ReserveAnswer {
         thumb: None,

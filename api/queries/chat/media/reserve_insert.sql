@@ -11,6 +11,15 @@ thumb AS (
     FROM root
     WHERE $9::uuid IS NOT NULL
     RETURNING id
+),
+motion AS (
+    INSERT INTO chat.media (id, store, object_key, owner_user, origin_conversation, kind, parent_id, bytes, status, delete_after)
+    SELECT $13::uuid, root.store, $14::text, root.owner_user, root.origin_conversation, 'motion', root.id, $15::bigint,
+           'reserved', now() + $12::int * interval '1 second'
+    FROM root
+    WHERE $13::uuid IS NOT NULL
+    RETURNING id
 )
 SELECT (SELECT count(*) FROM root) AS "roots!",
-       (SELECT count(*) FROM thumb) AS "thumbs!"
+       (SELECT count(*) FROM thumb) AS "thumbs!",
+       (SELECT count(*) FROM motion) AS "motions!"

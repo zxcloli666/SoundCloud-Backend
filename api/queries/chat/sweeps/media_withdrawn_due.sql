@@ -1,7 +1,7 @@
 SELECT media.id
 FROM chat.media AS media
 WHERE media.status = 'deleting'
-  AND media.kind <> 'thumb'
+  AND media.kind NOT IN ('thumb', 'motion')
   AND (media.restorable_until IS NULL OR media.restorable_until <= now())
   AND (
       EXISTS (

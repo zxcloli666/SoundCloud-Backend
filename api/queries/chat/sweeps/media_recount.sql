@@ -3,15 +3,19 @@ WITH counted AS (
            usage.bytes AS was_bytes,
            usage.reserved AS was_reserved,
            usage.files AS was_files,
-           coalesce(sum(root.bytes + coalesce(thumb.bytes, 0)) FILTER (WHERE root.status IN ('uploaded', 'attached')), 0)::bigint AS bytes,
-           coalesce(sum(root.bytes + coalesce(thumb.bytes, 0)) FILTER (WHERE root.status = 'reserved'), 0)::bigint AS reserved,
+           coalesce(sum(root.bytes + coalesce(thumb.bytes, 0) + coalesce(motion.bytes, 0)) FILTER (WHERE root.status IN ('uploaded', 'attached')), 0)::bigint AS bytes,
+           coalesce(sum(root.bytes + coalesce(thumb.bytes, 0) + coalesce(motion.bytes, 0)) FILTER (WHERE root.status = 'reserved'), 0)::bigint AS reserved,
            count(root.id) FILTER (WHERE root.status IN ('uploaded', 'attached'))::integer AS files
     FROM chat.usage AS usage
     LEFT JOIN chat.media AS root
       ON root.owner_user = usage.user_id
-     AND root.kind <> 'thumb'
+     AND root.kind NOT IN ('thumb', 'motion')
     LEFT JOIN chat.media AS thumb
       ON thumb.parent_id = root.id
+     AND thumb.kind = 'thumb'
+    LEFT JOIN chat.media AS motion
+      ON motion.parent_id = root.id
+     AND motion.kind = 'motion'
     WHERE usage.user_id = ANY($1::text[])
     GROUP BY usage.user_id, usage.bytes, usage.reserved, usage.files
 ),

@@ -2,7 +2,7 @@ WITH picked AS (
     SELECT media.id
     FROM chat.media AS media
     WHERE media.status = 'deleting'
-      AND media.kind <> 'thumb'
+      AND media.kind NOT IN ('thumb', 'motion')
       AND (media.lease_until IS NULL OR media.lease_until <= now())
       AND (media.restorable_until IS NULL OR media.restorable_until <= now())
       AND NOT EXISTS (

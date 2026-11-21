@@ -10,7 +10,7 @@ FROM (
     FROM chat.media AS media
     LEFT JOIN chat.conversations AS origin ON origin.id = media.origin_conversation
     WHERE media.id = ANY($4::uuid[])
-      AND media.kind <> 'thumb'
+      AND media.kind NOT IN ('thumb', 'motion')
       AND (
           media.origin_conversation = $1
           OR (media.kind = 'image' AND origin.kind IS DISTINCT FROM 'room')

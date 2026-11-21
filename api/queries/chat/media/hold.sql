@@ -4,7 +4,7 @@ WITH live AS (
            media.restorable_until
     FROM chat.media AS media
     WHERE media.id = ANY($1::uuid[])
-      AND media.kind <> 'thumb'
+      AND media.kind NOT IN ('thumb', 'motion')
       AND (
           media.status IN ('uploaded', 'attached', 'held')
           OR (media.status = 'deleting' AND media.lease_until IS NULL)

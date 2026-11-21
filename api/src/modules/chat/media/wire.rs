@@ -44,6 +44,8 @@ pub struct ReserveBody {
     pub bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumb_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion_bytes: Option<u64>,
 }
 
 fn padded(bytes: u64, max: u64) -> bool {
@@ -52,12 +54,14 @@ fn padded(bytes: u64, max: u64) -> bool {
 
 impl ReserveBody {
     pub fn validate(&self) -> ChatResult<()> {
-        let fits = match (self.kind, self.thumb_bytes) {
-            (MediaKind::Image, Some(thumb)) => {
-                padded(self.bytes, IMAGE_MAX_BYTES) && padded(thumb, THUMB_MAX_BYTES)
+        let fits = match (self.kind, self.thumb_bytes, self.motion_bytes) {
+            (MediaKind::Image, Some(thumb), motion) => {
+                padded(self.bytes, IMAGE_MAX_BYTES)
+                    && padded(thumb, THUMB_MAX_BYTES)
+                    && motion.is_none_or(|motion| padded(motion, IMAGE_MAX_BYTES))
             }
-            (MediaKind::Avatar, None) => padded(self.bytes, AVATAR_MAX_BYTES),
-            (MediaKind::Backdrop, None) => padded(self.bytes, BACKDROP_MAX_BYTES),
+            (MediaKind::Avatar, None, None) => padded(self.bytes, AVATAR_MAX_BYTES),
+            (MediaKind::Backdrop, None, None) => padded(self.bytes, BACKDROP_MAX_BYTES),
             _ => false,
         };
         if fits {
@@ -68,7 +72,7 @@ impl ReserveBody {
     }
 
     pub fn total(&self) -> u64 {
-        self.bytes + self.thumb_bytes.unwrap_or(0)
+        self.bytes + self.thumb_bytes.unwrap_or(0) + self.motion_bytes.unwrap_or(0)
     }
 }
 
@@ -90,6 +94,8 @@ pub struct ReserveAnswer {
     pub put: PresignedPut,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumb: Option<ReservedThumb>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<ReservedThumb>,
     pub expires_in_s: u32,
     pub used: u64,
     pub quota: u64,

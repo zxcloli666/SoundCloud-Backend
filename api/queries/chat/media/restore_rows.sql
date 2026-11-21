@@ -8,7 +8,7 @@ WITH roots AS MATERIALIZED (
     FROM chat.media AS media
     WHERE media.id = ANY($2::uuid[])
       AND media.owner_user = $1
-      AND media.kind <> 'thumb'
+      AND media.kind NOT IN ('thumb', 'motion')
       AND media.status = 'deleting'
       AND media.restorable_until > now()
       AND media.lease_until IS NULL

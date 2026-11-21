@@ -70,8 +70,8 @@ const REQUIRED_CORE_SCHEMA: Required = Required {
     description: "lyrics cache synced words",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
-    version: 329,
-    description: "chat public",
+    version: 504,
+    description: "chat media motion",
 };
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);

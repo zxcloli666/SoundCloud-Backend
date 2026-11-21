@@ -37,12 +37,18 @@ async fn commit_rows(chat: &ChatState, caller: &ChatCaller, id: Uuid) -> ChatRes
         key: row.object_key,
         bytes: unsigned(row.bytes),
     }];
-    if let (Some(id), Some(key), Some(bytes)) = (row.thumb_id, row.thumb_key, row.thumb_bytes) {
-        objects.push(Object {
-            id,
-            key,
-            bytes: unsigned(bytes),
-        });
+    let children = [
+        (row.thumb_id, row.thumb_key, row.thumb_bytes),
+        (row.motion_id, row.motion_key, row.motion_bytes),
+    ];
+    for (id, key, bytes) in children {
+        if let (Some(id), Some(key), Some(bytes)) = (id, key, bytes) {
+            objects.push(Object {
+                id,
+                key,
+                bytes: unsigned(bytes),
+            });
+        }
     }
     let total = objects.iter().map(|object| object.bytes).sum();
     match row.status.as_str() {
@@ -114,7 +120,11 @@ async fn settle(
         }
         Err(error) => return Err(left_for_reconcile(id, &made, &error.to_string())),
     };
-    let referenced = [Some(row.object_key.as_str()), row.thumb_key.as_deref()];
+    let referenced = [
+        Some(row.object_key.as_str()),
+        row.thumb_key.as_deref(),
+        row.motion_key.as_deref(),
+    ];
     let unreferenced: Vec<Object> = made
         .into_iter()
         .filter(|object| !referenced.contains(&Some(object.key.as_str())))
@@ -249,3 +259,7 @@ mod fault_tests;
 #[cfg(test)]
 #[path = "../tests/media_commit_held_tests.rs"]
 mod held_tests;
+
+#[cfg(test)]
+#[path = "../tests/media_motion_tests.rs"]
+mod motion_tests;
