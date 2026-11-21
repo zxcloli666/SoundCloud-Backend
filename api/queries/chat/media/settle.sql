@@ -13,7 +13,7 @@ WITH roots AS (
            END AS next
     FROM chat.media AS media
     WHERE media.id = ANY($1::uuid[])
-      AND media.kind <> 'thumb'
+      AND media.kind NOT IN ('thumb', 'motion')
       AND media.status IN ('attached', 'held', 'lost')
       AND NOT EXISTS (
           SELECT 1

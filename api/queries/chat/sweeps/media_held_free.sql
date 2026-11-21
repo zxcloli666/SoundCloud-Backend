@@ -1,7 +1,7 @@
 SELECT media.id
 FROM chat.media AS media
 WHERE media.status = 'held'
-  AND media.kind <> 'thumb'
+  AND media.kind NOT IN ('thumb', 'motion')
   AND NOT EXISTS (
       SELECT 1
       FROM chat.media_holds AS hold

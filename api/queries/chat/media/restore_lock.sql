@@ -1,7 +1,7 @@
 SELECT media.id
 FROM chat.media AS media
 WHERE media.owner_user = $1
-  AND media.kind <> 'thumb'
+  AND media.kind NOT IN ('thumb', 'motion')
   AND media.status = 'deleting'
   AND media.restorable_until > now()
   AND media.lease_until IS NULL

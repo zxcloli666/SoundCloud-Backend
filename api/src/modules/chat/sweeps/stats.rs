@@ -2,7 +2,7 @@ use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::{ChatResult, ChatState};
 
 pub const EVERY_SECS: u64 = 60;
-pub const MEDIA_KINDS: [&str; 4] = ["image", "thumb", "avatar", "backdrop"];
+pub const MEDIA_KINDS: [&str; 5] = ["image", "thumb", "motion", "avatar", "backdrop"];
 pub const MEDIA_STATUSES: [&str; 6] = [
     "reserved", "uploaded", "attached", "held", "deleting", "lost",
 ];

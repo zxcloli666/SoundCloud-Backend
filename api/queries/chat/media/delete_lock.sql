@@ -1,7 +1,7 @@
 SELECT media.id
 FROM chat.media AS media
 WHERE media.owner_user = $1
-  AND media.kind <> 'thumb'
+  AND media.kind NOT IN ('thumb', 'motion')
   AND media.status IN ('reserved', 'uploaded', 'attached', 'lost')
   AND ($3::boolean OR media.id IN (
       SELECT coalesce(picked.parent_id, picked.id)

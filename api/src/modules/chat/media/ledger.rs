@@ -59,12 +59,11 @@ pub async fn commit(
     root: Uuid,
     kept: &[Object],
 ) -> Result<Option<Used>, CommitError> {
-    let key_of = |is_root: bool| {
-        kept.iter()
-            .find(|object| (object.id == root) == is_root)
-            .map(|object| object.key.as_str())
-    };
-    let root_key = key_of(true).ok_or(CommitError::RolledBack(ChatError::Internal))?;
+    if !kept.iter().any(|object| object.id == root) {
+        return Err(CommitError::RolledBack(ChatError::Internal));
+    }
+    let ids: Vec<Uuid> = kept.iter().map(|object| object.id).collect();
+    let keys: Vec<String> = kept.iter().map(|object| object.key.clone()).collect();
     let mut tx = pg.begin().await.map_err(rolled_back)?;
     lock(&mut tx, &[root])
         .await
@@ -74,8 +73,8 @@ pub async fn commit(
         root,
         user_id,
         seconds(ATTACH_WINDOW),
-        root_key,
-        key_of(false)
+        &ids,
+        &keys
     )
     .fetch_one(&mut *tx)
     .await

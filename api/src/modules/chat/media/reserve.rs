@@ -22,6 +22,7 @@ struct Planned {
     store: u16,
     root: Object,
     thumb: Option<Object>,
+    motion: Option<Object>,
 }
 
 impl Planned {
@@ -35,6 +36,7 @@ impl Planned {
             store,
             root: object(body.bytes),
             thumb: body.thumb_bytes.map(object),
+            motion: body.motion_bytes.map(object),
         }
     }
 }
@@ -71,7 +73,7 @@ async fn matched(chat: &ChatState, user: &str, body: &ReserveBody) -> ChatResult
     else {
         return Ok(None);
     };
-    let thumb = match (row.thumb_id, row.thumb_key, row.thumb_bytes) {
+    let child = |id, key, bytes| match (id, key, bytes) {
         (Some(id), Some(key), Some(bytes)) => Some(Object {
             id,
             key,
@@ -79,6 +81,8 @@ async fn matched(chat: &ChatState, user: &str, body: &ReserveBody) -> ChatResult
         }),
         _ => None,
     };
+    let thumb = child(row.thumb_id, row.thumb_key, row.thumb_bytes);
+    let motion = child(row.motion_id, row.motion_key, row.motion_bytes);
     let planned = Planned {
         store: u16::try_from(row.store).map_err(|_| ChatError::Internal)?,
         root: Object {
@@ -87,11 +91,13 @@ async fn matched(chat: &ChatState, user: &str, body: &ReserveBody) -> ChatResult
             bytes: unsigned(row.bytes),
         },
         thumb,
+        motion,
     };
     let same = MediaKind::parse(&row.kind) == Some(body.kind)
         && row.origin_conversation == body.conversation_id
         && planned.root.bytes == body.bytes
-        && planned.thumb.as_ref().map(|thumb| thumb.bytes) == body.thumb_bytes;
+        && planned.thumb.as_ref().map(|thumb| thumb.bytes) == body.thumb_bytes
+        && planned.motion.as_ref().map(|motion| motion.bytes) == body.motion_bytes;
     if same {
         Ok(Some(planned))
     } else {
@@ -170,6 +176,7 @@ async fn reserve_rows(
         return Err(ChatError::NotMember);
     }
     let thumb = planned.thumb.as_ref();
+    let motion = planned.motion.as_ref();
     let inserted = sqlx::query_file!(
         "queries/chat/media/reserve_insert.sql",
         planned.root.id,
@@ -183,7 +190,10 @@ async fn reserve_rows(
         thumb.map(|thumb| thumb.id),
         thumb.map(|thumb| thumb.key.clone()),
         thumb.map(|thumb| signed(thumb.bytes)),
-        seconds(RESERVATION_TTL)
+        seconds(RESERVATION_TTL),
+        motion.map(|motion| motion.id),
+        motion.map(|motion| motion.key.clone()),
+        motion.map(|motion| signed(motion.bytes))
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -209,24 +219,30 @@ async fn answer(chat: &ChatState, planned: &Planned, used: Used) -> ChatResult<R
             PUT_TTL,
         )
         .await?;
-    let thumb = match &planned.thumb {
-        Some(thumb) => Some(ReservedThumb {
-            id: thumb.id,
-            put: chat
-                .s3
-                .presign_put(planned.store, &thumb.key, thumb.bytes, PUT_TTL)
-                .await?,
-        }),
-        None => None,
-    };
     Ok(ReserveAnswer {
         id: planned.root.id,
         put,
-        thumb,
+        thumb: reserved(chat, planned.store, planned.thumb.as_ref()).await?,
+        motion: reserved(chat, planned.store, planned.motion.as_ref()).await?,
         expires_in_s: u32::try_from(PUT_TTL.as_secs()).unwrap_or(u32::MAX),
         used: used.total(),
         quota: QUOTA_BYTES,
     })
+}
+
+async fn reserved(
+    chat: &ChatState,
+    store: u16,
+    object: Option<&Object>,
+) -> ChatResult<Option<ReservedThumb>> {
+    let Some(object) = object else {
+        return Ok(None);
+    };
+    let put = chat
+        .s3
+        .presign_put(store, &object.key, object.bytes, PUT_TTL)
+        .await?;
+    Ok(Some(ReservedThumb { id: object.id, put }))
 }
 
 #[cfg(test)]

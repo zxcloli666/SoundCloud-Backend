@@ -2,7 +2,7 @@ WITH roots AS (
     SELECT id, owner_user, status AS was
     FROM chat.media
     WHERE id = ANY($1::uuid[])
-      AND kind <> 'thumb'
+      AND kind NOT IN ('thumb', 'motion')
       AND status IN ('reserved', 'uploaded')
 ),
 moved AS (

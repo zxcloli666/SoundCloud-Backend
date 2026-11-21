@@ -3,7 +3,7 @@ WITH roots AS (
     FROM chat.media
     WHERE id = ANY($1::uuid[])
       AND store = $2
-      AND kind <> 'thumb'
+      AND kind NOT IN ('thumb', 'motion')
       AND status IN ('attached', 'uploaded')
 ),
 moved AS (

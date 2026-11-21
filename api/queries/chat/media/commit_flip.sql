@@ -1,9 +1,15 @@
-WITH moved AS (
+WITH kept AS (
+    SELECT kept.id, kept.object_key
+    FROM unnest($4::uuid[], $5::text[]) AS kept(id, object_key)
+),
+moved AS (
     UPDATE chat.media AS media
     SET status = 'uploaded',
-        object_key = CASE WHEN media.id = $1 THEN $4 ELSE $5::text END,
+        object_key = kept.object_key,
         delete_after = now() + $3::int * interval '1 second'
-    WHERE (media.id = $1 OR media.parent_id = $1)
+    FROM kept
+    WHERE media.id = kept.id
+      AND (media.id = $1 OR media.parent_id = $1)
       AND media.owner_user = $2
       AND media.status = 'reserved'
       AND EXISTS (

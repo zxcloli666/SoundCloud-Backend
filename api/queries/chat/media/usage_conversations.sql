@@ -1,12 +1,15 @@
 WITH own AS (
     SELECT root.origin_conversation,
-           root.bytes + coalesce(thumb.bytes, 0) AS bytes
+           root.bytes + coalesce(thumb.bytes, 0) + coalesce(motion.bytes, 0) AS bytes
     FROM chat.media AS root
     LEFT JOIN chat.media AS thumb
         ON thumb.parent_id = root.id
        AND thumb.kind = 'thumb'
+    LEFT JOIN chat.media AS motion
+        ON motion.parent_id = root.id
+       AND motion.kind = 'motion'
     WHERE root.owner_user = $1
-      AND root.kind <> 'thumb'
+      AND root.kind NOT IN ('thumb', 'motion')
       AND root.status IN ('uploaded', 'attached')
 ),
 grouped AS (
