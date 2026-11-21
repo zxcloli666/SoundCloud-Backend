@@ -1020,6 +1020,7 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
             context_tokens=local.context_tokens,
             chunk_tokens=local.eval_chunk_tokens,
             state_cache_mib=local.state_cache_mib,
+            gpu_layers=local.gpu_layers,
         )
     if name == settings_module.VLM_SLOT:
         vlm = settings.vlm
@@ -1078,7 +1079,8 @@ def tts_options(tts: TtsSection) -> dict[str, object]:
 
 def slot_device(settings: Settings, name: str) -> str:
     if name == settings_module.LOCAL_LLM_SLOT:
-        return settings_module.LOCAL_LLM_DEVICE
+        devices = settings_module.LOCAL_LLM_DEVICES
+        return devices["cuda" if settings.llm.local.gpu_layers else "cpu"]
     if name == settings_module.VLM_SLOT:
         return settings_module.VLM_DEVICES["cuda" if settings.vlm.gpu_layers else "cpu"]
     if name == settings_module.TTS_SLOT:

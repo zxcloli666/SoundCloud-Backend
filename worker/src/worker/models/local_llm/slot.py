@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import jinja2
+import llama_cpp
 from huggingface_hub import hf_hub_download
 
 from worker.models.local_llm.native import Grammar, Model, State
@@ -34,6 +35,7 @@ class Options:
     context_tokens: int
     chunk_tokens: int
     state_cache_mib: int
+    gpu_layers: int
 
     @classmethod
     def of(cls, spec: SlotSpec) -> Options:
@@ -45,6 +47,7 @@ class Options:
             count_option(spec, "context_tokens"),
             count_option(spec, "chunk_tokens"),
             count_option(spec, "state_cache_mib"),
+            layers_option(spec),
         )
 
 
@@ -66,7 +69,13 @@ class LocalLlmSlot:
             self._source = (path, options)
             self._states = PromptStates(options.state_cache_mib * MIB, options.chunk_tokens)
             self._reading = Pace(min(options.chunk_tokens, READ_SAMPLE_TOKENS))
-        self._model = Model(path, options.context_tokens, options.chunk_tokens, CALL_GUARD.threads)
+        self._model = Model(
+            path,
+            options.context_tokens,
+            options.chunk_tokens,
+            CALL_GUARD.threads,
+            options.gpu_layers,
+        )
         self._template = chat_template(self._model.template_source())
 
     def warmup(self) -> None:
@@ -148,6 +157,15 @@ class LocalLlmSlot:
             "output_tokens": len(answer),
             "finished": finished,
         }
+
+
+def layers_option(spec: SlotSpec) -> int:
+    value = spec.options.get("gpu_layers", 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < -1:
+        raise RuntimeError(f"{LOCAL_LLM_SLOT} needs gpu_layers of -1 or more")
+    if value and not llama_cpp.llama_supports_gpu_offload():
+        raise RuntimeError(f"{LOCAL_LLM_SLOT} wants GPU layers, this llama.cpp build has no GPU")
+    return value
 
 
 def count_option(spec: SlotSpec, name: str) -> int:

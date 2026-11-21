@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from worker import fetch_models
 from worker.runtime import cpu_flags
 from worker.runtime.protocol import CALL_GUARD, CallExpired, SlotSpec
-from worker.settings import LOCAL_LLM_DEVICE, LOCAL_LLM_SLOT
+from worker.settings import LOCAL_LLM_DEVICES, LOCAL_LLM_SLOT
 
 if TYPE_CHECKING:
     from worker.models.local_llm.slot import LocalLlmSlot
@@ -56,7 +56,7 @@ SPEC = SlotSpec(
     loader="worker.models.local_llm.slot:LocalLlmSlot",
     model=REPO,
     revision=REVISION,
-    device=LOCAL_LLM_DEVICE,
+    device=LOCAL_LLM_DEVICES["cpu"],
     max_batch=1,
     max_wait_ms=0,
     options={"file": FILE, "context_tokens": 2048, "chunk_tokens": 64, "state_cache_mib": 64},
