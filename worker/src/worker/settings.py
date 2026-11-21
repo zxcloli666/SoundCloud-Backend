@@ -63,7 +63,7 @@ VLM_MAX_FRAMES = 32
 VLM_FRAME_SIDE_STEP = 32
 VLM_PROMPT_TOKENS = 512
 LOCAL_LLM_METHOD = "complete"
-LOCAL_LLM_DEVICE = "llama-cpu"
+LOCAL_LLM_DEVICES: Mapping[str, str] = MappingProxyType({"cpu": "llama-cpu", "cuda": "llama-cuda"})
 LOCAL_LLM_FILE_SUFFIX = ".gguf"
 LOCAL_LLM_MIN_CONTEXT_TOKENS = 1024
 TTS_SLOT = "tts"
@@ -390,6 +390,7 @@ class LocalLlmSettings:
     threads: int
     nice: int
     max_in_flight: int
+    gpu_layers: int
 
 
 @dataclass(frozen=True)
@@ -890,6 +891,8 @@ def validate_local_llm(settings: Settings) -> list[str]:
         problems.append("llm.local.max_in_flight must be >= 1")
     if not 0 <= local.nice <= MAX_NICE:
         problems.append(f"llm.local.nice must be within 0..{MAX_NICE}")
+    if local.gpu_layers < -1:
+        problems.append("llm.local.gpu_layers must be >= -1 (-1 is every layer)")
     return problems
 
 

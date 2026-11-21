@@ -11,7 +11,6 @@ from llama_cpp.llama_grammar import json_schema_to_gbnf
 from worker.runtime.protocol import BadInput
 
 SEQUENCE = 0
-CPU_ONLY_LAYERS = 0
 TEMPLATE_KEY = "tokenizer.chat_template"
 GRAMMAR_ROOT = b"root"
 TOKEN_DATA = np.dtype([("id", np.intc), ("logit", np.single), ("p", np.single)], align=True)
@@ -20,14 +19,16 @@ State = ctypes.Array[ctypes.c_uint8]
 
 
 class Model:
-    def __init__(self, path: str, context_tokens: int, chunk_tokens: int, threads: int) -> None:
+    def __init__(
+        self, path: str, context_tokens: int, chunk_tokens: int, threads: int, gpu_layers: int
+    ) -> None:
         self._llm = llama_cpp.Llama(
             model_path=path,
             n_ctx=context_tokens,
             n_batch=chunk_tokens,
             n_threads=threads or None,
             n_threads_batch=threads or None,
-            n_gpu_layers=CPU_ONLY_LAYERS,
+            n_gpu_layers=gpu_layers,
             verbose=False,
         )
         self.vocab = llama_cpp.llama_model_get_vocab(self._llm.model)

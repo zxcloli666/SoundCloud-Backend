@@ -19,7 +19,7 @@ def test_a_model_is_warmed_up_only_while_its_read_pace_is_unknown(
     slot = LocalLlmSlot()
     warmups: list[tuple[object, ...]] = []
     monkeypatch.setattr(slot, "_model", Words())
-    monkeypatch.setattr(slot, "_source", ("model.gguf", Options("model.gguf", 4096, CHUNK, 1)))
+    monkeypatch.setattr(slot, "_source", ("model.gguf", Options("model.gguf", 4096, CHUNK, 1, 0)))
     monkeypatch.setattr(slot, "_answer", lambda *asked: warmups.append(asked))
 
     slot.warmup()

@@ -252,9 +252,7 @@ def test_the_local_llm_loads_exactly_where_the_ai_lane_is_served() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(name for name in DESIGN if DESIGN[name].local_llm))
-def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
-    name: str, contract: Contract
-) -> None:
+def test_the_local_llm_runs_in_its_own_reserved_engine(name: str, contract: Contract) -> None:
     settings = load(name)
     local = settings.llm.local
     blueprint = Blueprint.of(settings, contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=8)
@@ -265,7 +263,7 @@ def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
     assert 0 < plan.nice < BULK_NICE and plan.shares_budget
     assert plan.idle_unload_s == local.idle_unload_s > 0
     spec = plan.slots[0]
-    assert spec.device == s.LOCAL_LLM_DEVICE
+    assert spec.device == s.LOCAL_LLM_DEVICES["cuda" if local.gpu_layers else "cpu"]
     assert not devices.uses_torch(spec.device)
     assert (spec.model, spec.revision) == (
         settings.slots[s.LOCAL_LLM_SLOT].model,
@@ -276,8 +274,22 @@ def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
         "context_tokens": local.context_tokens,
         "chunk_tokens": local.eval_chunk_tokens,
         "state_cache_mib": local.state_cache_mib,
+        "gpu_layers": local.gpu_layers,
     }
     assert all(other.idle_unload_s == 0 for other in blueprint.plans if other is not plan)
+
+
+@pytest.mark.parametrize("name", sorted(name for name in DESIGN if DESIGN[name].local_llm))
+def test_the_local_llm_is_4b_on_cpu_and_9b_wholly_on_a_48_gb_card(name: str) -> None:
+    settings = load(name)
+    model = settings.slots[s.LOCAL_LLM_SLOT].model
+    local = settings.llm.local
+    if name == "gpu-48":
+        assert (model, local.file) == ("unsloth/Qwen3.5-9B-GGUF", "Qwen3.5-9B-Q4_K_M.gguf")
+        assert local.gpu_layers == -1
+    else:
+        assert (model, local.file) == ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q4_K_M.gguf")
+        assert local.gpu_layers == 0
 
 
 def test_only_the_speech_profiles_serve_the_speak_lane() -> None:

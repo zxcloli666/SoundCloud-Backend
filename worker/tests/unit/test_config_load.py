@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import CONFIG_DIR
 from worker import settings as s
 
-LOCAL_LLM_REF = "unsloth/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf@f6d5376b"
+LOCAL_LLM_REF = "unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf@e87f1764"
 
 
 @pytest.fixture
@@ -42,6 +42,7 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert (local.context_tokens, local.eval_chunk_tokens, local.idle_unload_s) == (8192, 128, 600)
     assert local.state_cache_mib == 256
     assert (local.threads, local.nice, local.max_in_flight) == (2, 5, 2)
+    assert local.gpu_layers == 0
     without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
 
@@ -94,6 +95,7 @@ def test_a_config_that_still_names_a_remote_provider_is_a_start_error(
         ({"WORKER__LLM__LOCAL__THREADS": "0"}, r"llm\.local\.threads must be >= 1"),
         ({"WORKER__LLM__LOCAL__MAX_IN_FLIGHT": "0"}, r"llm\.local\.max_in_flight must be"),
         ({"WORKER__LLM__LOCAL__NICE": "20"}, r"llm\.local\.nice must be within 0\.\.19"),
+        ({"WORKER__LLM__LOCAL__GPU_LAYERS": "-2"}, r"llm\.local\.gpu_layers must be >= -1"),
     ],
 )
 def test_local_llm_settings_are_checked_at_start(
